@@ -8,13 +8,13 @@
       "fullName": "Tyru5/Agendex",
       "localPath": "~/Documents/ti/Agendex",
       "trigger": "auto",
-      "postToPr": false
+      "postToPr": true
     },
     {
       "fullName": "owner/repo-without-ai-reviewer",
       "localPath": "~/code/repo-without-ai-reviewer",
       "trigger": "github",
-      "postToPr": false,
+      "postToPr": true,
       "github": { "onPush": true, "mention": "@review-relay" }
     }
   ]
