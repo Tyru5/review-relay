@@ -1,0 +1,21 @@
+{
+  "port": 9988,
+  "graceMs": 120000,
+  "timeoutMs": 1800000,
+  "reviewers": ["codex", "claude"],
+  "repos": [
+    {
+      "fullName": "Tyru5/Agendex",
+      "localPath": "~/Documents/ti/Agendex",
+      "trigger": "auto",
+      "postToPr": false
+    },
+    {
+      "fullName": "owner/repo-without-ai-reviewer",
+      "localPath": "~/code/repo-without-ai-reviewer",
+      "trigger": "github",
+      "postToPr": false,
+      "github": { "onPush": true, "mention": "@review-relay" }
+    }
+  ]
+}
