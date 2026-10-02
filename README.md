@@ -57,6 +57,26 @@ bun src/cli.ts replay events.jsonl --dry-run        # test trigger logic with re
 bun src/cli.ts status                               # recent jobs and report paths
 ```
 
+## Development
+
+```sh
+bun run check          # typecheck, lint:check, fmt:check, tests
+bun run lint           # oxlint --fix (.oxlintrc.json); lint:check to verify
+bun run fmt            # oxfmt (.oxfmtrc.json); fmt:check to verify
+```
+
+## Daemon control
+
+```sh
+scripts/relay start      # background daemon; pid + log in dataDir (daemon.pid, daemon.log)
+scripts/relay stop       # SIGTERM so temporary repo webhooks get deleted; forces after 20s
+scripts/relay restart
+scripts/relay status     # daemon, health, forwarders, recent jobs (exit 3 if stopped)
+scripts/relay logs [N|-f]
+```
+
+Also available as `bun run relay:start|relay:stop|relay:status`. Needs `jq`.
+
 Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, `codex.json`, `claude.json`, and `meta.json`.
 
 ## How a review runs

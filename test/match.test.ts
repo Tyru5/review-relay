@@ -61,7 +61,12 @@ describe('pull_request', () => {
     const result = classify('pull_request', withAction(action), github);
     expect(result.kind).toBe('prEvent');
     if (result.kind === 'prEvent') {
-      expect(result.job).toMatchObject({ pr: 223, source: 'github', headSha: '1e210c5c927d8d4c1e750e1fcd1f7f4e003f05f0', baseRef: 'main' });
+      expect(result.job).toMatchObject({
+        pr: 223,
+        source: 'github',
+        headSha: '1e210c5c927d8d4c1e750e1fcd1f7f4e003f05f0',
+        baseRef: 'main',
+      });
     }
   });
 
@@ -112,6 +117,9 @@ describe('issue_comment mention', () => {
 });
 
 test('unrelated events are ignored', () => {
-  expect(classify('status', { repository: { full_name: 'Tyru5/Agendex' }, context: 'CodeRabbit', state: 'pending' }, github).kind).toBe('ignore');
+  expect(
+    classify('status', { repository: { full_name: 'Tyru5/Agendex' }, context: 'CodeRabbit', state: 'pending' }, github)
+      .kind,
+  ).toBe('ignore');
   expect(classify('ping', {}, github).kind).toBe('ignore');
 });

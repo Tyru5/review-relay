@@ -16,11 +16,19 @@ const repoWith = (trigger: TriggerMode): RepoConfig => ({
 });
 
 const job = (source: ReviewJob['source'], sha = SHA): ReviewJob => ({
-  repo: 'Tyru5/Agendex', pr: 223, source, reason: source, headSha: sha, baseRef: 'main',
+  repo: 'Tyru5/Agendex',
+  pr: 223,
+  source,
+  reason: source,
+  headSha: sha,
+  baseRef: 'main',
 });
 const greptileStart = (sha = SHA): Classified => ({ kind: 'greptileStart', job: job('greptile', sha) });
 const prEvent = (sha = SHA): Classified => ({ kind: 'prEvent', job: job('github', sha) });
-const mention: Classified = { kind: 'mention', job: { repo: 'Tyru5/Agendex', pr: 223, source: 'mention', reason: 'mention' } };
+const mention: Classified = {
+  kind: 'mention',
+  job: { repo: 'Tyru5/Agendex', pr: 223, source: 'mention', reason: 'mention' },
+};
 
 /** Scheduler with manual timers so grace periods fire only when the test says so. */
 function setup(graceMs = 120_000) {

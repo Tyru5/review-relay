@@ -30,8 +30,7 @@ export interface Config {
 
 export const DEFAULT_DATA_DIR = join(homedir(), '.review-relay');
 
-export const defaultConfigPath = () =>
-  process.env.REVIEW_RELAY_CONFIG ?? join(DEFAULT_DATA_DIR, 'config.json');
+export const defaultConfigPath = () => process.env.REVIEW_RELAY_CONFIG ?? join(DEFAULT_DATA_DIR, 'config.json');
 
 const TRIGGERS: TriggerMode[] = ['auto', 'greptile', 'github'];
 const REVIEWERS: ReviewerName[] = ['codex', 'claude'];

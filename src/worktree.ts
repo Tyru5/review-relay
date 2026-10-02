@@ -17,7 +17,9 @@ export async function withWorktree<T>(
 
   // `refs/pull/N/head` also covers fork PRs, whose commits are not on any branch of origin.
   await git(
-    'fetch', '--quiet', 'origin',
+    'fetch',
+    '--quiet',
+    'origin',
     `+refs/heads/${job.baseRef}:refs/remotes/origin/${job.baseRef}`,
     `+refs/pull/${job.pr}/head:refs/review-relay/pr-${job.pr}`,
   );

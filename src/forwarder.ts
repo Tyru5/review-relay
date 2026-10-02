@@ -33,7 +33,14 @@ export class Forwarder {
     const startedAt = Date.now();
     const proc = spawn(
       'gh',
-      ['webhook', 'forward', `--repo=${this.repo.fullName}`, `--events=${events}`, `--url=${this.url}`, `--secret=${this.secret}`],
+      [
+        'webhook',
+        'forward',
+        `--repo=${this.repo.fullName}`,
+        `--events=${events}`,
+        `--url=${this.url}`,
+        `--secret=${this.secret}`,
+      ],
       { detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     this.proc = proc;

@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# Manage the review-relay daemon: start | stop | restart | status | logs
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="${REVIEW_RELAY_CONFIG:-$HOME/.review-relay/config.json}"
+
+if [[ -t 1 ]]; then
+  B=$'\e[1m'; D=$'\e[2m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
+else
+  B=; D=; R=; G=; Y=; N=
+fi
+
+command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
+[[ -f "$CONFIG" ]] || { echo "${R}no config at $CONFIG${N}" >&2; exit 1; }
+
+PORT="$(jq -r '.port // 9988' "$CONFIG")"
+DATA_DIR="$(jq -r '.dataDir // "~/.review-relay"' "$CONFIG")"
+DATA_DIR="${DATA_DIR/#\~/$HOME}"
+PIDFILE="$DATA_DIR/daemon.pid"
+LOGFILE="$DATA_DIR/daemon.log"
+STATE="$DATA_DIR/state.json"
+
+ok()   { printf '%s✔%s %s\n' "$G" "$N" "$*"; }
+warn() { printf '%s!%s %s\n' "$Y" "$N" "$*"; }
+err()  { printf '%s✘%s %s\n' "$R" "$N" "$*" >&2; }
+row()  { printf '  %s%-11s%s %s\n' "$D" "$1" "$N" "$2"; }
+
+is_relay() { [[ -n "${1:-}" ]] && ps -o args= -p "$1" 2>/dev/null | grep -q 'cli\.ts start'; }
+
+# Daemon pid: pidfile first, else whoever owns the port (covers daemons started by hand).
+daemon_pid() {
+  local pid
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if is_relay "$pid"; then echo "$pid"; return 0; fi
+  pid="$(ss -ltnpH "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)"
+  if is_relay "$pid"; then echo "$pid"; return 0; fi
+  return 1
+}
+
+fmt_dur() {
+  local s=$1
+  if   (( s >= 86400 )); then printf '%dd %dh' $((s/86400)) $((s%86400/3600))
+  elif (( s >= 3600 ));  then printf '%dh %dm' $((s/3600)) $((s%3600/60))
+  elif (( s >= 60 ));    then printf '%dm %ds' $((s/60)) $((s%60))
+  else printf '%ds' "$s"; fi
+}
+
+forwarders() { pgrep -P "$1" -a -f 'webhook forward' 2>/dev/null | sed -n 's/^\([0-9]*\) .*--repo=\([^ ]*\) .*/\1 \2/p'; }
+
+cmd_status() {
+  local pid
+  echo "${B}review-relay${N}"
+  if ! pid="$(daemon_pid)"; then
+    row status "${R}● stopped${N}"
+    row config "$CONFIG"
+    row log "$LOGFILE"
+    recent_jobs
+    return 3
+  fi
+  local up health
+  up="$(ps -o etimes= -p "$pid" | tr -d ' ')"
+  if [[ "$(curl -fsS -m 2 "http://127.0.0.1:$PORT/health" 2>/dev/null)" == ok ]]; then
+    health="${G}ok${N}"
+  else
+    health="${R}unreachable${N}"
+  fi
+  row status "${G}● running${N}"
+  row pid "$pid"
+  row uptime "$(fmt_dur "$up")"
+  row endpoint "http://127.0.0.1:$PORT/hook  (health: $health)"
+  row config "$CONFIG"
+  row log "$LOGFILE"
+
+  echo; echo "${B}Forwarders${N}"
+  local fwd n=0 repo
+  fwd="$(forwarders "$pid")"
+  while read -r fpid repo; do
+    [[ -n "$fpid" ]] || continue
+    printf '  %s●%s %-32s %spid %s%s\n' "$G" "$N" "$repo" "$D" "$fpid" "$N"; n=$((n+1))
+  done <<<"$fwd"
+  local want; want="$(jq -r '.repos | length' "$CONFIG")"
+  (( n == 0 )) && printf '  %snone running%s\n' "$Y" "$N"
+  (( n != want )) && warn "$n of $want configured repos forwarding"
+
+  recent_jobs
+}
+
+recent_jobs() {
+  echo; echo "${B}Recent jobs${N}"
+  if [[ ! -s "$STATE" ]]; then printf '  %sno review jobs yet%s\n' "$D" "$N"; return; fi
+  jq -r '.[:8][] | [.status, (.startedAt[5:16] | sub("T";" ")), .repo, ("#" + (.pr|tostring)), .headSha[:8], .source, (.error // "")] | @tsv' "$STATE" |
+  while IFS=$'\t' read -r st at repo pr sha src e; do
+    local c=$D
+    case $st in done) c=$G;; failed) c=$R;; running) c=$Y;; esac
+    printf '  %s%-7s%s %s  %-24s %-5s %s  %s%s%s\n' "$c" "$st" "$N" "$at" "$repo" "$pr" "$sha" "$D" "$src${e:+  $e}" "$N"
+  done
+}
+
+cmd_start() {
+  local pid
+  if pid="$(daemon_pid)"; then warn "already running (pid $pid)"; return 0; fi
+  command -v bun >/dev/null || { err "bun not found"; return 1; }
+  mkdir -p "$DATA_DIR"
+  ( cd "$ROOT" && setsid nohup bun src/cli.ts start >>"$LOGFILE" 2>&1 </dev/null & echo $! >"$PIDFILE" )
+  local wrapper; wrapper="$(cat "$PIDFILE")"
+  local i
+  for i in $(seq 1 50); do
+    kill -0 "$wrapper" 2>/dev/null || { err "exited during startup; last log lines:"; tail -n 10 "$LOGFILE" >&2; rm -f "$PIDFILE"; return 1; }
+    [[ "$(curl -fsS -m 1 "http://127.0.0.1:$PORT/health" 2>/dev/null)" == ok ]] && break
+    sleep 0.2
+  done
+  [[ "$i" == 50 ]] && { err "no health response on :$PORT after 10s (see $LOGFILE)"; return 1; }
+  pid="$(daemon_pid)" && echo "$pid" >"$PIDFILE"   # setsid may fork; record the real listener
+  ok "started (pid ${pid:-$wrapper})"
+  echo
+  cmd_status
+}
+
+cmd_stop() {
+  local pid
+  if ! pid="$(daemon_pid)"; then warn "not running"; rm -f "$PIDFILE"; return 0; fi
+  local fwds; fwds="$(forwarders "$pid" | awk '{print $1}')"
+  # SIGTERM lets the daemon delete its temporary repo webhooks before exiting.
+  kill -TERM "$pid"
+  local i
+  for i in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+  if kill -0 "$pid" 2>/dev/null; then
+    warn "no clean exit after 20s; forcing"
+    kill -KILL "$pid" 2>/dev/null
+    for f in $fwds; do kill -INT -- "-$f" 2>/dev/null; done
+    warn "temporary GitHub webhooks may remain; check repo settings > webhooks"
+  fi
+  rm -f "$PIDFILE"
+  ok "stopped (pid $pid)"
+}
+
+cmd_logs() { exec tail -n "${2:-50}" ${FOLLOW:+-f} "$LOGFILE"; }
+
+usage() {
+  cat <<USAGE
+${B}usage:${N} scripts/relay <command>
+
+  start       start daemon in background
+  stop        stop daemon, remove its temporary webhooks
+  restart     stop then start
+  status      daemon, forwarders, recent jobs (exit 3 if stopped)
+  logs [N]    last N log lines (default 50); -f / --follow to stream
+USAGE
+}
+
+case "${1:-}" in
+  start)   cmd_start ;;
+  stop)    cmd_stop ;;
+  restart) cmd_stop && cmd_start ;;
+  status)  cmd_status ;;
+  logs)    [[ "${2:-}" == -f || "${2:-}" == --follow ]] && { FOLLOW=1; set -- logs 50; }; cmd_logs "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) err "unknown command: $1"; usage; exit 1 ;;
+esac

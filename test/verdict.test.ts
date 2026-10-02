@@ -8,12 +8,19 @@ const verdict = (score: number, findings: Finding[] = [], dim = 5): Verdict => (
   summary: 'Adds a thing.',
   score,
   scoreRationale: 'Because.',
-  dimensions: Object.fromEntries(DIMENSIONS.map((d) => [d, { score: dim, note: `${d} note` }])) as Verdict['dimensions'],
+  dimensions: Object.fromEntries(
+    DIMENSIONS.map((d) => [d, { score: dim, note: `${d} note` }]),
+  ) as Verdict['dimensions'],
   findings,
 });
 
 const finding = (severity: Finding['severity'], file = 'src/a.ts', line: number | null = 10): Finding => ({
-  severity, file, line, title: `${severity} issue`, detail: 'It breaks.', suggestion: 'Fix it.',
+  severity,
+  file,
+  line,
+  title: `${severity} issue`,
+  detail: 'It breaks.',
+  suggestion: 'Fix it.',
 });
 
 describe('parseVerdict', () => {
@@ -55,7 +62,14 @@ test('mergeFindings combines nearby findings across reviewers and keeps the wors
 
 test('parseNumstat counts tests and wide-impact files', () => {
   const stats = parseNumstat(
-    ['10\t2\tsrc/a.ts', '5\t0\tsrc/a.test.ts', '1\t1\tpackage.json', '-\t-\tlogo.png', '3\t0\t.github/workflows/ci.yml', '7\t0\tdb/migrations/001.sql'].join('\n'),
+    [
+      '10\t2\tsrc/a.ts',
+      '5\t0\tsrc/a.test.ts',
+      '1\t1\tpackage.json',
+      '-\t-\tlogo.png',
+      '3\t0\t.github/workflows/ci.yml',
+      '7\t0\tdb/migrations/001.sql',
+    ].join('\n'),
   );
   expect(stats).toEqual({
     files: 6,
@@ -68,10 +82,22 @@ test('parseNumstat counts tests and wide-impact files', () => {
 
 describe('commentBody', () => {
   const job: ResolvedJob = {
-    repo: 'Tyru5/Agendex', pr: 223, source: 'greptile', reason: 'Greptile started', headSha: '1e210c5c927d8d4c1e750e1fcd1f7f4e003f05f0', baseRef: 'main',
+    repo: 'Tyru5/Agendex',
+    pr: 223,
+    source: 'greptile',
+    reason: 'Greptile started',
+    headSha: '1e210c5c927d8d4c1e750e1fcd1f7f4e003f05f0',
+    baseRef: 'main',
   };
   const stats = parseNumstat('10\t2\tsrc/a.ts');
-  const result = (name: 'codex' | 'claude', v: Verdict): ReviewerResult => ({ name, ok: true, output: '', verdict: v, score: finalScore(v), durationMs: 1000 });
+  const result = (name: 'codex' | 'claude', v: Verdict): ReviewerResult => ({
+    name,
+    ok: true,
+    output: '',
+    verdict: v,
+    score: finalScore(v),
+    durationMs: 1000,
+  });
 
   test('headline uses the lowest reviewer score and links findings to the head commit', () => {
     const results = [result('codex', verdict(5)), result('claude', verdict(5, [finding('major')]))];
@@ -85,7 +111,13 @@ describe('commentBody', () => {
   });
 
   test('a failed reviewer is shown and excluded from the score', () => {
-    const failed: ReviewerResult = { name: 'codex', ok: false, output: '', error: 'timed out after 1800s', durationMs: 1 };
+    const failed: ReviewerResult = {
+      name: 'codex',
+      ok: false,
+      output: '',
+      error: 'timed out after 1800s',
+      durationMs: 1,
+    };
     const results = [failed, result('claude', verdict(4))];
     expect(combinedScore(results)).toBe(4);
     const body = commentBody(job, results, stats);

@@ -58,7 +58,7 @@ export class StateStore {
   }
 
   list(): JobRecord[] {
-    return [...this.records.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return [...this.records.values()].toSorted((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
   private save(): void {

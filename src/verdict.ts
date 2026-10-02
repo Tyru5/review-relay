@@ -94,7 +94,13 @@ export function parseVerdict(raw: unknown): Verdict {
     detail: String(f.detail ?? ''),
     suggestion: String(f.suggestion ?? ''),
   }));
-  return { summary: v.summary, score: clampScore(v.score), scoreRationale: String(v.scoreRationale ?? ''), dimensions, findings };
+  return {
+    summary: v.summary,
+    score: clampScore(v.score),
+    scoreRationale: String(v.scoreRationale ?? ''),
+    dimensions,
+    findings,
+  };
 }
 
 /**
@@ -132,7 +138,10 @@ export function mergeFindings(byReviewer: { reviewer: string; findings: Finding[
       if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(match.severity)) match.severity = f.severity;
     }
   }
-  return merged.sort(
-    (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) || a.file.localeCompare(b.file) || (a.line ?? 0) - (b.line ?? 0),
+  return merged.toSorted(
+    (a, b) =>
+      SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) ||
+      a.file.localeCompare(b.file) ||
+      (a.line ?? 0) - (b.line ?? 0),
   );
 }

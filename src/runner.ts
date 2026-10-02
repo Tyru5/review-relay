@@ -22,11 +22,38 @@ async function runReviewer(name: ReviewerName, input: ReviewerInput): Promise<Re
   const durationMs = () => Date.now() - started;
   try {
     const r = await REVIEWERS[name](input);
-    if (r.timedOut) return { name, ok: false, output: r.raw, error: `timed out after ${Math.round(input.timeoutMs / 1000)}s`, durationMs: durationMs() };
-    if (r.code !== 0 || !r.verdict) return { name, ok: false, output: r.raw, error: `exit ${r.code}: ${r.raw.slice(-2000)}`, durationMs: durationMs() };
-    return { name, ok: true, output: r.raw, verdict: r.verdict, score: finalScore(r.verdict), durationMs: durationMs() };
+    if (r.timedOut)
+      return {
+        name,
+        ok: false,
+        output: r.raw,
+        error: `timed out after ${Math.round(input.timeoutMs / 1000)}s`,
+        durationMs: durationMs(),
+      };
+    if (r.code !== 0 || !r.verdict)
+      return {
+        name,
+        ok: false,
+        output: r.raw,
+        error: `exit ${r.code}: ${r.raw.slice(-2000)}`,
+        durationMs: durationMs(),
+      };
+    return {
+      name,
+      ok: true,
+      output: r.raw,
+      verdict: r.verdict,
+      score: finalScore(r.verdict),
+      durationMs: durationMs(),
+    };
   } catch (err) {
-    return { name, ok: false, output: '', error: err instanceof Error ? err.message : String(err), durationMs: durationMs() };
+    return {
+      name,
+      ok: false,
+      output: '',
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: durationMs(),
+    };
   }
 }
 

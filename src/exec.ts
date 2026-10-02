@@ -39,7 +39,9 @@ export async function exec(cmd: string[], opts: ExecOptions = {}): Promise<ExecR
 export async function execOrThrow(cmd: string[], opts: ExecOptions = {}): Promise<string> {
   const result = await exec(cmd, opts);
   if (result.code !== 0) {
-    throw new Error(`${cmd.slice(0, 3).join(' ')} exited ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`);
+    throw new Error(
+      `${cmd.slice(0, 3).join(' ')} exited ${result.code}: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
   }
   return result.stdout;
 }

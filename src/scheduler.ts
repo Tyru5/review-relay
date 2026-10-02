@@ -43,14 +43,17 @@ export class Scheduler {
         return this.dispatch(repo, event.job, false);
       }
       case 'prEvent': {
-        if (repo.trigger === 'greptile') return this.log(`[${repo.fullName}] ${event.job.reason} ignored (trigger=greptile)`);
+        if (repo.trigger === 'greptile')
+          return this.log(`[${repo.fullName}] ${event.job.reason} ignored (trigger=greptile)`);
         if (repo.trigger === 'github') return this.dispatch(repo, event.job, false);
         return this.scheduleFallback(repo, event.job);
       }
       case 'mention':
         return this.dispatch(repo, event.job, true);
       case 'greptileDone':
-        return this.log(`[${repo.fullName}] Greptile finished ${event.headSha.slice(0, 8)}: ${event.title ?? event.conclusion}`);
+        return this.log(
+          `[${repo.fullName}] Greptile finished ${event.headSha.slice(0, 8)}: ${event.title ?? event.conclusion}`,
+        );
       case 'ignore':
         return;
     }
@@ -68,7 +71,7 @@ export class Scheduler {
   /** Resolves once queued fallbacks have fired and in-flight reviews have finished. */
   async idle(): Promise<void> {
     while (this.pending.size > 0 || this.active.size > 0) {
-      if (this.active.size > 0) await Promise.allSettled([...this.active]);
+      if (this.active.size > 0) await Promise.allSettled(this.active);
       else await Bun.sleep(25);
     }
   }
@@ -77,7 +80,9 @@ export class Scheduler {
     if (!job.headSha) return;
     const key = jobKey({ repo: repo.fullName, headSha: job.headSha });
     if (this.pending.has(key) || this.deps.state.isHandled(key)) return;
-    this.log(`[${repo.fullName}] PR #${job.pr} ${job.reason}: waiting ${Math.round(this.deps.graceMs / 1000)}s for Greptile`);
+    this.log(
+      `[${repo.fullName}] PR #${job.pr} ${job.reason}: waiting ${Math.round(this.deps.graceMs / 1000)}s for Greptile`,
+    );
     const handle = this.setTimer(() => {
       this.pending.delete(key);
       this.log(`[${repo.fullName}] PR #${job.pr}: no Greptile start, running fallback`);
@@ -109,7 +114,13 @@ export class Scheduler {
     this.cancelPending(key);
 
     this.log(`[${repo.fullName}] PR #${resolved.pr} @ ${resolved.headSha.slice(0, 8)}: reviewing (${resolved.reason})`);
-    this.deps.state.start({ key, repo: resolved.repo, pr: resolved.pr, headSha: resolved.headSha, source: resolved.source });
+    this.deps.state.start({
+      key,
+      repo: resolved.repo,
+      pr: resolved.pr,
+      headSha: resolved.headSha,
+      source: resolved.source,
+    });
     try {
       const { reportDir } = await this.deps.run(resolved, repo);
       this.deps.state.finish(key, { status: 'done', reportDir });
