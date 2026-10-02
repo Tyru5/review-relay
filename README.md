@@ -56,7 +56,7 @@ Each commit is reviewed once. Mentions and `run` always review again. Drafts are
 bun src/cli.ts start                                # watch all configured repos
 bun src/cli.ts run --repo owner/name --pr 123       # review an open PR now
 bun src/cli.ts replay events.jsonl --dry-run        # test trigger logic with recorded deliveries
-bun src/cli.ts status                               # recent jobs and report paths
+bun src/cli.ts status [--limit N]                   # recent jobs: scores, per-reviewer timings, finding counts
 bun src/cli.ts config                               # resolved config as JSON
 ```
 

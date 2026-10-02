@@ -9,6 +9,7 @@ import { runReview } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
 import { StateStore } from './state.ts';
+import { renderStatus } from './status.ts';
 
 const USAGE = `review-relay <command> [options]
 
@@ -18,7 +19,8 @@ Commands:
   replay <events.jsonl>         Feed recorded webhook deliveries through the trigger logic
       --dry-run                 Log what would run instead of running reviewers
       --grace <ms>              Override graceMs for the replay
-  status                        Show recent review jobs
+  status                        Show recent review jobs with scores, timings, and finding counts
+      --limit <n>               Number of jobs to show (default 20)
   config                        Print the resolved config (defaults applied) as JSON
 
 Options:
@@ -103,15 +105,14 @@ async function replay(config: Config, file: string | undefined, dryRun: boolean,
   await scheduler.idle();
 }
 
-function status(config: Config) {
-  const records = new StateStore(join(config.dataDir, 'state.json')).list().slice(0, 20);
-  if (records.length === 0) return console.log('no review jobs yet');
-  for (const r of records) {
-    console.log(
-      `${r.startedAt}  ${r.status.padEnd(7)} ${r.repo} #${r.pr} @ ${r.headSha.slice(0, 8)} (${r.source})${r.error ? `  ${r.error}` : ''}`,
-    );
-    if (r.reportDir) console.log(`  ${r.reportDir}`);
-  }
+function status(config: Config, limit: string | undefined) {
+  const records = new StateStore(join(config.dataDir, 'state.json')).list().slice(0, Number(limit ?? 20));
+  const lines = renderStatus(records, {
+    dataDir: config.dataDir,
+    reviewers: config.reviewers,
+    color: Boolean(process.stdout.isTTY),
+  });
+  for (const line of lines) console.log(`  ${line}`);
 }
 
 async function main() {
@@ -123,6 +124,7 @@ async function main() {
       pr: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       grace: { type: 'string' },
+      limit: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -138,7 +140,7 @@ async function main() {
     case 'replay':
       return replay(config, arg, values['dry-run'], values.grace);
     case 'status':
-      return status(config);
+      return status(config, values.limit);
     case 'config':
       return console.log(JSON.stringify(config, null, 2));
     default:
