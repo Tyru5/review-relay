@@ -1,16 +1,14 @@
 import { exec } from '../exec.ts';
-import type { ResolvedJob } from '../types.ts';
-import { baseRemoteRef } from '../worktree.ts';
+import { parseVerdict } from '../verdict.ts';
+import type { ReviewerInput, ReviewerOutput } from './types.ts';
 
-export async function runCodex(job: ResolvedJob, dir: string, timeoutMs: number) {
+export async function runCodex({ dir, prompt, schemaPath, scratchDir, timeoutMs }: ReviewerInput): Promise<ReviewerOutput> {
+  const outFile = `${scratchDir}/codex-verdict.json`;
   const result = await exec(
-    [
-      'codex', 'review',
-      '-c', 'sandbox_mode="read-only"',
-      '-c', 'approval_policy="never"',
-      '--base', baseRemoteRef(job),
-    ],
-    { cwd: dir, timeoutMs },
+    ['codex', 'exec', '--sandbox', 'read-only', '--ephemeral', '--output-schema', schemaPath, '-o', outFile, '-'],
+    { cwd: dir, timeoutMs, stdin: prompt },
   );
-  return { ...result, output: result.stdout.trim() };
+  if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || result.stdout.trim() };
+  const raw = (await Bun.file(outFile).text().catch(() => '')).trim();
+  return { ...result, raw, verdict: parseVerdict(raw) };
 }

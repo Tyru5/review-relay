@@ -1,3 +1,5 @@
+import type { Verdict } from './verdict.ts';
+
 export type TriggerMode = 'auto' | 'greptile' | 'github';
 
 export type JobSource = 'greptile' | 'github' | 'mention' | 'manual';
@@ -23,7 +25,11 @@ export interface ResolvedJob extends ReviewJob {
 export interface ReviewerResult {
   name: ReviewerName;
   ok: boolean;
+  /** Raw reviewer output, kept for debugging. */
   output: string;
+  verdict?: Verdict;
+  /** Merge confidence 1-5 after `finalScore` caps. */
+  score?: number;
   error?: string;
   durationMs: number;
 }
