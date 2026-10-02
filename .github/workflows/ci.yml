@@ -31,6 +31,6 @@ jobs:
       - name: Shellcheck
         run: |
           command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
-          shellcheck scripts/relay
+          shellcheck scripts/relay scripts/install.sh
       - name: Test
         run: bun test
