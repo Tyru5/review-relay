@@ -10,12 +10,31 @@ Events reach your machine through `gh webhook forward`, so no public URL is need
 
 ## Requirements
 
-- [Bun](https://bun.sh)
+- `git`
 - `gh` signed in with access to the watched repos, plus the webhook extension: `gh extension install cli/gh-webhook`
 - `codex` and `claude` CLIs signed in
 - A local clone of each watched repo
+- [Bun](https://bun.sh), only when running from source
 
-## Setup
+## Install
+
+macOS / Linux (installs to `~/.local/bin`):
+
+```sh
+curl -fsSL https://downloads.reviewrelay.dev/install.sh | bash
+```
+
+Windows PowerShell (installs to `%LOCALAPPDATA%\review-relay\bin` and adds it to your user PATH):
+
+```powershell
+irm https://downloads.reviewrelay.dev/install.ps1 | iex
+```
+
+The installers download a standalone binary (no Bun needed) for your OS and CPU, verify it against the release's `SHA256SUMS`, and seed `~/.review-relay/config.json` from `config.example.json` if it does not exist. Rerun to update. Pin a version with `bash -s -- --version 0.2.0` (PowerShell: `-Version 0.2.0`, see the script header). Supported: macOS and glibc Linux on x64 and arm64, Windows x64.
+
+Then edit `~/.review-relay/config.json` and run `review-relay start`.
+
+## Setup from source
 
 ```sh
 bun install
@@ -69,6 +88,25 @@ bun run fmt            # oxfmt (.oxfmtrc.json); fmt:check to verify
 bun run ci:local       # run the CI workflow locally with act (cached image)
 bun run ci:local:pull  # same, pulling the latest runner image first
 ```
+
+## Releasing
+
+Releases are standalone binaries built with `bun build --compile` and served from the `review-relay-downloads` R2 bucket at `https://downloads.reviewrelay.dev`:
+
+```
+install.sh, install.ps1                        installers (no-cache)
+latest.txt                                     latest version, uploaded last
+v<version>/review-relay-<os>-<arch>[.exe]      immutable binaries
+v<version>/SHA256SUMS, config.example.json
+```
+
+To release, bump `version` in `package.json`, merge, then push a matching tag:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` runs the checks, rejects a tag that does not match `package.json`, builds all targets, and uploads with wrangler. It needs the `CLOUDFLARE_API_TOKEN` secret (an account API token with R2 Storage edit access) and the `CLOUDFLARE_ACCOUNT_ID` repo variable. `bun run release:build` stages the same files in `dist/` without uploading; `bun run release` uploads from a clean tree with your local `wrangler login`.
 
 ## Daemon control
 

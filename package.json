@@ -11,6 +11,8 @@
     "start": "bun src/cli.ts start",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "release": "bun scripts/release.ts",
+    "release:build": "bun scripts/release.ts --skip-upload",
     "relay": "scripts/relay",
     "relay:start": "scripts/relay start",
     "relay:stop": "scripts/relay stop",
