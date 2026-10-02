@@ -8,10 +8,27 @@ export async function runCodex({
   schemaPath,
   scratchDir,
   timeoutMs,
+  model,
+  effort,
 }: ReviewerInput): Promise<ReviewerOutput> {
   const outFile = `${scratchDir}/codex-verdict.json`;
   const result = await exec(
-    ['codex', 'exec', '--sandbox', 'read-only', '--ephemeral', '--output-schema', schemaPath, '-o', outFile, '-'],
+    [
+      'codex',
+      'exec',
+      '--model',
+      model,
+      '-c',
+      `model_reasoning_effort="${effort}"`,
+      '--sandbox',
+      'read-only',
+      '--ephemeral',
+      '--output-schema',
+      schemaPath,
+      '-o',
+      outFile,
+      '-',
+    ],
     { cwd: dir, timeoutMs, stdin: prompt },
   );
   if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || result.stdout.trim() };

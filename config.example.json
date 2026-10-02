@@ -3,6 +3,10 @@
   "graceMs": 120000,
   "timeoutMs": 1800000,
   "reviewers": ["codex", "claude"],
+  "models": {
+    "claude": { "model": "claude-opus-5-5", "effort": "max" },
+    "codex": { "model": "gpt-6-astra", "effort": "high" }
+  },
   "repos": [
     {
       "fullName": "Tyru5/Agendex",

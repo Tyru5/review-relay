@@ -32,6 +32,8 @@ bun src/cli.ts start
 | `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
 | `reviewers` | `["codex", "claude"]` | Which reviewers to run |
+| `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | Model and effort for the Claude reviewer (`--model`, `--effort`) |
+| `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | Model and reasoning effort for the Codex reviewer (`--model`, `model_reasoning_effort`) |
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
 | `repos[].fullName` | required | `owner/name` |
 | `repos[].localPath` | required | Local clone used to create worktrees |
@@ -55,6 +57,7 @@ bun src/cli.ts start                                # watch all configured repos
 bun src/cli.ts run --repo owner/name --pr 123       # review an open PR now
 bun src/cli.ts replay events.jsonl --dry-run        # test trigger logic with recorded deliveries
 bun src/cli.ts status                               # recent jobs and report paths
+bun src/cli.ts config                               # resolved config as JSON
 ```
 
 ## Development
@@ -72,10 +75,11 @@ scripts/relay start      # background daemon; pid + log in dataDir (daemon.pid, 
 scripts/relay stop       # SIGTERM so temporary repo webhooks get deleted; forces after 20s
 scripts/relay restart
 scripts/relay status     # daemon, health, forwarders, recent jobs (exit 3 if stopped)
+scripts/relay info       # resolved config incl. defaults; flags edits not yet applied; --json for raw
 scripts/relay logs [N|-f]
 ```
 
-Also available as `bun run relay:start|relay:stop|relay:status`. Needs `jq`.
+Also available as `bun run relay:<command>` (e.g. `bun run relay:logs -f`). Needs `jq`.
 
 Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, `codex.json`, `claude.json`, and `meta.json`.
 

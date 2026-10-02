@@ -19,6 +19,7 @@ Commands:
       --dry-run                 Log what would run instead of running reviewers
       --grace <ms>              Override graceMs for the replay
   status                        Show recent review jobs
+  config                        Print the resolved config (defaults applied) as JSON
 
 Options:
   --config <path>               Config file (default ~/.review-relay/config.json or $REVIEW_RELAY_CONFIG)`;
@@ -138,6 +139,8 @@ async function main() {
       return replay(config, arg, values['dry-run'], values.grace);
     case 'status':
       return status(config);
+    case 'config':
+      return console.log(JSON.stringify(config, null, 2));
     default:
       console.error(`unknown command "${command}"\n\n${USAGE}`);
       process.exit(1);

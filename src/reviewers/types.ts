@@ -8,6 +8,8 @@ export interface ReviewerInput {
   /** Per-job directory for reviewer output files. */
   scratchDir: string;
   timeoutMs: number;
+  model: string;
+  effort: string;
 }
 
 export interface ReviewerOutput extends ExecResult {

@@ -135,6 +135,47 @@ cmd_stop() {
   ok "stopped (pid $pid)"
 }
 
+cmd_info() {
+  local json
+  json="$(cd "$ROOT" && bun src/cli.ts config --config "$CONFIG" 2>&1)" || { err "invalid config: $json"; return 1; }
+  [[ "${1:-}" == --json ]] && { echo "$json"; return 0; }
+
+  local pid file_note=""
+  if pid="$(daemon_pid)"; then
+    local started=$(( $(date +%s) - $(ps -o etimes= -p "$pid" | tr -d ' ') ))
+    if (( $(stat -c %Y "$CONFIG") > started )); then
+      file_note="  ${Y}changed since daemon start; restart to apply${N}"
+    fi
+  else
+    file_note="  ${D}(daemon stopped; shown as it would load)${N}"
+  fi
+
+  echo "${B}review-relay config${N}"
+  row file "$CONFIG$file_note"
+  jq -r '[.port, .graceMs, .timeoutMs, .dataDir] | @tsv' <<<"$json" | {
+    read -r port grace timeout dir
+    row port "$port"
+    row grace "$(fmt_dur $((grace / 1000)))  ${D}(auto mode wait for Greptile)${N}"
+    row timeout "$(fmt_dur $((timeout / 1000)))  ${D}(per reviewer)${N}"
+    row dataDir "$dir"
+  }
+
+  echo; echo "${B}Reviewers${N}"
+  jq -r '.reviewers[] as $r | [$r, .models[$r].model, .models[$r].effort] | @tsv' <<<"$json" |
+  while IFS=$'\t' read -r name model effort; do
+    printf '  %s●%s %-8s %-20s %seffort%s %s\n' "$G" "$N" "$name" "$model" "$D" "$N" "$effort"
+  done
+
+  echo; echo "${B}Repos${N}"
+  jq -r '.repos[] | [.fullName, .trigger, .postToPr, .github.onPush, .github.mention, .localPath] | @tsv' <<<"$json" |
+  while IFS=$'\t' read -r name trigger post push mention path; do
+    printf '  %s●%s %s\n' "$G" "$N" "$name"
+    printf '      %strigger%s %-9s %spost%s %-6s %sonPush%s %-6s %smention%s %s\n' \
+      "$D" "$N" "$trigger" "$D" "$N" "$post" "$D" "$N" "$push" "$D" "$N" "$mention"
+    printf '      %spath%s    %s\n' "$D" "$N" "${path/#$HOME/\~}"
+  done
+}
+
 cmd_logs() { exec tail -n "${2:-50}" ${FOLLOW:+-f} "$LOGFILE"; }
 
 usage() {
@@ -145,6 +186,7 @@ ${B}usage:${N} scripts/relay <command>
   stop        stop daemon, remove its temporary webhooks
   restart     stop then start
   status      daemon, forwarders, recent jobs (exit 3 if stopped)
+  info        resolved config (defaults applied); --json for raw
   logs [N]    last N log lines (default 50); -f / --follow to stream
 USAGE
 }
@@ -154,6 +196,7 @@ case "${1:-}" in
   stop)    cmd_stop ;;
   restart) cmd_stop && cmd_start ;;
   status)  cmd_status ;;
+  info)    cmd_info "${2:-}" ;;
   logs)    [[ "${2:-}" == -f || "${2:-}" == --follow ]] && { FOLLOW=1; set -- logs 50; }; cmd_logs "$@" ;;
   ""|-h|--help|help) usage ;;
   *) err "unknown command: $1"; usage; exit 1 ;;

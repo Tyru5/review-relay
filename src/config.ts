@@ -17,6 +17,12 @@ export interface RepoConfig {
   github: GithubTriggerConfig;
 }
 
+export interface ModelConfig {
+  model: string;
+  /** Reasoning effort passed to the CLI (claude: low..max, codex: low..ultra). */
+  effort: string;
+}
+
 export interface Config {
   port: number;
   /** How long `auto` mode waits for Greptile after a GitHub PR event before running anyway. */
@@ -24,6 +30,7 @@ export interface Config {
   /** Per-reviewer timeout. */
   timeoutMs: number;
   reviewers: ReviewerName[];
+  models: Record<ReviewerName, ModelConfig>;
   dataDir: string;
   repos: RepoConfig[];
 }
@@ -31,6 +38,11 @@ export interface Config {
 export const DEFAULT_DATA_DIR = join(homedir(), '.review-relay');
 
 export const defaultConfigPath = () => process.env.REVIEW_RELAY_CONFIG ?? join(DEFAULT_DATA_DIR, 'config.json');
+
+export const DEFAULT_MODELS: Record<ReviewerName, ModelConfig> = {
+  claude: { model: 'claude-opus-5-5', effort: 'max' },
+  codex: { model: 'gpt-6-astra', effort: 'high' },
+};
 
 const TRIGGERS: TriggerMode[] = ['auto', 'greptile', 'github'];
 const REVIEWERS: ReviewerName[] = ['codex', 'claude'];
@@ -43,6 +55,18 @@ export function parseConfig(raw: unknown): Config {
   const reviewers: ReviewerName[] = c.reviewers ?? REVIEWERS;
   for (const r of reviewers) {
     if (!REVIEWERS.includes(r)) throw new Error(`unknown reviewer "${r}" (expected ${REVIEWERS.join(', ')})`);
+  }
+
+  const models = { ...DEFAULT_MODELS };
+  for (const name of REVIEWERS) {
+    const m = c.models?.[name];
+    if (m === undefined) continue;
+    for (const key of ['model', 'effort'] as const) {
+      if (m[key] !== undefined && (typeof m[key] !== 'string' || !m[key])) {
+        throw new Error(`models.${name}.${key} must be a non-empty string`);
+      }
+    }
+    models[name] = { ...DEFAULT_MODELS[name], ...m };
   }
 
   const repos = c.repos.map((r: Record<string, any>, i: number): RepoConfig => {
@@ -66,6 +90,7 @@ export function parseConfig(raw: unknown): Config {
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,
     reviewers,
+    models,
     dataDir: c.dataDir ? resolve(String(c.dataDir).replace(/^~(?=\/|$)/, homedir())) : DEFAULT_DATA_DIR,
     repos,
   };

@@ -71,7 +71,14 @@ export async function runReview(job: ResolvedJob, repo: RepoConfig, config: Conf
       config.reviewers.map(async (name) => {
         const scratchDir = join(scratchRoot, name);
         await mkdir(scratchDir, { recursive: true });
-        return runReviewer(name, { dir, prompt, schemaPath, scratchDir, timeoutMs: config.timeoutMs });
+        return runReviewer(name, {
+          dir,
+          prompt,
+          schemaPath,
+          scratchDir,
+          timeoutMs: config.timeoutMs,
+          ...config.models[name],
+        });
       }),
     );
   }).finally(() => rm(scratchRoot, { recursive: true, force: true }));

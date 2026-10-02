@@ -12,11 +12,15 @@ const READ_ONLY_TOOLS = [
   'Bash(git grep:*)',
 ];
 
-export async function runClaude({ dir, prompt, timeoutMs }: ReviewerInput): Promise<ReviewerOutput> {
+export async function runClaude({ dir, prompt, timeoutMs, model, effort }: ReviewerInput): Promise<ReviewerOutput> {
   const result = await exec(
     [
       'claude',
       '-p',
+      '--model',
+      model,
+      '--effort',
+      effort,
       '--output-format',
       'json',
       '--json-schema',
