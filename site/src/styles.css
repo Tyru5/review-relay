@@ -1,0 +1,84 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/schibsted-grotesk';
+@import '@fontsource-variable/jetbrains-mono';
+
+@theme {
+  --color-night: #0d0f1c;
+  --color-surface: #14172b;
+  --color-raised: #1b1f38;
+  --color-line: #262b4a;
+  --color-ink: #eceef8;
+  --color-muted: #9398ba;
+  --color-go: #3deb8e;
+  --color-relay: #38d3f6;
+  --color-score: #b3a6f7;
+
+  --font-sans: 'Schibsted Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: var(--color-night);
+  }
+  body {
+    @apply bg-night font-sans text-ink antialiased;
+    /* The dot grid from the social preview image. */
+    background-image: radial-gradient(color-mix(in srgb, var(--color-line) 70%, transparent) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-go) 35%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-relay);
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+}
+
+/* The one orchestrated moment: a review starts, the relay fires, the scored comment lands. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes draw {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes fill {
+  from {
+    background-color: var(--color-line);
+  }
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@utility relay-rise {
+  animation: rise 500ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@utility relay-draw {
+  transform-origin: top;
+  animation: draw 600ms cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+@utility relay-fill {
+  animation: fill 300ms ease-out both;
+}
+@utility relay-pulse {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+  }
+}

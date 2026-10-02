@@ -34,3 +34,18 @@ jobs:
           shellcheck scripts/relay scripts/install.sh
       - name: Test
         run: bun test
+
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Build and typecheck
+        run: bun run build

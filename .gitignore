@@ -1,6 +1,10 @@
 node_modules/
 dist/
 *.log
-
-
 .codegraph/
+site/.output/
+site/.tanstack/
+site/.nitro/
+site/src/routeTree.gen.ts
+.vercel
+.env*
