@@ -9,7 +9,9 @@ import { defineConfig } from 'vite';
 const brandAssets = fileURLToPath(new URL('../assets', import.meta.url));
 
 export default defineConfig({
-  server: { port: 3000 },
+  // 127.0.0.1 rather than localhost: Windows resolves localhost to ::1 first, which WSL's IPv4 listener never answers.
+  // trycloudflare.com hosts come from `bun run site:tunnel`.
+  server: { host: '127.0.0.1', port: 3000, allowedHosts: ['.trycloudflare.com'] },
   publicDir: brandAssets,
   // Nitro picks its Vercel preset automatically when building on Vercel. It serves its own public
   // assets in production, so the brand assets are registered there too.
