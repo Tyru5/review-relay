@@ -4,5 +4,13 @@
   "singleQuote": true,
   "semi": true,
   "trailingComma": "all",
-  "ignorePatterns": ["bun.lock", "*.md", "test/fixtures/**"]
+  "ignorePatterns": [
+    "bun.lock",
+    "*.md",
+    "test/fixtures/**",
+    "site/.output",
+    "site/.tanstack",
+    "site/.nitro",
+    "site/src/routeTree.gen.ts"
+  ]
 }
