@@ -66,6 +66,8 @@ bun src/cli.ts config                               # resolved config as JSON
 bun run check          # typecheck, lint:check, fmt:check, tests
 bun run lint           # oxlint --fix (.oxlintrc.json); lint:check to verify
 bun run fmt            # oxfmt (.oxfmtrc.json); fmt:check to verify
+bun run ci:local       # run the CI workflow locally with act (cached image)
+bun run ci:local:pull  # same, pulling the latest runner image first
 ```
 
 ## Daemon control

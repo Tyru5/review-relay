@@ -22,7 +22,9 @@
     "lint:check": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "check": "bun run typecheck && bun run lint:check && bun run fmt:check && bun test"
+    "check": "bun run typecheck && bun run lint:check && bun run fmt:check && bun test",
+    "ci:local": "act pull_request -j check --pull=false -P ubuntu-latest=catthehacker/ubuntu:act-latest",
+    "ci:local:pull": "act pull_request -j check -P ubuntu-latest=catthehacker/ubuntu:act-latest"
   },
   "devDependencies": {
     "@types/bun": "latest",
