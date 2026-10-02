@@ -57,7 +57,7 @@ export function parseConfig(raw: unknown): Config {
       fullName: r.fullName,
       localPath: resolve(r.localPath.replace(/^~(?=\/|$)/, homedir())),
       trigger,
-      postToPr: r.postToPr ?? false,
+      postToPr: r.postToPr ?? true,
       github: { onPush: r.github?.onPush ?? false, mention: r.github?.mention ?? '@review-relay' },
     };
   });
