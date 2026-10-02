@@ -77,15 +77,23 @@ async function replay(config: Config, file: string | undefined, dryRun: boolean,
   if (!file) throw new Error('replay needs a JSONL file of {"event", "payload"} lines');
   if (grace !== undefined) config.graceMs = Number(grace);
   const state = new StateStore(dryRun ? null : join(config.dataDir, 'state.json'));
-  const scheduler = makeScheduler(config, state, dryRun
-    ? {
-        resolve: async (job) => ({ ...job, headSha: job.headSha ?? 'unresolved', baseRef: job.baseRef ?? 'unresolved' }),
-        run: async (job) => {
-          log(`[dry-run] would review ${job.repo} PR #${job.pr} @ ${job.headSha.slice(0, 8)} (source=${job.source})`);
-          return {};
-        },
-      }
-    : {});
+  const scheduler = makeScheduler(
+    config,
+    state,
+    dryRun
+      ? {
+          resolve: async (job) => ({
+            ...job,
+            headSha: job.headSha ?? 'unresolved',
+            baseRef: job.baseRef ?? 'unresolved',
+          }),
+          run: async (job) => {
+            log(`[dry-run] would review ${job.repo} PR #${job.pr} @ ${job.headSha.slice(0, 8)} (source=${job.source})`);
+            return {};
+          },
+        }
+      : {},
+  );
   const lines = (await Bun.file(file).text()).split('\n').filter((l) => l.trim());
   for (const line of lines) {
     const entry = JSON.parse(line) as { event: string; payload?: unknown; body?: unknown };
@@ -98,7 +106,9 @@ function status(config: Config) {
   const records = new StateStore(join(config.dataDir, 'state.json')).list().slice(0, 20);
   if (records.length === 0) return console.log('no review jobs yet');
   for (const r of records) {
-    console.log(`${r.startedAt}  ${r.status.padEnd(7)} ${r.repo} #${r.pr} @ ${r.headSha.slice(0, 8)} (${r.source})${r.error ? `  ${r.error}` : ''}`);
+    console.log(
+      `${r.startedAt}  ${r.status.padEnd(7)} ${r.repo} #${r.pr} @ ${r.headSha.slice(0, 8)} (${r.source})${r.error ? `  ${r.error}` : ''}`,
+    );
     if (r.reportDir) console.log(`  ${r.reportDir}`);
   }
 }

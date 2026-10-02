@@ -2,15 +2,27 @@ import { exec } from '../exec.ts';
 import { parseVerdict, VERDICT_SCHEMA } from '../verdict.ts';
 import type { ReviewerInput, ReviewerOutput } from './types.ts';
 
-const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git grep:*)'];
+const READ_ONLY_TOOLS = [
+  'Read',
+  'Grep',
+  'Glob',
+  'Bash(git diff:*)',
+  'Bash(git log:*)',
+  'Bash(git show:*)',
+  'Bash(git grep:*)',
+];
 
 export async function runClaude({ dir, prompt, timeoutMs }: ReviewerInput): Promise<ReviewerOutput> {
   const result = await exec(
     [
-      'claude', '-p',
-      '--output-format', 'json',
-      '--json-schema', JSON.stringify(VERDICT_SCHEMA),
-      '--allowedTools', ...READ_ONLY_TOOLS,
+      'claude',
+      '-p',
+      '--output-format',
+      'json',
+      '--json-schema',
+      JSON.stringify(VERDICT_SCHEMA),
+      '--allowedTools',
+      ...READ_ONLY_TOOLS,
     ],
     { cwd: dir, timeoutMs, stdin: prompt },
   );

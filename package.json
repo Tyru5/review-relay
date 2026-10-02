@@ -2,18 +2,29 @@
   "name": "review-relay",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "Run local Codex and Claude PR reviews when Greptile starts a review, falling back to GitHub PR events.",
   "bin": {
     "review-relay": "src/cli.ts"
   },
+  "type": "module",
   "scripts": {
     "start": "bun src/cli.ts start",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "relay": "scripts/relay",
+    "relay:start": "scripts/relay start",
+    "relay:stop": "scripts/relay stop",
+    "relay:status": "scripts/relay status",
+    "lint": "oxlint --fix",
+    "lint:check": "oxlint",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "check": "bun run typecheck && bun run lint:check && bun run fmt:check && bun test"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
     "typescript": "^5.9.0"
   }
 }

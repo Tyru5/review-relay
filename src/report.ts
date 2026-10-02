@@ -42,7 +42,9 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   lines.push(`| | ${results.map((r) => LABELS[r.name]).join(' | ')} |`, `|---|${results.map(() => ':-:').join('|')}|`);
   lines.push(`| **Overall** | ${results.map((r) => (r.ok ? `**${r.score}/5**` : 'failed')).join(' | ')} |`);
   for (const d of DIMENSIONS) {
-    lines.push(`| ${DIMENSION_LABELS[d]} | ${results.map((r) => (r.verdict ? `${r.verdict.dimensions[d].score}` : '-')).join(' | ')} |`);
+    lines.push(
+      `| ${DIMENSION_LABELS[d]} | ${results.map((r) => (r.verdict ? `${r.verdict.dimensions[d].score}` : '-')).join(' | ')} |`,
+    );
   }
   lines.push('');
 
@@ -66,20 +68,29 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   lines.push('<details><summary>Dimension notes</summary>', '');
   for (const r of ok) {
     lines.push(`**${LABELS[r.name]}**`, '');
-    for (const d of DIMENSIONS) lines.push(`- ${DIMENSION_LABELS[d]} (${r.verdict!.dimensions[d].score}/5): ${r.verdict!.dimensions[d].note}`);
+    for (const d of DIMENSIONS)
+      lines.push(`- ${DIMENSION_LABELS[d]} (${r.verdict!.dimensions[d].score}/5): ${r.verdict!.dimensions[d].note}`);
     lines.push('');
   }
   lines.push('</details>', '');
 
-  for (const r of results.filter((r) => !r.ok)) lines.push(`> ${LABELS[r.name]} review failed: ${escapeCell((r.error ?? '').slice(0, 300))}`, '');
+  for (const res of results.filter((f) => !f.ok))
+    lines.push(`> ${LABELS[res.name]} review failed: ${escapeCell((res.error ?? '').slice(0, 300))}`, '');
 
-  lines.push('<sub>Scores are 1-5 merge confidence. Caps: a critical finding limits a reviewer to 2/5, a major finding to 3/5, and no overall score exceeds the weakest dimension by more than 1.</sub>');
+  lines.push(
+    '<sub>Scores are 1-5 merge confidence. Caps: a critical finding limits a reviewer to 2/5, a major finding to 3/5, and no overall score exceeds the weakest dimension by more than 1.</sub>',
+  );
 
   const body = lines.join('\n');
   return body.length > GITHUB_COMMENT_LIMIT ? `${body.slice(0, GITHUB_COMMENT_LIMIT - 40)}\n\n_(truncated)_` : body;
 }
 
-export async function writeReport(dataDir: string, job: ResolvedJob, results: ReviewerResult[], comment: string): Promise<string> {
+export async function writeReport(
+  dataDir: string,
+  job: ResolvedJob,
+  results: ReviewerResult[],
+  comment: string,
+): Promise<string> {
   const dir = join(dataDir, 'reports', job.repo.replace('/', '__'), `pr-${job.pr}`, job.headSha.slice(0, 8));
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, 'comment.md'), `${comment}\n`);
