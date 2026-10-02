@@ -18,7 +18,7 @@ test('parseConfig applies defaults and validates trigger modes', () => {
     fullName: 'Tyru5/Agendex',
     localPath: '/tmp/x',
     trigger: 'auto',
-    postToPr: false,
+    postToPr: true,
     github: { onPush: false, mention: '@review-relay' },
   });
   expect(config.graceMs).toBe(120_000);
