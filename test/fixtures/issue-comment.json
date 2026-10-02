@@ -1,0 +1,20 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "Tyru5/Agendex"
+  },
+  "issue": {
+    "number": 223,
+    "pull_request": {
+      "url": "https://api.github.com/repos/Tyru5/Agendex/pulls/223"
+    }
+  },
+  "comment": {
+    "body": "@greptileai",
+    "author_association": "OWNER",
+    "user": {
+      "login": "Tyru5",
+      "type": "User"
+    }
+  }
+}
