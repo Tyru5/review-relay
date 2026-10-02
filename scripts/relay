@@ -89,12 +89,7 @@ cmd_status() {
 recent_jobs() {
   echo; echo "${B}Recent jobs${N}"
   if [[ ! -s "$STATE" ]]; then printf '  %sno review jobs yet%s\n' "$D" "$N"; return; fi
-  jq -r '.[:8][] | [.status, (.startedAt[5:16] | sub("T";" ")), .repo, ("#" + (.pr|tostring)), .headSha[:8], .source, (.error // "")] | @tsv' "$STATE" |
-  while IFS=$'\t' read -r st at repo pr sha src e; do
-    local c=$D
-    case $st in done) c=$G;; failed) c=$R;; running) c=$Y;; esac
-    printf '  %s%-7s%s %s  %-24s %-5s %s  %s%s%s\n' "$c" "$st" "$N" "$at" "$repo" "$pr" "$sha" "$D" "$src${e:+  $e}" "$N"
-  done
+  (cd "$ROOT" && bun src/cli.ts status --config "$CONFIG" --limit 8)
 }
 
 cmd_start() {

@@ -85,13 +85,16 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   return body.length > GITHUB_COMMENT_LIMIT ? `${body.slice(0, GITHUB_COMMENT_LIMIT - 40)}\n\n_(truncated)_` : body;
 }
 
+export const reportDirFor = (dataDir: string, job: { repo: string; pr: number; headSha: string }) =>
+  join(dataDir, 'reports', job.repo.replace('/', '__'), `pr-${job.pr}`, job.headSha.slice(0, 8));
+
 export async function writeReport(
   dataDir: string,
   job: ResolvedJob,
   results: ReviewerResult[],
   comment: string,
 ): Promise<string> {
-  const dir = join(dataDir, 'reports', job.repo.replace('/', '__'), `pr-${job.pr}`, job.headSha.slice(0, 8));
+  const dir = reportDirFor(dataDir, job);
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, 'comment.md'), `${comment}\n`);
   for (const r of results) {
