@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { randomBytes } from 'node:crypto';
-import { openSync, readSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
@@ -9,6 +9,8 @@ import {
   clearDaemonInfo,
   inspectDaemon,
   logFilePath,
+  readLast,
+  readRange,
   spawnDetached,
   stopDaemon,
   waitForStart,
@@ -146,6 +148,8 @@ async function startDetached(config: Config, configPath: string) {
     warn(`already running (pid ${existing.pid})`);
     return showStatus(config, configPath, existing, undefined);
   }
+  // Otherwise the health wait below would accept the other listener's reply and report a daemon that never bound.
+  if (existing.foreign) fail(`port ${config.port} is already in use by something that is not review-relay`);
   const pid = spawnDetached(config.dataDir, ['start', '--config', configPath]);
   const problem = await waitForStart(config.dataDir, pid, config.port);
   if (problem) {
@@ -207,29 +211,10 @@ async function info(config: Config, configPath: string, json: boolean) {
 
 function lastLines(path: string, n: number): string[] {
   try {
-    return readLast(path, n);
+    return readLast(path, n).map(sanitize);
   } catch {
     return [];
   }
-}
-
-/** Last `n` lines of a file without reading all of it. */
-function readLast(path: string, n: number): string[] {
-  const fd = openSync(path, 'r');
-  const size = statSync(path).size;
-  const chunk = 64 * 1024;
-  let pos = size;
-  let text = '';
-  while (pos > 0 && text.split('\n').length <= n + 1) {
-    const len = Math.min(chunk, pos);
-    pos -= len;
-    const buf = Buffer.alloc(len);
-    readSync(fd, buf, 0, len, pos);
-    text = buf.toString('utf8') + text;
-  }
-  const lines = text.split('\n');
-  if (lines.at(-1) === '') lines.pop();
-  return lines.slice(-n).map(sanitize);
 }
 
 async function logs(config: Config, count: string | undefined, follow: boolean) {
@@ -243,7 +228,7 @@ async function logs(config: Config, count: string | undefined, follow: boolean) 
     warn(`no log yet at ${tildify(path)}; start the daemon with review-relay start -d`);
     return;
   }
-  for (const line of readLast(path, n)) console.log(line);
+  for (const line of lastLines(path, n)) console.log(line);
   if (!follow) return;
   console.log(st.muted(`── following ${tildify(path)} (ctrl-c to stop) ──`));
   for (;;) {
@@ -256,11 +241,9 @@ async function logs(config: Config, count: string | undefined, follow: boolean) 
     }
     if (now < size) size = 0; // truncated or rotated
     if (now === size) continue;
-    const fd = openSync(path, 'r');
-    const buf = Buffer.alloc(now - size);
-    readSync(fd, buf, 0, buf.length, size);
+    const text = readRange(path, size, now);
     size = now;
-    process.stdout.write(sanitize(buf.toString('utf8')));
+    process.stdout.write(sanitize(text));
   }
 }
 
@@ -343,6 +326,7 @@ async function main() {
   // `help <cmd>` and `<cmd> --help` both open the command's page; bare help opens the overview.
   const helpFor = command === 'help' ? arg : help ? command : undefined;
   if (!command || (command === 'help' && !arg) || (help && !helpFor)) return console.log(renderHelp(version, st));
+  if (helpFor === 'help') return console.log(renderHelp(version, st));
   if (helpFor) {
     const page = renderCommandHelp(helpFor, version, st);
     if (page) return console.log(page);

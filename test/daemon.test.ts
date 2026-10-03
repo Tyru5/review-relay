@@ -7,8 +7,13 @@ import {
   daemonInfoPath,
   inspectDaemon,
   isAlive,
+  isRelayCommand,
   isRelayProcess,
+  matchesRecord,
   pidFilePath,
+  RECORD_SKEW_MS,
+  readLast,
+  readRange,
   selfCommand,
   writeDaemonInfo,
 } from '../src/daemon.ts';
@@ -33,6 +38,23 @@ describe('daemon records', () => {
     clearDaemonInfo(d);
     expect(() => readFileSync(daemonInfoPath(d))).toThrow();
     expect(() => readFileSync(pidFilePath(d))).toThrow();
+  });
+
+  test('clearDaemonInfo with a pid leaves a record that a newer daemon owns', () => {
+    const d = dir();
+    const info = {
+      pid: 500,
+      port: 1,
+      startedAt: '2026-10-03T00:00:00.000Z',
+      version: '0.3.0',
+      configPath: '/c.json',
+      forwarders: [],
+    };
+    writeDaemonInfo(d, info);
+    clearDaemonInfo(d, 499); // the daemon that just exited
+    expect(JSON.parse(readFileSync(daemonInfoPath(d), 'utf8')).pid).toBe(500);
+    clearDaemonInfo(d, 500);
+    expect(() => readFileSync(daemonInfoPath(d))).toThrow();
   });
 
   test('inspectDaemon with no record reports stopped, not stale', async () => {
@@ -77,11 +99,53 @@ describe('process checks', () => {
     expect(isRelayProcess(process.pid)).toBe(false);
   });
 
+  test('isRelayCommand matches the binary and the dev entrypoint, not other bun scripts', () => {
+    expect(isRelayCommand('/home/u/.local/bin/review-relay start --config /c.json')).toBe(true);
+    expect(isRelayCommand('bun src/cli.ts start')).toBe(true);
+    expect(isRelayCommand('bun src/cli.ts status')).toBe(false);
+    expect(isRelayCommand('bun test')).toBe(false);
+  });
+
+  test('matchesRecord rejects a reused pid whose process started after the record', () => {
+    const startedAt = '2026-10-03T12:00:00.000Z';
+    const t = Date.parse(startedAt);
+    const cmd = 'review-relay start';
+    expect(matchesRecord({ commandLine: cmd, startedMs: t - 2_000 }, startedAt)).toBe(true);
+    expect(matchesRecord({ commandLine: cmd, startedMs: t + RECORD_SKEW_MS - 1 }, startedAt)).toBe(true);
+    expect(matchesRecord({ commandLine: cmd, startedMs: t + RECORD_SKEW_MS + 60_000 }, startedAt)).toBe(false);
+    // Legacy pid file (no start time) and platforms without one fall back to the command line alone.
+    expect(matchesRecord({ commandLine: cmd, startedMs: null }, startedAt)).toBe(true);
+    expect(matchesRecord({ commandLine: cmd, startedMs: t + 999_999 }, null)).toBe(true);
+    expect(matchesRecord({ commandLine: 'bun test', startedMs: t }, startedAt)).toBe(false);
+  });
+
   test('selfCommand re-runs the script under bun, or the compiled binary directly', () => {
     const cmd = selfCommand(['start']);
     expect(cmd[0]).toBe(process.execPath);
     expect(cmd.at(-1)).toBe('start');
     // Under `bun test` argv[1] is a real file, so it is passed through.
     expect(cmd).toHaveLength(3);
+  });
+});
+
+describe('log reading', () => {
+  test('readLast returns the last n lines, nothing for 0, and keeps multibyte text across chunk boundaries', () => {
+    const d = dir();
+    const path = join(d, 'daemon.log');
+    const lines = Array.from({ length: 50 }, (_, i) => `line ${i} ✓ héllo ● ${'x'.repeat(i % 7)}`);
+    writeFileSync(path, `${lines.join('\n')}\n`);
+    expect(readLast(path, 0)).toEqual([]);
+    expect(readLast(path, 3)).toEqual(lines.slice(-3));
+    // A 5-byte chunk splits every multibyte character somewhere.
+    expect(readLast(path, 50, 5)).toEqual(lines);
+    expect(readLast(path, 1000, 7)).toEqual(lines);
+  });
+
+  test('readLast handles a file with no trailing newline and readRange decodes a byte span', () => {
+    const d = dir();
+    const path = join(d, 'daemon.log');
+    writeFileSync(path, 'a\nb\nc');
+    expect(readLast(path, 2)).toEqual(['b', 'c']);
+    expect(readRange(path, 2, 5)).toBe('b\nc');
   });
 });
