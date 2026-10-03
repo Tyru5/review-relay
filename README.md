@@ -46,7 +46,7 @@ bun src/cli.ts start
 
 ## Config
 
-`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs (↑/↓ to move, space to toggle, enter to continue). Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default leaves that field unset in the file. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and the repos, are kept.
+`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs (↑/↓ to move, space to toggle, enter to continue). Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default clears that field in the file, except that a file which already pins the default value keeps it. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and the repos, are kept.
 
 | Field | Default | Meaning |
 | - | - | - |
