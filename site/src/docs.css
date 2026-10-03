@@ -1,0 +1,396 @@
+.docs-page {
+  min-height: 100svh;
+  background: var(--color-arena);
+}
+.docs-header {
+  border-bottom: 1px solid var(--color-rule);
+}
+.docs-header-inner {
+  max-width: 84rem;
+  margin: auto;
+  padding: 1.25rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.docs-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 1.125rem;
+  font-weight: 800;
+  font-stretch: 85%;
+}
+.docs-header nav {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.875rem;
+}
+.docs-header nav a {
+  color: var(--color-haze);
+}
+.docs-header nav a[aria-current] {
+  color: var(--color-chalk);
+  text-decoration: underline;
+  text-underline-offset: 0.4em;
+}
+.docs-layout {
+  max-width: 84rem;
+  margin: auto;
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 2.5rem;
+  padding: 2.5rem 2rem 4rem;
+  align-items: start;
+}
+.docs-sidebar {
+  position: sticky;
+  top: 2rem;
+  max-height: calc(100svh - 4rem);
+  overflow-y: auto;
+  padding: 0.5rem 0.25rem;
+}
+.docs-sidebar ol {
+  margin-top: 1.5rem;
+}
+.docs-sidebar li a {
+  display: block;
+  padding: 0.65rem 0.85rem;
+  color: var(--color-haze);
+  font-size: 0.9rem;
+}
+.docs-sidebar li a:hover {
+  background: var(--color-arena-deep);
+  color: var(--color-chalk);
+}
+.docs-sidebar li a[aria-current] {
+  background: var(--color-board);
+  color: var(--color-chalk);
+  font-weight: 700;
+}
+.docs-sidebar-note {
+  border-top: 1px solid var(--color-rule);
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  color: var(--color-haze);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.docs-sidebar-link {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  text-underline-offset: 0.3em;
+}
+.docs-content {
+  min-width: 0;
+  background: var(--color-paper);
+  color: var(--color-navy);
+  padding: 3rem clamp(1.25rem, 4vw, 4rem);
+  color-scheme: light;
+  border-radius: 6px;
+  scrollbar-color: var(--color-slate) var(--color-paper);
+}
+.docs-intro h1 {
+  max-width: 12ch;
+  font-size: clamp(3rem, 5.5vw, 4.5rem);
+  text-wrap: balance;
+}
+.docs-intro > p {
+  color: var(--color-slate);
+  font-size: 1.125rem;
+  line-height: 1.65;
+  max-width: 52ch;
+  margin-top: 1.25rem;
+}
+.docs-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  margin-top: 1.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.docs-content a {
+  text-decoration: underline;
+  text-underline-offset: 0.22em;
+  text-decoration-color: var(--color-slate);
+}
+.docs-content a:hover {
+  color: var(--color-arena);
+}
+.docs-section {
+  scroll-margin-top: 2rem;
+  margin-top: 3.5rem;
+  padding-top: 2.5rem;
+  border-top: 1px solid var(--color-paper-rule);
+}
+.docs-section h2 {
+  font-size: clamp(2rem, 3.5vw, 2.75rem);
+  margin-bottom: 1.5rem;
+}
+.docs-section h2 a {
+  text-decoration: none;
+}
+.docs-section h2 a span {
+  margin-left: 0.5em;
+  color: var(--color-slate);
+  font-size: 0.65em;
+  opacity: 0;
+}
+.docs-section h2 a:hover span,
+.docs-section h2 a:focus-visible span {
+  opacity: 1;
+}
+.docs-section h3 {
+  font-stretch: 66%;
+  font-weight: 850;
+  font-size: 1.5rem;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  margin: 2rem 0 0.75rem;
+}
+.docs-section p,
+.docs-section > ul,
+.docs-flow {
+  font-size: 1rem;
+  line-height: 1.75;
+  max-width: 72ch;
+  margin: 1rem 0;
+}
+.docs-section strong {
+  font-weight: 700;
+}
+.docs-section > ul {
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+.docs-section li + li {
+  margin-top: 0.65rem;
+}
+.docs-section code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  overflow-wrap: anywhere;
+}
+.docs-section p.docs-small {
+  font-size: 0.875rem;
+  color: var(--color-slate);
+}
+.docs-install {
+  margin: 1.25rem 0;
+  border: 1px solid var(--color-paper-rule);
+}
+.docs-install > div {
+  flex-direction: column;
+}
+.docs-install [role='tablist'] {
+  background: var(--color-navy);
+  color: var(--color-haze);
+}
+.docs-install [role='tab'][aria-selected='true'] {
+  background: var(--color-paper);
+  color: var(--color-navy);
+}
+.docs-note {
+  border-block: 1px solid var(--color-paper-rule);
+  padding: 1.25rem 0;
+  margin: 1.5rem 0;
+}
+.docs-note > strong {
+  font-size: 0.9rem;
+}
+.docs-note p {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  color: var(--color-slate);
+}
+.docs-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 1.25rem 0 1.75rem;
+}
+.docs-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 35rem;
+  text-align: left;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.docs-table-wrap th,
+.docs-table-wrap td {
+  padding: 0.8rem 0.85rem 0.8rem 0;
+  border-bottom: 1px solid var(--color-paper-rule);
+  vertical-align: top;
+}
+.docs-table-wrap thead th {
+  font-size: 0.75rem;
+  color: var(--color-slate);
+  font-weight: 600;
+  border-bottom: 2px solid var(--color-navy);
+}
+.docs-table-wrap tbody th {
+  width: 24%;
+  font-weight: 500;
+}
+.docs-table-wrap td:nth-child(2) {
+  width: 24%;
+  font-size: 0.8rem;
+  color: var(--color-slate);
+  overflow-wrap: anywhere;
+}
+.docs-table-wrap td:last-child {
+  padding-right: 0;
+}
+.docs-snippet {
+  margin: 1.25rem 0;
+  border-radius: 6px;
+  background: var(--color-navy);
+  color: var(--color-chalk);
+  overflow: hidden;
+  --focus: var(--color-gold);
+}
+.docs-snippet figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--color-rule);
+  font-size: 0.75rem;
+  color: var(--color-haze);
+}
+.docs-snippet button {
+  padding: 0.4rem 0.65rem;
+  min-width: 5rem;
+  min-height: 2.25rem;
+  color: var(--color-chalk);
+  background: var(--color-arena);
+  font-weight: 600;
+  cursor: pointer;
+}
+.docs-snippet button:hover {
+  background: var(--color-rule);
+}
+.docs-snippet pre {
+  overflow-x: auto;
+  padding: 1.15rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.85;
+  scrollbar-color: var(--color-rule) var(--color-navy);
+}
+.docs-snippet pre code {
+  font-size: inherit;
+  overflow-wrap: normal;
+}
+.docs-section details {
+  border-bottom: 1px solid var(--color-paper-rule);
+  padding: 1rem 0;
+  scroll-margin-top: 2rem;
+}
+.docs-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.docs-section summary:hover {
+  color: var(--color-arena);
+}
+.docs-section details p {
+  font-size: 0.925rem;
+  color: var(--color-slate);
+}
+.docs-flow {
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+.docs-flow li {
+  padding-left: 0.35rem;
+}
+.docs-end {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 2rem;
+}
+.docs-end a {
+  font-size: 0.85rem;
+}
+.docs-skip {
+  position: fixed;
+  top: 0.75rem;
+  left: 1rem;
+  z-index: 10;
+  padding: 0.75rem 1rem;
+  background: var(--color-gold);
+  color: var(--color-navy);
+  transform: translateY(-200%);
+}
+.docs-skip:focus {
+  transform: translateY(0);
+}
+@media (max-width: 900px) {
+  .docs-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+    padding-top: 1.5rem;
+  }
+  .docs-sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+  .docs-sidebar nav > p {
+    font-size: 1.5rem;
+  }
+  .docs-sidebar ol {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.75rem;
+  }
+  .docs-sidebar li a {
+    padding: 0.5rem 0.65rem;
+    font-size: 0.8rem;
+  }
+  .docs-sidebar-note,
+  .docs-sidebar-link {
+    display: none;
+  }
+}
+@media (max-width: 540px) {
+  .docs-header-inner {
+    padding: 1rem 1.25rem;
+  }
+  .docs-header nav {
+    gap: 1rem;
+    font-size: 0.8rem;
+  }
+  .docs-brand {
+    font-size: 1rem;
+  }
+  .docs-layout {
+    padding: 1.25rem 0 0;
+    gap: 1.25rem;
+  }
+  .docs-sidebar {
+    padding: 0 1.25rem;
+  }
+  .docs-content {
+    padding: 2rem 1.25rem;
+    border-radius: 0;
+  }
+  .docs-section {
+    margin-top: 2.5rem;
+    padding-top: 2rem;
+  }
+  .docs-intro h1 {
+    font-size: 3rem;
+  }
+}

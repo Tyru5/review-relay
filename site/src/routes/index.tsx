@@ -9,6 +9,7 @@ import { checksumsUrl, getLatestVersion, INSTALL_PS1, INSTALL_SH, REPO } from '.
 
 export const Route = createFileRoute('/')({
   loader: () => getLatestVersion(),
+  head: () => ({ links: [{ rel: 'canonical', href: 'https://reviewrelay.dev' }] }),
   // Vercel's CDN serves the page and refreshes the release version in the background.
   headers: () => ({ 'Cache-Control': 'public, max-age=0, s-maxage=300, stale-while-revalidate=86400' }),
   component: Home,
@@ -64,7 +65,7 @@ function Home() {
   return (
     <>
       <section className="flex min-h-svh flex-col">
-        <header className={`${CONTAINER} flex items-center justify-between pt-5`}>
+        <header className={`${CONTAINER} flex flex-wrap items-center justify-between gap-3 pt-5`}>
           <a
             href="/"
             className="flex items-center gap-2.5 bg-board py-2 pr-4 pl-3 text-lg font-extrabold [font-stretch:85%]"
@@ -74,6 +75,12 @@ function Home() {
           </a>
           <div className="flex items-center gap-2">
             {version && <span className="bg-board px-3 py-2 font-mono text-xs text-haze">v{version}</span>}
+            <a
+              href="/docs"
+              className="bg-board px-3 py-2 text-xs font-bold text-chalk transition-colors hover:text-gold"
+            >
+              Docs
+            </a>
             <a
               href={REPO}
               className="flex items-center gap-2 bg-board px-3 py-2 text-xs font-bold text-haze transition-colors hover:text-chalk"
@@ -199,6 +206,50 @@ function Home() {
         </div>
       </section>
 
+      <section aria-labelledby="docs-heading" className="border-t border-rule bg-arena-deep py-20">
+        <div className={`${CONTAINER} grid gap-x-14 gap-y-8 lg:grid-cols-[19rem_minmax(0,1fr)]`}>
+          <div>
+            <h2 id="docs-heading" className="type-broadcast text-[clamp(2.75rem,5.5vw,4.25rem)]">
+              Set the rules.
+            </h2>
+            <p className="mt-4 leading-relaxed text-haze">
+              The docs cover your first review and every setting after it.
+            </p>
+          </div>
+          <div className="max-w-[44rem]">
+            <p className="max-w-[62ch] leading-relaxed text-haze">
+              Choose models and effort, route different pull requests to different panels, and decide when the relay
+              runs. Find the defaults, working config examples, and help when a review does not arrive.
+            </p>
+            <nav aria-label="Documentation" className="mt-6 divide-y divide-rule border-y border-rule">
+              {[
+                ['Quick start', '/docs#quick-start'],
+                ['Configuration reference', '/docs#configuration'],
+                ['Routing rules', '/docs#routing'],
+              ].map(([title, href]) => (
+                <a
+                  key={href}
+                  href={href}
+                  className="flex items-center justify-between py-4 font-semibold transition-colors hover:text-gold"
+                >
+                  {title}
+                  <svg
+                    aria-hidden="true"
+                    className="size-5"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <path d="M3 10h13m-5-5 5 5-5 5" />
+                  </svg>
+                </a>
+              ))}
+            </nav>
+          </div>
+        </div>
+      </section>
+
       <section className="on-paper bg-gold py-20 text-navy">
         <div className={CONTAINER}>
           <h2 className="type-broadcast text-[clamp(3.25rem,9vw,6rem)]">Seat your panel.</h2>
@@ -226,6 +277,7 @@ function Home() {
               <GitHubMark className="size-5" />
               <span className="font-bold">GitHub</span>
             </a>
+            <FooterLink href="/docs">Documentation</FooterLink>
             <FooterLink href={INSTALL_SH}>install.sh</FooterLink>
             <FooterLink href={INSTALL_PS1}>install.ps1</FooterLink>
             {version && <FooterLink href={checksumsUrl(version)}>Checksums for v{version}</FooterLink>}
