@@ -30,12 +30,29 @@ const EVENTS: { title: string; body: ReactNode }[] = [
   },
   {
     title: 'The panel reviews in parallel',
-    body: "Every agent you configured, on whichever harness or model, reviews read-only against the same rubric: your repo's conventions, lint config, and the callers of changed code.",
+    body: "Every agent on your panel reviews against the same rubric: your repo's conventions, lint config, and the callers of changed code. Each CLI runs headless and read-only, locked down by its own flags rather than by the prompt, and config files a PR could use to run code through it are removed from the worktree first.",
   },
   {
     title: 'One scored comment lands',
     body: 'Findings are merged across judges and linked to exact lines. Later reviews edit the same comment. Each commit is reviewed once, and drafts wait until they are ready.',
   },
+];
+
+/** The agent CLIs review-relay can seat, with the name each takes in `reviewers`. Defaults first, then alphabetical, as setup lists them. */
+const AGENTS: { name: string; product: string }[] = [
+  { name: 'claude', product: 'Claude Code' },
+  { name: 'codex', product: 'Codex CLI' },
+  { name: 'auggie', product: 'Augment Auggie' },
+  { name: 'copilot', product: 'GitHub Copilot CLI' },
+  { name: 'droid', product: 'Factory Droid' },
+  { name: 'gemini', product: 'Gemini CLI' },
+  { name: 'grok', product: 'Grok Build' },
+  { name: 'hermes', product: 'Hermes Agent' },
+  { name: 'kilo', product: 'Kilo Code CLI' },
+  { name: 'opencode', product: 'opencode' },
+  { name: 'pi', product: 'pi' },
+  { name: 'qwen', product: 'Qwen Code' },
+  { name: 'vibe', product: 'Mistral Vibe' },
 ];
 
 const CONTAINER = 'mx-auto w-full max-w-[84rem] px-5 sm:px-8';
@@ -65,9 +82,10 @@ function Home() {
             <span className="block text-gold">The lowest score counts.</span>
           </h1>
           <p className="max-w-[34rem] self-end text-lg leading-relaxed text-pretty text-haze">
-            Pick any coding agents or models as your panel, as many as you like.{' '}
-            <span className="whitespace-nowrap text-chalk">review-relay</span> starts them the moment a review begins on
-            GitHub, then posts one comment with their findings and a 1&ndash;5 merge confidence score.
+            Seat Claude Code, Codex, Gemini CLI, Copilot, or any of {AGENTS.length} supported agent CLIs, as many as you
+            like. <span className="whitespace-nowrap text-chalk">review-relay</span> starts them on your machine the
+            moment a review begins on GitHub, then posts one comment with their findings and a{' '}
+            <span className="whitespace-nowrap">1&ndash;5</span> merge confidence score.
           </p>
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
             <JudgesDesk />
@@ -139,15 +157,29 @@ function Home() {
                 <Terminal lines={['gh extension install cli/gh-webhook']} />
               </Requirement>
               <Requirement>
-                The coding agents or models you want judging, signed in or set up with an API key
+                At least one of these agent CLIs, signed in or set up with an API key. Claude Code and Codex are the
+                defaults.
+                <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Supported agent CLIs">
+                  {AGENTS.map((a) => (
+                    <li
+                      key={a.name}
+                      className="flex items-baseline gap-1.5 border border-paper-rule px-2 py-1 text-[0.8rem] leading-none"
+                    >
+                      {a.product}
+                      <code className="font-mono text-[0.7rem] text-slate">{a.name}</code>
+                    </li>
+                  ))}
+                </ul>
               </Requirement>
               <Requirement>A local clone of each repo you want reviewed</Requirement>
             </ul>
             <p className="mt-10 leading-relaxed">
               The installer writes an example config to <Code tone="paper">~/.review-relay/config.json</Code>. Point it
-              at your repos and local clones, list the agents on your panel, then start watching:
+              at your repos and local clones. <Code tone="paper">setup</Code> then lists the agent CLIs on your PATH so
+              you can pick your panel and each judge&rsquo;s model and effort, and <Code tone="paper">start</Code> keeps
+              watching:
             </p>
-            <Terminal lines={['review-relay start', 'review-relay status']} />
+            <Terminal lines={['review-relay setup', 'review-relay start', 'review-relay status']} />
             <p className="mt-8 border-t border-paper-rule pt-5 text-sm leading-relaxed text-slate">
               Reviews run from your machine, and your code goes to whichever providers your chosen agents and models
               use.
