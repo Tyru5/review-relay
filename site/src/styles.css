@@ -2,6 +2,7 @@
 @import '@fontsource-variable/schibsted-grotesk';
 @import '@fontsource-variable/jetbrains-mono';
 
+/* The Night Shift: quiet tonal surfaces; light appears only when something lands. See DESIGN.md. */
 @theme {
   --color-night: #0d0f1c;
   --color-surface: #14172b;
@@ -11,25 +12,26 @@
   --color-muted: #9398ba;
   --color-go: #3deb8e;
   --color-relay: #38d3f6;
-  --color-score: #b3a6f7;
+  --color-flag: #b3a6f7;
 
   --font-sans: 'Schibsted Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
   html {
     color-scheme: dark;
     background-color: var(--color-night);
+    scrollbar-color: var(--color-line) var(--color-night);
   }
   body {
     @apply bg-night font-sans text-ink antialiased;
-    /* The dot grid from the social preview image. */
-    background-image: radial-gradient(color-mix(in srgb, var(--color-line) 70%, transparent) 1px, transparent 1px);
-    background-size: 28px 28px;
+    caret-color: var(--color-relay);
   }
   ::selection {
-    background-color: color-mix(in srgb, var(--color-go) 35%, transparent);
+    background-color: color-mix(in srgb, var(--color-relay) 30%, transparent);
   }
   :focus-visible {
     outline: 2px solid var(--color-relay);
@@ -38,11 +40,21 @@
   }
 }
 
+/* The dot grid from the social preview, kept to the canvas the sample review sits on and faded at its edges. */
+@utility dot-canvas {
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--color-line) 70%, var(--color-muted)) 1.2px,
+    transparent 1.2px
+  );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse 75% 70% at 50% 45%, black 40%, transparent 100%);
+}
+
 /* The one orchestrated moment: a review starts, the relay fires, the scored comment lands. */
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px);
   }
 }
 @keyframes draw {
@@ -55,24 +67,25 @@
     background-color: var(--color-line);
   }
 }
-@keyframes pulse {
+@keyframes wait {
   50% {
-    opacity: 0.35;
+    opacity: 0.3;
   }
 }
 
 @utility relay-rise {
-  animation: rise 500ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: rise 700ms var(--ease-out-expo) both;
 }
 @utility relay-draw {
   transform-origin: top;
-  animation: draw 600ms cubic-bezier(0.5, 0, 0.2, 1) both;
+  animation: draw 700ms var(--ease-out-expo) both;
 }
 @utility relay-fill {
-  animation: fill 300ms ease-out both;
+  animation: fill 400ms var(--ease-out-expo) both;
 }
-@utility relay-pulse {
-  animation: pulse 1.6s ease-in-out infinite;
+/* Blinks while the review is in flight and settles once the comment lands. */
+@utility relay-wait {
+  animation: wait 500ms ease-in-out 2;
 }
 
 @media (prefers-reduced-motion: reduce) {
