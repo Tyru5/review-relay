@@ -99,15 +99,46 @@ test('parseNumstat counts tests and wide-impact files', () => {
       '-\t-\tlogo.png',
       '3\t0\t.github/workflows/ci.yml',
       '7\t0\tdb/migrations/001.sql',
-    ].join('\n'),
+      '',
+    ].join('\0'),
   );
-  expect(stats).toEqual({
+  expect(stats).toMatchObject({
     files: 6,
     additions: 26,
     deletions: 3,
     testFiles: 1,
     sensitiveFiles: ['package.json', '.github/workflows/ci.yml', 'db/migrations/001.sql'],
+    counted: { files: 6, additions: 26, deletions: 3 },
   });
+  expect(stats.changed[3]).toEqual({ path: 'logo.png', additions: 0, deletions: 0 });
+});
+
+test('parseNumstat reads both paths of a renamed file, which plain numstat folds into one', () => {
+  // Plain numstat prints `src/{a.test.ts => b.test.ts}`, which matched neither detector.
+  const stats = parseNumstat(
+    ['0\t0\t', 'src/a.test.ts', 'src/b.test.ts', '2\t0\t', 'sql/001.sql', 'sql/002.sql', '1\t0\tdocs/a b.md', ''].join(
+      '\0',
+    ),
+  );
+  expect(stats.changed).toEqual([
+    { path: 'src/b.test.ts', oldPath: 'src/a.test.ts', additions: 0, deletions: 0 },
+    { path: 'sql/002.sql', oldPath: 'sql/001.sql', additions: 2, deletions: 0 },
+    { path: 'docs/a b.md', additions: 1, deletions: 0 },
+  ]);
+  expect(stats.testFiles).toBe(1);
+  expect(stats.sensitiveFiles).toEqual(['sql/002.sql']);
+});
+
+test('parseNumstat leaves lockfiles out of the counted totals', () => {
+  const stats = parseNumstat(
+    ['5000\t20\tbun.lock', '12\t3\tpackages/web/pnpm-lock.yaml', '20\t0\tsrc/a.ts', '1\t1\tpackage.json', ''].join(
+      '\0',
+    ),
+  );
+  expect(stats).toMatchObject({ files: 4, additions: 5033, deletions: 24 });
+  expect(stats.counted).toEqual({ files: 2, additions: 21, deletions: 1 });
+  // Lockfiles still count as wide-impact: a dependency change is a supply-chain risk.
+  expect(stats.sensitiveFiles).toEqual(['bun.lock', 'packages/web/pnpm-lock.yaml', 'package.json']);
 });
 
 describe('commentBody', () => {
@@ -119,7 +150,7 @@ describe('commentBody', () => {
     headSha: '1e210c5c927d8d4c1e750e1fcd1f7f4e003f05f0',
     baseRef: 'main',
   };
-  const stats = parseNumstat('10\t2\tsrc/a.ts');
+  const stats = parseNumstat('10\t2\tsrc/a.ts\0');
   const ran = (name: 'codex' | 'claude') => ({
     name,
     harness: name,

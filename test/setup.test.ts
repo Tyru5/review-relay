@@ -626,6 +626,18 @@ describe('renderSetup', () => {
     expect(bottom).toContain('enter exit · ↑↓ scroll · ← back · q quit');
   });
 
+  test('save step lists the routes as the file has them, and saving keeps them', () => {
+    const routes = [
+      { name: 'docs', when: { onlyPaths: ['docs/**'] }, skip: true },
+      { name: 'risky', when: { wideImpact: true }, reviewers: ['claude', 'codex'] },
+    ];
+    const ctx = ctxFor({ reviewers: ['codex'], routes });
+    const text = render(press(ctx, walk(ctx)), ctx);
+    expect(text).toContain('routes     docs → skip\n');
+    expect(text).toContain('           risky → claude, codex\n');
+    expect(text).toContain('Nothing changed.');
+  });
+
   test('save step says when nothing changed', () => {
     const ctx = ctxFor({ reviewers: ['codex'] });
     const text = render(press(ctx, walk(ctx)), ctx);

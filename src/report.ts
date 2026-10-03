@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describeStats, type DiffStats } from './diffstats.ts';
+import type { RouteChoice } from './routes.ts';
 import type { ResolvedJob, ReviewerResult } from './types.ts';
 import { DIMENSION_LABELS, DIMENSIONS, mergeFindings, type MergedFinding, type Severity } from './verdict.ts';
 
@@ -24,7 +25,16 @@ const location = (job: ResolvedJob, f: MergedFinding) => {
 
 const escapeCell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n+/g, ' ');
 
-export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: DiffStats): string {
+/**
+ * The line under the headline for configs that route: the route that decided the review and why, or nothing when no
+ * route matched, then each reviewer's model and effort.
+ */
+export function routeLine(route: RouteChoice | undefined, results: ReviewerResult[]): string {
+  const models = results.map((r) => `${r.label}: ${[r.model ?? 'default model', r.effort].filter(Boolean).join(', ')}`);
+  return `<sub>${[...(route ? [`Route \`${route.name}\` (${route.reason})`] : []), ...models].join(' · ')}</sub>`;
+}
+
+export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: DiffStats, routing?: string): string {
   const ok = results.filter((r) => r.ok && r.verdict);
   const overall = combinedScore(results);
   const lines: string[] = [COMMENT_MARKER];
@@ -32,7 +42,9 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   lines.push(`## review-relay: Confidence ${overall ?? '?'}/5`);
   const perReviewer = results.map((r) => `${r.label} ${r.ok ? `${r.score}/5` : 'failed'}`).join(', ');
   lines.push(
-    `<sub>Commit \`${job.headSha.slice(0, 8)}\` · ${job.reason} · ${describeStats(stats)} · lowest of: ${perReviewer}</sub>`,
+    // A <br> keeps the routing line on a line of its own; GitHub joins adjacent lines into one.
+    `<sub>Commit \`${job.headSha.slice(0, 8)}\` · ${job.reason} · ${describeStats(stats)} · lowest of: ${perReviewer}</sub>${routing ? '<br>' : ''}`,
+    ...(routing ? [routing] : []),
     '',
   );
 
@@ -97,6 +109,7 @@ export async function writeReport(
   job: ResolvedJob,
   results: ReviewerResult[],
   comment: string,
+  route?: RouteChoice,
 ): Promise<string> {
   const dir = reportDirFor(dataDir, job);
   await mkdir(dir, { recursive: true });
@@ -114,6 +127,7 @@ export async function writeReport(
         ...job,
         finishedAt: new Date().toISOString(),
         score: combinedScore(results),
+        route: route ?? null,
         reviewers: results.map(
           ({ name, harness, model, effort, provider, timeoutMs, ok, score, error, durationMs }) => ({
             name,

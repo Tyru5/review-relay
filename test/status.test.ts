@@ -87,6 +87,24 @@ describe('renderStatus', () => {
     );
   });
 
+  test('shows the route each job took, and a skipped job with no scores', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'relay-status-'));
+    const routed = record('aaaaaaaa11', { route: 'risky' });
+    writeFixtureReport(dataDir, routed);
+    const skipped = record('dddddddd44', { status: 'skipped', route: 'docs', startedAt: '2026-10-02T10:20:00.000Z' });
+    const [header, skipRow, routedRow] = renderStatus([skipped, routed], {
+      dataDir,
+      reviewers: ['codex', 'claude'],
+      color: false,
+    });
+    expect(header).toMatch(/SOURCE\s+ROUTE\s+SCORE/);
+    expect(skipRow).toMatch(/^skipped\s.*dddddddd\s+github\s+docs\s+-\s+-\s+-\s+-\s+-\s+-/);
+    expect(routedRow).toMatch(/aaaaaaaa\s+github\s+risky\s+3\/5/);
+    // Without routes the column goes away, as it did before routing existed.
+    const [plain] = renderStatus([record('aaaaaaaa11')], { dataDir, reviewers: ['codex'], color: false });
+    expect(plain).not.toContain('ROUTE');
+  });
+
   test('drops NOTE when no job has an error', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'relay-status-'));
     const [header] = renderStatus([record('cccccccc33')], { dataDir, reviewers: ['codex'], color: false });
