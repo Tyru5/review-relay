@@ -25,7 +25,7 @@ Commands:
   status                        Show recent review jobs with scores, timings, and finding counts
       --limit <n>               Number of jobs to show (default 20)
   config                        Print the resolved config (defaults applied) as JSON
-  setup                         Pick reviewers and their models in an interactive terminal UI and save them to the config
+  setup                         Pick the repos to watch, the reviewers, and their models in a terminal UI; saves the config
 
 Options:
   --config <path>               Config file (default ~/.review-relay/config.json or $REVIEW_RELAY_CONFIG)

@@ -7,19 +7,46 @@ import {
   initialState,
   modelKeys,
   nextModels,
+  nextRepos,
   parseKeys,
   reduce,
   renderSetup,
   setupContext,
+  type Disk,
   type SetupContext,
   type SetupState,
 } from '../src/setup.ts';
 
-/** Context as if only `installed` executables were on PATH. */
-const ctxFor = (raw: Record<string, any> | undefined, installed = ['claude', 'codex']) =>
-  setupContext('/tmp/relay/config.json', raw, (bin) => (installed.includes(bin) ? `/usr/local/bin/${bin}` : null));
+/** The clone setup is run from, which the file lists unless a test says otherwise. */
+const APP = { fullName: 'acme/app', localPath: '/home/u/app' };
+/** Clones on disk: `app` and `lib` are found under ~, `tool` only when its path is typed. */
+const CLONES = [
+  APP,
+  { fullName: 'acme/lib', localPath: '/home/u/lib' },
+  { fullName: 'acme/tool', localPath: '/opt/tool' },
+];
+const DISK: Disk = {
+  found: CLONES.slice(0, 2),
+  at: (dir) => CLONES.find((clone) => clone.localPath === dir),
+  here: APP,
+};
 
-const press = (ctx: SetupContext, keys: string[], state: SetupState = initialState(ctx)) =>
+/**
+ * Context as if only `installed` executables were on PATH and the clones in `DISK` were on disk. An existing file
+ * lists `APP` unless `raw` sets `repos` itself.
+ */
+const ctxFor = (raw: Record<string, any> | undefined, installed = ['claude', 'codex'], disk = DISK) =>
+  setupContext(
+    '/tmp/relay/config.json',
+    raw && { repos: [APP], ...raw },
+    (bin) => (installed.includes(bin) ? `/usr/local/bin/${bin}` : null),
+    disk,
+  );
+
+/** The state on the reviewers step, past the repos step with its preselection kept. */
+const atReviewers = (ctx: SetupContext) => reduce(initialState(ctx), 'enter', ctx);
+
+const press = (ctx: SetupContext, keys: string[], state: SetupState = atReviewers(ctx)) =>
   keys.reduce((s, key) => reduce(s, key, ctx), state);
 
 const render = (state: SetupState, ctx: SetupContext, height?: number) =>
@@ -42,7 +69,7 @@ describe('setupContext', () => {
   });
 
   test('keeping the default selection is no change when the file leaves reviewers unset', () => {
-    const ctx = ctxFor({ repos: [] });
+    const ctx = ctxFor({});
     expect(hasChanges(initialState(ctx), ctx)).toBe(false);
   });
 
@@ -89,7 +116,7 @@ describe('detection', () => {
     expect(ctx.notFound).not.toContain('pi');
     expect(ctx.notFound).toContain('gemini');
     expect(initialState(ctx).selected).toEqual(['codex', 'claude']);
-    expect(render(initialState(ctx), ctx)).toContain('Found 4 of 13 supported agent CLIs.');
+    expect(render(atReviewers(ctx), ctx)).toContain('Found 4 of 13 supported agent CLIs.');
   });
 
   test('preselects the first installed harness when no default one is installed', () => {
@@ -119,12 +146,198 @@ describe('detection', () => {
       'vibe',
     ];
     const ctx = ctxFor(undefined, everything);
-    const top = renderSetup(initialState(ctx), ctx, false, 20);
+    const top = renderSetup(atReviewers(ctx), ctx, false, 20);
     expect(top.length).toBeLessThanOrEqual(20);
     expect(top.join('\n')).toMatch(/↓ \d+ more/);
     const bottom = render(press(ctx, ['up']), ctx, 20);
     expect(bottom).toMatch(/↑ \d+ more/);
     expect(bottom).toMatch(/› □ vibe/);
+  });
+});
+
+describe('repos step', () => {
+  test('lists configured repos first, then the clones found, and preselects the configured ones with a clone', () => {
+    const ctx = ctxFor({
+      repos: [
+        { fullName: 'acme/lib', localPath: '/home/u/lib', trigger: 'github' },
+        { fullName: 'acme/gone', localPath: '/home/u/gone' },
+      ],
+    });
+    expect(ctx.repos.map((row) => [row.fullName, row.exists, !!row.entry])).toEqual([
+      ['acme/lib', true, true],
+      ['acme/gone', false, true],
+      ['acme/app', true, false],
+    ]);
+    const state = initialState(ctx);
+    // A configured repo stays selected even with no clone at its path, so the defaults never drop it.
+    expect(state.repos.map((row) => row.on)).toEqual([true, true, false]);
+    expect(nextRepos(state)).toEqual([
+      { fullName: 'acme/lib', localPath: '/home/u/lib', trigger: 'github' },
+      { fullName: 'acme/gone', localPath: '/home/u/gone' },
+    ]);
+    expect(hasChanges(state, ctx)).toBe(false);
+    const save = press(ctx, ['enter', ...walk(ctx)], state);
+    expect(render(save, ctx)).toContain('! acme/gone has no clone at /home/u/gone, so its reviews fail');
+    const text = render(state, ctx);
+    expect(text).toContain('● Repos ── ○ Reviewers ── ○ Models ── ○ Save');
+    expect(text).toContain('Which repos should review-relay watch?');
+    expect(text).toContain('Found 2 GitHub clones under ~.');
+    expect(text).toMatch(/› ■ acme\/lib\s+\/home\/u\/lib\s+github\n/);
+    expect(text).toMatch(/ {2}■ acme\/gone\s+\/home\/u\/gone\s+auto\s+no clone at this path\n/);
+    expect(text).toMatch(/ {2}□ acme\/app\s+\/home\/u\/app\s+auto\n/);
+    expect(text).toContain('other…');
+    expect(text).toContain('↑↓ move · space select · enter next · q quit');
+  });
+
+  test('with no file, preselects the clone setup was run from', () => {
+    const ctx = ctxFor(undefined);
+    const state = initialState(ctx);
+    expect(state.repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/app', true],
+      ['acme/lib', false],
+    ]);
+    expect(nextRepos(state)).toEqual([APP]);
+    expect(state.cursor).toBe(0);
+    const lib = ctxFor(undefined, undefined, { ...DISK, here: CLONES[1] });
+    expect(initialState(lib).repos.map((row) => row.on)).toEqual([false, true]);
+    expect(initialState(lib).cursor).toBe(1);
+    expect(initialState(ctxFor(undefined, undefined, { ...DISK, here: undefined })).repos[0]!.on).toBe(false);
+  });
+
+  test('lists the clone setup was run from even when the scan missed it, and preselects it', () => {
+    const tool = ctxFor(undefined, undefined, { ...DISK, here: CLONES[2] });
+    const state = initialState(tool);
+    expect(state.repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/app', false],
+      ['acme/lib', false],
+      ['acme/tool', true],
+    ]);
+    expect(state.cursor).toBe(2);
+    // With repos configured, the current clone is listed but the configured ones stay the selection.
+    const configured = ctxFor({}, undefined, { ...DISK, here: CLONES[2] });
+    expect(initialState(configured).repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/app', true],
+      ['acme/lib', false],
+      ['acme/tool', false],
+    ]);
+  });
+
+  test('a configured repo whose clone moved takes the path the clone was found at', () => {
+    const ctx = ctxFor({ repos: [{ fullName: 'acme/lib', localPath: '~/old-lib', trigger: 'github' }] });
+    expect(ctx.repos.map((row) => [row.fullName, row.localPath, row.exists])).toEqual([
+      ['acme/lib', '/home/u/lib', true],
+      ['acme/app', '/home/u/app', true],
+    ]);
+    const state = initialState(ctx);
+    expect(state.repos[0]!.on).toBe(true);
+    expect(nextRepos(state)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib', trigger: 'github' }]);
+    expect(hasChanges(state, ctx)).toBe(true);
+    expect(render(state, ctx)).toMatch(/› ■ acme\/lib\s+\/home\/u\/lib\s+github\s+moved\n/);
+    const save = press(ctx, ['enter', ...walk(ctx)], state);
+    expect(render(save, ctx)).toContain('repos      acme/lib  ~/old-lib → /home/u/lib · github\n');
+  });
+
+  test('leaves a stale repo alone when several clones of it were found, unless setup runs from one', () => {
+    const twin = { fullName: 'acme/lib', localPath: '/home/u/lib2' };
+    const disk: Disk = {
+      ...DISK,
+      found: [...DISK.found, twin],
+      at: (dir) => [...CLONES, twin].find((c) => c.localPath === dir),
+    };
+    const file = { repos: [{ fullName: 'acme/lib', localPath: '/home/u/old-lib' }] };
+    const ctx = ctxFor(file, undefined, disk);
+    expect(ctx.repos.map((row) => [row.fullName, row.localPath, row.exists, row.candidates])).toEqual([
+      ['acme/lib', '/home/u/old-lib', false, 2],
+      ['acme/app', '/home/u/app', true, undefined],
+    ]);
+    expect(initialState(ctx).repos.map((row) => row.on)).toEqual([true, false]);
+    expect(render(initialState(ctx), ctx)).toContain('no clone at this path; 2 found, type one under other');
+    // Typing one of them moves the row there.
+    const picked = press(ctx, ['up', 'enter', ...'/home/u/lib2', 'enter'], initialState(ctx));
+    expect(picked.repos[0]).toMatchObject({ localPath: '/home/u/lib2', exists: true, on: true, candidates: 2 });
+    expect(nextRepos(picked)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib2' }]);
+    // Running setup from one of the clones settles it.
+    const fromTwin = ctxFor(file, undefined, { ...disk, here: twin });
+    expect(fromTwin.repos[0]).toMatchObject({ localPath: '/home/u/lib2', exists: true });
+    expect(initialState(fromTwin).repos.map((row) => row.on)).toEqual([true, false]);
+  });
+
+  test('typing the path of a listed repo moves it there and selects it', () => {
+    const ctx = ctxFor({ repos: [{ fullName: 'acme/tool', localPath: '/home/u/stale', postToPr: false }] });
+    expect(ctx.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/home/u/stale', exists: false, on: false });
+    expect(initialState(ctx).repos.map((row) => row.on)).toEqual([true, false, false]);
+    const state = press(ctx, ['up', 'enter', ...'/opt/tool', 'enter'], initialState(ctx));
+    expect(state.typing).toBeUndefined();
+    expect(state.repos).toHaveLength(3);
+    expect(state.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/opt/tool', exists: true, on: true });
+    expect(nextRepos(state)).toEqual([{ fullName: 'acme/tool', localPath: '/opt/tool', postToPr: false }]);
+    // Typing the path it already has toggles it instead.
+    expect(press(ctx, ['enter', ...'/opt/tool', 'enter'], state).repos[0]!.on).toBe(false);
+  });
+
+  test('space toggles a repo, and saving keeps the configured entry as it was', () => {
+    const ctx = ctxFor({ repos: [{ fullName: 'acme/app', localPath: '/home/u/app', postToPr: false }] });
+    const both = press(ctx, ['down', 'space'], initialState(ctx));
+    expect(nextRepos(both)).toEqual([
+      { fullName: 'acme/app', localPath: '/home/u/app', postToPr: false },
+      { fullName: 'acme/lib', localPath: '/home/u/lib' },
+    ]);
+    expect(hasChanges(both, ctx)).toBe(true);
+    const none = press(ctx, ['space'], initialState(ctx));
+    expect(nextRepos(none)).toEqual([]);
+    expect(hasChanges(press(ctx, ['up'], both), ctx)).toBe(true);
+    expect(hasChanges(press(ctx, ['down', 'space'], none), ctx)).toBe(true);
+    expect(hasChanges(press(ctx, ['space'], none), ctx)).toBe(false);
+  });
+
+  test('will not leave the repos step with nothing selected', () => {
+    const ctx = ctxFor({});
+    const stuck = press(ctx, ['space', 'enter'], initialState(ctx));
+    expect(stuck.step).toBe(0);
+    expect(stuck.error).toBe('select at least one repo');
+    expect(press(ctx, ['space'], stuck).error).toBeUndefined();
+    expect(press(ctx, ['space', 'enter'], stuck).step).toBe(1);
+  });
+
+  test('other takes a path, adds the clone there selected, and refuses a folder with no clone', () => {
+    const ctx = ctxFor({});
+    const list = press(ctx, ['up'], initialState(ctx));
+    expect(render(list, ctx)).toMatch(/›\s+other…/);
+    expect(render(list, ctx)).toContain('enter type a path');
+    const typing = press(ctx, ['enter', '/', 'o', 'p', 't', '/', 'n', 'o', 'enter'], list);
+    expect(typing.typing).toBe('/opt/no');
+    expect(typing.error).toBe('no GitHub clone at /opt/no');
+    expect(render(typing, ctx)).toMatch(/›\s+\/opt\/no▏/);
+    expect(render(typing, ctx)).toContain("type a clone's path · enter add it · esc back to the list");
+    const fixed = press(ctx, ['backspace', 'backspace', 't', 'o', 'o', 'l'], typing);
+    expect(fixed.error).toBeUndefined();
+    const added = press(ctx, ['enter'], fixed);
+    expect(added.typing).toBeUndefined();
+    expect(added.repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/app', true],
+      ['acme/lib', false],
+      ['acme/tool', true],
+    ]);
+    expect(nextRepos(added)).toEqual([APP, { fullName: 'acme/tool', localPath: '/opt/tool' }]);
+    // A path to a repo already listed toggles that row instead of adding one.
+    expect(added.cursor).toBe(3);
+    expect(render(added, ctx)).toMatch(/›\s+other…/);
+    const again = press(ctx, ['enter', '/', 'h', 'o', 'm', 'e', '/', 'u', '/', 'l', 'i', 'b', 'enter'], added);
+    expect(again.repos.map((row) => row.on)).toEqual([true, true, true]);
+    expect(again.repos).toHaveLength(3);
+    expect(press(ctx, ['escape'], typing).typing).toBeUndefined();
+  });
+
+  test('save step lists the repos with new and removed ones marked', () => {
+    const ctx = ctxFor({ repos: [APP, { fullName: 'acme/old', localPath: '/home/u/old' }] });
+    const state = press(ctx, ['down', 'space', 'down', 'space', 'enter', ...walk(ctx)], initialState(ctx));
+    const text = render(state, ctx);
+    expect(text).toContain('Save these changes?');
+    expect(text).toContain('repos      acme/app  /home/u/app · auto\n');
+    expect(text).toContain('           acme/lib  /home/u/lib · auto  new\n');
+    expect(text).toContain('           acme/old  removed\n');
+    expect(text).toContain('reviewers  codex, claude\n');
+    expect(nextRepos(state)).toEqual([APP, { fullName: 'acme/lib', localPath: '/home/u/lib' }]);
   });
 });
 
@@ -140,7 +353,7 @@ describe('reduce', () => {
   test('will not leave the reviewers step with nothing selected', () => {
     const ctx = ctxFor({});
     const stuck = press(ctx, ['space', 'down', 'space', 'enter']);
-    expect(stuck.step).toBe(0);
+    expect(stuck.step).toBe(1);
     expect(stuck.error).toBe('select at least one reviewer');
     expect(press(ctx, ['space'], stuck).error).toBeUndefined();
   });
@@ -148,7 +361,7 @@ describe('reduce', () => {
   test('enter walks a model and an effort step per selected reviewer, left goes back, and enter on save saves', () => {
     const ctx = ctxFor({});
     const codexModel = press(ctx, ['enter']);
-    expect(render(codexModel, ctx)).toContain('✔ Reviewers ── ● Models 1/4 ── ○ Save');
+    expect(render(codexModel, ctx)).toContain('✔ Repos ── ✔ Reviewers ── ● Models 1/4 ── ○ Save');
     expect(render(codexModel, ctx)).toContain('Which model should codex (Codex CLI) use?');
     expect(render(press(ctx, ['enter'], codexModel), ctx)).toContain(
       'How much reasoning effort should codex (Codex CLI) use?',
@@ -157,9 +370,9 @@ describe('reduce', () => {
     expect(render(claudeEffort, ctx)).toContain('● Models 4/4');
     expect(render(claudeEffort, ctx)).toContain('How much reasoning effort should claude (Claude Code) use?');
     const onSave = press(ctx, ['enter'], claudeEffort);
-    expect(onSave.step).toBe(5);
-    expect(render(onSave, ctx)).toContain('✔ Reviewers ── ✔ Models ── ● Save');
-    expect(press(ctx, ['left'], onSave).step).toBe(4);
+    expect(onSave.step).toBe(6);
+    expect(render(onSave, ctx)).toContain('✔ Repos ── ✔ Reviewers ── ✔ Models ── ● Save');
+    expect(press(ctx, ['left'], onSave).step).toBe(5);
     expect(press(ctx, ['right'], onSave)).toEqual(onSave);
     expect(press(ctx, ['enter'], onSave).done).toBe('save');
   });
@@ -170,13 +383,14 @@ describe('reduce', () => {
     expect(render(model, ctx)).toContain('● Models 1/1');
     expect(render(model, ctx)).toContain('Which model should gemini (Gemini CLI) use?');
     const save = press(ctx, ['enter'], model);
-    expect(save.step).toBe(2);
+    expect(save.step).toBe(3);
     expect(render(save, ctx)).toContain('● Save');
   });
 
   test('q, escape, and ctrl-c cancel from any step', () => {
     const ctx = ctxFor({});
     for (const key of ['q', 'escape', 'ctrl-c']) {
+      expect(press(ctx, [key], initialState(ctx)).done).toBe('cancel');
       expect(press(ctx, [key]).done).toBe('cancel');
       expect(press(ctx, ['enter', key]).done).toBe('cancel');
       expect(press(ctx, [...walk(ctx), key]).done).toBe('cancel');
@@ -308,7 +522,7 @@ describe('renderSetup', () => {
     const ctx = ctxFor(undefined, ['claude']);
     const text = render(press(ctx, ['space', 'down']), ctx);
     expect(text).toContain('/tmp/relay/config.json (new file)');
-    expect(text).toContain('● Reviewers ── ○ Models ── ○ Save');
+    expect(text).toContain('✔ Repos ── ● Reviewers ── ○ Models ── ○ Save');
     expect(text).toMatch(/ {2}■ codex\s+Codex CLI\s+gpt-6-astra · effort high\s+not found on PATH/);
     expect(text).toMatch(/› ■ claude\s+Claude Code\s+claude-opus-5-5 · effort max\n/);
   });
@@ -322,35 +536,41 @@ describe('renderSetup', () => {
   test('warns when no supported CLI is installed', () => {
     const ctx = ctxFor(undefined, []);
     expect(initialState(ctx).selected).toEqual([]);
-    expect(render(initialState(ctx), ctx)).toContain('No supported agent CLI is on PATH');
+    expect(render(atReviewers(ctx), ctx)).toContain('No supported agent CLI is on PATH');
   });
 
   test('save step shows before and after for an existing file', () => {
     const ctx = ctxFor({ reviewers: ['codex', 'claude'] });
     const text = render(press(ctx, ['space', 'enter', 'enter', 'enter']), ctx);
-    expect(text).toContain('✔ Reviewers ── ✔ Models ── ● Save');
+    expect(text).toContain('✔ Repos ── ✔ Reviewers ── ✔ Models ── ● Save');
     expect(text).toContain('Save these changes?');
+    expect(text).toContain('repos      acme/app  /home/u/app · auto\n');
     expect(text).toContain('reviewers  codex, claude → claude\n');
     expect(text).toContain('claude     model claude-opus-5-5 · effort max\n');
-    expect(text).toContain('enter save · ← back · q quit');
+    expect(text).toContain('enter save · ↑↓ scroll · ← back · q quit');
   });
 
   test('save step scrolls its settings rows when the terminal is short', () => {
     // Every harness selected, two of them not on PATH: 13 settings rows plus the warnings outgrow 24 lines.
     const everything = Object.keys(HARNESSES);
     const ctx = ctxFor({ reviewers: everything }, everything.slice(0, -2));
-    const all = { ...initialState(ctx), selected: ctx.options };
+    const all = { ...atReviewers(ctx), selected: ctx.options };
     const save = press(ctx, ['enter', ...ctx.options.flatMap((name) => modelKeys(name).map(() => 'enter'))], all);
     const top = renderSetup(save, ctx, false, 24);
     expect(top.length).toBeLessThanOrEqual(24);
     expect(top.join('\n')).toContain('Nothing changed.');
-    expect(top.join('\n')).toContain('! vibe is not on PATH');
     expect(top.join('\n')).toMatch(/codex\s+model gpt-6-astra/);
     expect(top.join('\n')).toMatch(/↓ \d+ more/);
     expect(top.join('\n')).toContain('enter exit · ↑↓ scroll · ← back · q quit');
+    // The warnings lead the rows, so they show before anything scrolls, and scroll with them, so they never push the
+    // key help off a short terminal.
+    expect(top.join('\n')).toContain('! qwen is not on PATH');
+    expect(top.join('\n')).toContain('! vibe is not on PATH');
     const bottom = render(press(ctx, ['up'], save), ctx, 24);
     expect(bottom).toMatch(/↑ \d+ more/);
     expect(bottom).toMatch(/vibe\s+model vibe's default/);
+    expect(bottom).not.toContain('! vibe is not on PATH');
+    expect(bottom).toContain('enter exit · ↑↓ scroll · ← back · q quit');
   });
 
   test('save step says when nothing changed', () => {
