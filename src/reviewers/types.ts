@@ -33,6 +33,11 @@ export interface Harness {
   bins: string[];
   /** Used when the config sets none; unset falls back to the CLI's own default. */
   defaults: { model?: string; effort?: string };
+  /**
+   * Values setup offers for each `models` key the CLI takes; any other value can still be typed. No `effort` key
+   * means the CLI has no per-run effort setting.
+   */
+  choices: { model: string[]; effort?: string[] };
   /** `native`: the CLI enforces the verdict schema. `prompt`: the schema goes in the prompt and the reply is parsed. */
   schema: 'native' | 'prompt';
   /** `git`: the CLI can allow read-only git commands alone. `none`: no shell, so the diff goes in the prompt. */

@@ -53,6 +53,7 @@ export const opencode: Harness = {
   product: 'opencode',
   bins: ['opencode'],
   defaults: {},
+  choices: { model: [], effort: [] },
   schema: 'prompt',
   // Bash rules are patterns, and an allowed `git diff *` also passes `git diff --output=<file>`, so no shell.
   shell: 'none',
@@ -81,6 +82,7 @@ export const kilo: Harness = {
   product: 'Kilo Code CLI',
   bins: ['kilo', 'kilocode'],
   defaults: {},
+  choices: { model: [], effort: [] },
   schema: 'prompt',
   shell: 'none',
   projectFiles: ['.kilo', '.kilocode', 'kilo.json', 'kilo.jsonc', 'opencode.json', 'opencode.jsonc'],

@@ -21,6 +21,7 @@ export const vibe: Harness = {
   bins: ['vibe'],
   // No model flag: the model is a config alias picked through VIBE_ACTIVE_MODEL. No effort setting either.
   defaults: {},
+  choices: { model: [] },
   schema: 'prompt',
   // The plan agent runs git diff and git log on its own and refuses flags that write or run programs.
   shell: 'git',

@@ -16,6 +16,7 @@ export const grok: Harness = {
   product: 'Grok Build',
   bins: ['grok'],
   defaults: {},
+  choices: { model: [], effort: [] },
   schema: 'native',
   // Allow rules match whole command strings and a rejected call ends the turn, so no shell.
   shell: 'none',

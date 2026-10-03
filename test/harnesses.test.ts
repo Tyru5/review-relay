@@ -360,3 +360,16 @@ test('findBin takes the first executable on PATH from the harness list', () => {
   expect(findBin('claude', (bin) => (bin === 'claude' ? '/opt/bin/claude' : null))).toBe('/opt/bin/claude');
   expect(findBin('claude', () => null)).toBeNull();
 });
+
+describe('choices', () => {
+  test('every harness lists its defaults among its choices and passes an effort exactly when it offers one', async () => {
+    for (const name of REVIEWER_NAMES) {
+      const { defaults, choices } = HARNESSES[name];
+      if (defaults.model) expect(choices.model).toContain(defaults.model);
+      if (defaults.effort) expect(choices.effort).toContain(defaults.effort);
+      const cli = fakeCli(envelope(JSON.stringify(verdict)), { tools: '  ✓ view   enabled' });
+      await run(name, cli, { effort: 'effort-under-test' });
+      expect(cli.argv().some((arg) => arg.includes('effort-under-test'))).toBe(choices.effort !== undefined);
+    }
+  });
+});
