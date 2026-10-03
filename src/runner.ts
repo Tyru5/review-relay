@@ -4,21 +4,25 @@ import type { Config, RepoConfig, ReviewerEntry } from './config.ts';
 import { diffStats, promptDiff, type DiffStats } from './diffstats.ts';
 import { upsertComment } from './github.ts';
 import { reviewPrompt } from './prompt.ts';
-import { commentBody, writeReport } from './report.ts';
+import { commentBody, routeLine, writeReport } from './report.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import type { Harness, ReviewerInput } from './reviewers/types.ts';
+import { pickRoute, type RouteChoice } from './routes.ts';
 import { jobKey, type HarnessName, type ResolvedJob, type ReviewerId, type ReviewerResult } from './types.ts';
 import { finalScore, VERDICT_SCHEMA } from './verdict.ts';
-import { baseRemoteRef, withWorktree } from './worktree.ts';
+import { baseRemoteRef, fetchPr, withCheckout } from './worktree.ts';
 
 /** What a review touches outside its own logic: the CLIs, git, and GitHub. Tests stand in for them. */
 export interface RunnerDeps {
   harnesses: Record<HarnessName, Harness>;
   /** The harness's executable on PATH, or null when it isn't installed. */
   findBin: (harness: HarnessName) => string | null;
-  /** Runs `fn` in a checkout of the PR head, as `withWorktree` does. */
+  /** Fetches the base branch and the PR head into the local clone. */
+  fetch: (repo: RepoConfig, job: ResolvedJob) => Promise<void>;
+  /** The PR's diff stats, read in the clone before any checkout exists. */
+  diffStats: (repo: RepoConfig, job: ResolvedJob) => Promise<DiffStats>;
+  /** Runs `fn` in a checkout of the fetched PR head, as `withCheckout` does. */
   checkout: <T>(repo: RepoConfig, job: ResolvedJob, dataDir: string, fn: (dir: string) => Promise<T>) => Promise<T>;
-  diffStats: (dir: string, baseRef: string) => Promise<DiffStats>;
   promptDiff: (dir: string, baseRef: string) => Promise<string>;
   /** Posts or updates the PR comment. */
   post: (repo: string, pr: number, body: string) => Promise<void>;
@@ -27,8 +31,9 @@ export interface RunnerDeps {
 export const RUNNER_DEPS: RunnerDeps = {
   harnesses: HARNESSES,
   findBin: (harness) => findBin(harness),
-  checkout: withWorktree,
-  diffStats,
+  fetch: fetchPr,
+  diffStats: (repo, job) => diffStats(repo.localPath, baseRemoteRef(job), job.headSha),
+  checkout: withCheckout,
   promptDiff,
   post: upsertComment,
 };
@@ -90,24 +95,36 @@ export async function removeProjectFiles(
   await Promise.all([...paths].map((path) => rm(join(dir, path), { recursive: true, force: true })));
 }
 
-/** Runs all configured reviewers in parallel on a fresh worktree; one failing never drops the others. */
+/** What a review did: ran and wrote a report, or stopped at a skip route. `route` is unset when no route matched. */
+export interface ReviewOutcome {
+  reportDir?: string;
+  route?: RouteChoice;
+  skipped?: boolean;
+}
+
+/**
+ * Picks the PR's route from its diff, read in the clone, then runs that route's reviewers in parallel on a fresh
+ * worktree; one failing never drops the others. A skip route stops before any worktree exists.
+ */
 export async function runReview(
   job: ResolvedJob,
   repo: RepoConfig,
   config: Config,
   deps: RunnerDeps = RUNNER_DEPS,
-): Promise<{ reportDir: string }> {
+): Promise<ReviewOutcome> {
+  await deps.fetch(repo, job);
+  const stats = await deps.diffStats(repo, job);
+  const pick = pickRoute(config, job, stats);
+  if (pick.skip) return { route: pick.route, skipped: true };
+
   const scratchRoot = join(config.dataDir, 'tmp', jobKey(job).replace(/[^\w.-]+/g, '_'));
   const schemaPath = join(config.dataDir, 'verdict-schema.json');
   await Bun.write(schemaPath, JSON.stringify(VERDICT_SCHEMA, null, 2));
-  const reviewers = config.reviewers.map((name) => ({ name, entry: config.models[name]! }));
+  const reviewers = pick.reviewers.map((name) => ({ name, entry: config.models[name]! }));
   const harnessOf = (entry: ReviewerEntry) => deps.harnesses[entry.harness];
 
-  let stats: DiffStats | undefined;
   const results = await deps
     .checkout(repo, job, config.dataDir, async (dir) => {
-      const diff = await deps.diffStats(dir, baseRemoteRef(job));
-      stats = diff;
       await removeProjectFiles(
         dir,
         reviewers.map(({ entry }) => entry.harness),
@@ -125,13 +142,13 @@ export async function runReview(
             // An uninstalled harness still runs by name, so its failure reads "executable not found".
             bin: deps.findBin(entry.harness) ?? harness.bins[0]!,
             dir,
-            prompt: reviewPrompt(job, diff, {
+            prompt: reviewPrompt(job, stats, {
               schema: harness.schema === 'prompt',
               diff: harness.shell === 'none' ? inlineDiff : undefined,
             }),
             schemaPath,
             scratchDir,
-            timeoutMs: config.timeoutMs,
+            timeoutMs: pick.timeoutMs,
             model: entry.model,
             effort: entry.effort,
             provider: entry.provider,
@@ -141,11 +158,13 @@ export async function runReview(
     })
     .finally(() => rm(scratchRoot, { recursive: true, force: true }));
 
-  const body = commentBody(job, results, stats!);
-  const reportDir = await writeReport(config.dataDir, job, results, body);
+  // The routing line shows only for configs that route, so a config without routes keeps its comment as it was.
+  const routing = config.routes.length > 0 ? routeLine(pick.route, results) : undefined;
+  const body = commentBody(job, results, stats, routing);
+  const reportDir = await writeReport(config.dataDir, job, results, body, pick.route);
   if (results.every((r) => !r.ok)) {
     throw new Error(`all reviewers failed (${results.map((r) => `${r.name}: ${r.error}`).join('; ')})`);
   }
   if (repo.postToPr) await deps.post(job.repo, job.pr, body);
-  return { reportDir };
+  return { reportDir, route: pick.route };
 }

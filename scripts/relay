@@ -182,6 +182,15 @@ cmd_info() {
     printf '      %spath%s    %s\n' "$D" "$N" "${path/#$HOME/\~}"
   done
 
+  if [[ "$(jq '.routes | length' <<<"$json")" -gt 0 ]]; then
+    echo; echo "${B}Routes${N} ${D}(first match wins; no match runs the reviewers above)${N}"
+    jq -r '.routes[] | [.name, (if .skip then "skip" else (.reviewers | join(", ")) end),
+      (.when | to_entries | map("\(.key) \(.value | if type == "array" then join(",") else tostring end)") | join("  "))] | @tsv' <<<"$json" |
+    while IFS=$'\t' read -r name runs when; do
+      printf '  %s●%s %-10s %-24s %s%s%s\n' "$G" "$N" "$name" "$runs" "$D" "$when" "$N"
+    done
+  fi
+
   if [[ -n "$warnings" ]]; then
     echo; echo "${B}Warnings${N}"
     while IFS= read -r line; do printf '  %s!%s %s\n' "$Y" "$N" "${line#warning: }"; done <<<"$warnings"

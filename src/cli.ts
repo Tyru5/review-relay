@@ -4,21 +4,29 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
 import { defaultConfigPath, findRepo, loadConfig, type Config } from './config.ts';
+import { diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
 import { resolveJob } from './github.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
+import { explainRoutes, SOURCES } from './routes.ts';
 import { runReview } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
 import { renderStatus } from './status.ts';
+import type { JobSource } from './types.ts';
+import { baseRemoteRef, fetchPr } from './worktree.ts';
 
 const USAGE = `review-relay <command> [options]
 
 Commands:
   start                         Watch configured repos and review PRs as triggers arrive
   run --repo owner/name --pr N  Review one PR now (ignores dedupe)
+      --route <name>            Use this route instead of the one the PR matches
+  route --repo owner/name --pr N
+                                Show which route a PR matches and why, without reviewing it
+      --source <source>         Trigger to check as: github (default), greptile, mention, manual
   replay <events.jsonl>         Feed recorded webhook deliveries through the trigger logic
       --dry-run                 Log what would run instead of running reviewers
       --grace <ms>              Override graceMs for the replay
@@ -49,8 +57,10 @@ async function start(config: Config) {
   const scheduler = makeScheduler(config, state);
   const secret = randomBytes(24).toString('hex');
   const server = startServer(config, scheduler, secret);
-  log(`listening on http://127.0.0.1:${server.port}/hook (reviewers: ${config.reviewers.join(', ')})`);
-  for (const [harness, ids] of Map.groupBy(config.reviewers, (id) => config.models[id]!.harness)) {
+  const routes = config.routes.length > 0 ? `; routes: ${config.routes.map((route) => route.name).join(', ')}` : '';
+  log(`listening on http://127.0.0.1:${server.port}/hook (reviewers: ${config.reviewers.join(', ')}${routes})`);
+  const used = new Set([...config.reviewers, ...config.routes.flatMap((route) => route.reviewers ?? [])]);
+  for (const [harness, ids] of Map.groupBy(used, (id) => config.models[id]!.harness)) {
     if (findBin(harness)) continue;
     log(`warning: ${HARNESSES[harness].bins.join(' or ')} not on PATH, so ${ids.join(' and ')} reviews will fail`);
   }
@@ -76,13 +86,39 @@ async function start(config: Config) {
   });
 }
 
-async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined) {
+async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined, route?: string) {
   const repo = findRepo(config, repoName);
   if (!repo || !pr) throw new Error('run needs --repo <configured owner/name> and --pr <number>');
+  if (route !== undefined) {
+    const named = config.routes.find((r) => r.name === route);
+    const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
+    if (!named) throw new Error(`no route named "${route}" (routes: ${names})`);
+    if (named.skip) throw new Error(`route "${route}" skips the review, so run can't use it`);
+  }
   const state = new StateStore(join(config.dataDir, 'state.json'));
   const scheduler = makeScheduler(config, state);
-  scheduler.runNow(repo, { repo: repo.fullName, pr: Number(pr), source: 'manual', reason: 'manual run' });
+  scheduler.runNow(repo, {
+    repo: repo.fullName,
+    pr: Number(pr),
+    source: 'manual',
+    reason: 'manual run',
+    ...(route ? { route } : {}),
+  });
   await scheduler.idle();
+}
+
+/** Fetches the PR and prints how every route judges it, without running a reviewer or touching job state. */
+async function explain(config: Config, repoName: string | undefined, pr: string | undefined, source = 'github') {
+  const repo = findRepo(config, repoName);
+  if (!repo || !pr) throw new Error('route needs --repo <configured owner/name> and --pr <number>');
+  if (!SOURCES.includes(source as JobSource)) throw new Error(`--source must be one of ${SOURCES.join(', ')}`);
+  const job = await resolveJob(
+    { repo: repo.fullName, pr: Number(pr), source: source as JobSource, reason: 'route' },
+    { open: false },
+  );
+  await fetchPr(repo, job);
+  const stats = await diffStats(repo.localPath, baseRemoteRef(job), job.headSha);
+  for (const line of explainRoutes(config, job, stats)) console.log(line);
 }
 
 async function replay(config: Config, file: string | undefined, dryRun: boolean, grace: string | undefined) {
@@ -134,6 +170,8 @@ async function main() {
       'dry-run': { type: 'boolean', default: false },
       grace: { type: 'string' },
       limit: { type: 'string' },
+      route: { type: 'string' },
+      source: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
       version: { type: 'boolean', short: 'v', default: false },
     },
@@ -150,7 +188,9 @@ async function main() {
     case 'start':
       return start(config);
     case 'run':
-      return runOnce(config, values.repo, values.pr);
+      return runOnce(config, values.repo, values.pr, values.route);
+    case 'route':
+      return explain(config, values.repo, values.pr, values.source);
     case 'replay':
       return replay(config, arg, values['dry-run'], values.grace);
     case 'status':
