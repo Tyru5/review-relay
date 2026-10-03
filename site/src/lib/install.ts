@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { DOWNLOADS } from './downloads';
+import { INSTALL_PS1, INSTALL_SH } from './downloads';
 
 export const PLATFORMS = [
-  { id: 'unix', label: 'macOS / Linux', prompt: '$', command: `curl -fsSL ${DOWNLOADS}/install.sh | bash` },
-  { id: 'windows', label: 'Windows', prompt: '>', command: `irm ${DOWNLOADS}/install.ps1 | iex` },
+  { id: 'unix', label: 'macOS / Linux', prompt: '$', command: `curl -fsSL ${INSTALL_SH} | bash` },
+  { id: 'windows', label: 'Windows', prompt: '>', command: `irm ${INSTALL_PS1} | iex` },
 ] as const;
 
 export type PlatformId = (typeof PLATFORMS)[number]['id'];

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Install the review-relay binary on macOS / Linux.
-#   curl -fsSL https://downloads.reviewrelay.dev/install.sh | bash
-#   curl -fsSL https://downloads.reviewrelay.dev/install.sh | bash -s -- --version 0.2.0
+# Install the review-relay binary on macOS / Linux from the GitHub Releases of Tyru5/review-relay.
+#   curl -fsSL https://github.com/Tyru5/review-relay/releases/latest/download/install.sh | bash
+#   curl -fsSL https://github.com/Tyru5/review-relay/releases/latest/download/install.sh | bash -s -- --version 0.2.0
 set -euo pipefail
 
-BASE_URL="${REVIEW_RELAY_INSTALL_URL:-https://downloads.reviewrelay.dev}"
+REPO="${REVIEW_RELAY_INSTALL_REPO:-Tyru5/review-relay}"
+BASE_URL="https://github.com/$REPO/releases"
 VERSION="${REVIEW_RELAY_INSTALL_VERSION:-latest}"
 BIN_DIR="${REVIEW_RELAY_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 CONFIG="${REVIEW_RELAY_CONFIG:-$HOME/.review-relay/config.json}"
@@ -23,13 +24,13 @@ has()  { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
   cat <<USAGE
-${B}usage:${N} curl -fsSL $BASE_URL/install.sh | bash [-s -- options]
+${B}usage:${N} curl -fsSL $BASE_URL/latest/download/install.sh | bash [-s -- options]
 
   --version <x.y.z>   version to install (default: latest)
   --bin-dir <path>    install location (default: ~/.local/bin)
   -h, --help          show this help
 
-${D}env: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,URL}, REVIEW_RELAY_CONFIG${N}
+${D}env: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO}, REVIEW_RELAY_CONFIG${N}
 USAGE
 }
 
@@ -51,7 +52,7 @@ detect_target() {
   case "$(uname -s)" in
     Darwin) os=darwin ;;
     Linux)  os=linux ;;
-    MINGW*|MSYS*|CYGWIN*) fail "Windows shell detected; in PowerShell run: irm $BASE_URL/install.ps1 | iex" ;;
+    MINGW*|MSYS*|CYGWIN*) fail "Windows shell detected; in PowerShell run: irm $BASE_URL/latest/download/install.ps1 | iex" ;;
     *)      fail "unsupported OS: $(uname -s) (macOS, Linux, Windows only)" ;;
   esac
   case "$(uname -m)" in
@@ -77,6 +78,21 @@ fetch() {
   else
     fail "curl or wget is required"
   fi
+}
+
+# GitHub answers /releases/latest with a redirect to /releases/tag/<tag>; the tag is the version.
+latest_version() {
+  local final
+  if has curl; then
+    final="$(curl -fsSLI --retry 3 -o /dev/null -w '%{url_effective}' "$BASE_URL/latest" || true)"
+  elif has wget; then
+    # wget exits non-zero when it stops at the redirect; the Location header is all that matters.
+    final="$({ wget -q -S --spider --max-redirect=0 "$BASE_URL/latest" 2>&1 || true; } | awk '/^ *Location:/ { print $2 }' | tail -n1)"
+  else
+    fail "curl or wget is required"
+  fi
+  [[ $final == */releases/tag/* ]] || fail "could not find the latest release at $BASE_URL"
+  echo "${final##*/releases/tag/}"
 }
 
 sha256() {
@@ -112,12 +128,11 @@ STAGED="$BIN_DIR/.review-relay.download"
 trap 'rm -rf "$TMP" "$STAGED"' EXIT
 
 if [[ $VERSION == latest ]]; then
-  fetch "$BASE_URL/latest.txt" "$TMP/latest.txt" || fail "could not reach $BASE_URL"
-  VERSION="$(tr -d '[:space:]' <"$TMP/latest.txt")"
+  VERSION="$(latest_version)"
 fi
 VERSION="${VERSION#v}"
 [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || fail "invalid version: $VERSION"
-URL="$BASE_URL/v$VERSION"
+URL="$BASE_URL/download/v$VERSION"
 
 info "downloading review-relay $VERSION ($TARGET)"
 mkdir -p "$BIN_DIR"
