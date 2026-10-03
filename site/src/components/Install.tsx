@@ -1,44 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { DOWNLOADS } from '../lib/downloads';
-
-const PLATFORMS = [
-  { id: 'unix', label: 'macOS / Linux', prompt: '$', command: `curl -fsSL ${DOWNLOADS}/install.sh | bash` },
-  { id: 'windows', label: 'Windows', prompt: '>', command: `irm ${DOWNLOADS}/install.ps1 | iex` },
-] as const;
-
-type PlatformId = (typeof PLATFORMS)[number]['id'];
-type CopyState = 'idle' | 'copied' | 'selected';
-
-const COPY_LABEL: Record<CopyState, string> = { idle: 'Copy', copied: 'Copied', selected: 'Selected' };
+import { COPY_LABEL, PLATFORMS, useInstallCommand } from '../lib/install';
 
 export function Install() {
-  const [platform, setPlatform] = useState<PlatformId>('unix');
-  const [copy, setCopy] = useState<CopyState>('idle');
-  const commandRef = useRef<HTMLSpanElement>(null);
-  const { command, prompt } = PLATFORMS.find((p) => p.id === platform)!;
-
-  // Detected after hydration so the server and first client render agree.
-  useEffect(() => {
-    if (/Windows/i.test(navigator.userAgent)) setPlatform('windows');
-  }, []);
-
-  useEffect(() => {
-    if (copy === 'idle') return;
-    const timer = setTimeout(() => setCopy('idle'), 2000);
-    return () => clearTimeout(timer);
-  }, [copy]);
-
-  const copyCommand = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopy('copied');
-    } catch {
-      // Clipboard access can be blocked; select the command so a keyboard copy still works.
-      const node = commandRef.current;
-      if (node) window.getSelection()?.selectAllChildren(node);
-      setCopy('selected');
-    }
-  };
+  const { platform, setPlatform, copy, copyCommand, commandRef, command, prompt } = useInstallCommand();
 
   return (
     <div className="rounded-xl border border-line bg-surface">
@@ -51,10 +14,7 @@ export function Install() {
             id={`tab-${p.id}`}
             aria-selected={platform === p.id}
             aria-controls="install-command"
-            onClick={() => {
-              setPlatform(p.id);
-              setCopy('idle');
-            }}
+            onClick={() => setPlatform(p.id)}
             className="rounded-md px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:text-ink aria-selected:bg-raised aria-selected:text-ink"
           >
             {p.label}
