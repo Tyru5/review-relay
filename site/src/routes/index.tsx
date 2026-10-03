@@ -5,7 +5,7 @@ import { JudgesDesk, ResultBoard } from '../components/JudgesPanel';
 import { Logo } from '../components/Logo';
 import { CheckIcon, LowerThird } from '../components/LowerThird';
 import { Scoresheet } from '../components/Scoresheet';
-import { DOWNLOADS, getLatestVersion } from '../lib/downloads';
+import { checksumsUrl, getLatestVersion, INSTALL_PS1, INSTALL_SH, REPO } from '../lib/downloads';
 
 export const Route = createFileRoute('/')({
   loader: () => getLatestVersion(),
@@ -57,7 +57,6 @@ const AGENTS: { name: string; product: string }[] = [
 ];
 
 const CONTAINER = 'mx-auto w-full max-w-[84rem] px-5 sm:px-8';
-const REPO = 'https://github.com/Tyru5/review-relay';
 
 function Home() {
   const version = Route.useLoaderData();
@@ -227,9 +226,9 @@ function Home() {
               <GitHubMark className="size-5" />
               <span className="font-bold">GitHub</span>
             </a>
-            <FooterLink href={`${DOWNLOADS}/install.sh`}>install.sh</FooterLink>
-            <FooterLink href={`${DOWNLOADS}/install.ps1`}>install.ps1</FooterLink>
-            {version && <FooterLink href={`${DOWNLOADS}/v${version}/SHA256SUMS`}>Checksums for v{version}</FooterLink>}
+            <FooterLink href={INSTALL_SH}>install.sh</FooterLink>
+            <FooterLink href={INSTALL_PS1}>install.ps1</FooterLink>
+            {version && <FooterLink href={checksumsUrl(version)}>Checksums for v{version}</FooterLink>}
           </nav>
         </div>
       </footer>

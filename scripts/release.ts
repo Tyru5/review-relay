@@ -1,34 +1,41 @@
 #!/usr/bin/env bun
 /**
- * Builds standalone review-relay binaries and publishes them to the R2 bucket served at
- * https://downloads.reviewrelay.dev. `dist/` is staged with the bucket's layout:
+ * Builds standalone review-relay binaries and publishes them as a GitHub Release. `dist/v<version>/`
+ * holds exactly the release assets:
  *
- *   v<version>/review-relay-<os>-<arch>[.exe]   immutable binaries
- *   v<version>/SHA256SUMS                       checked by the installers
- *   v<version>/config.example.json              seeded as ~/.review-relay/config.json
- *   install.sh, install.ps1                     installers for the latest release
- *   latest.txt                                  latest version, uploaded last
+ *   review-relay-<os>-<arch>[.exe]   binaries
+ *   SHA256SUMS                       checked by the installers
+ *   config.example.json              seeded as ~/.review-relay/config.json
+ *   install.sh, install.ps1          installers, fetched from releases/latest/download/
  *
  * Usage: bun scripts/release.ts [--skip-upload]
- * Uploads use wrangler: OAuth login locally, CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID in CI.
+ * Uploads use `gh`: `gh auth login` locally, the workflow's GITHUB_TOKEN in CI. The `v<version>` tag
+ * must already be pushed; rerunning uploads over an existing release's assets.
  */
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
-import { execOrThrow } from '../src/exec.ts';
+import { exec, execOrThrow } from '../src/exec.ts';
 
 export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'windows-x64'] as const;
 export type Target = (typeof TARGETS)[number];
 
-const BUCKET = process.env.R2_BUCKET ?? 'review-relay-downloads';
+export const REPO = process.env.GITHUB_REPOSITORY ?? 'Tyru5/review-relay';
 const ROOT = join(import.meta.dir, '..');
 const DIST = join(ROOT, 'dist');
-const IMMUTABLE = 'public, max-age=31536000, immutable';
-const REVALIDATE = 'no-cache';
 
 export const assetName = (target: Target) => `review-relay-${target}${target.startsWith('windows') ? '.exe' : ''}`;
+
+/** Every file attached to the release, in upload order. */
+export const releaseAssets = (): string[] => [
+  ...TARGETS.map(assetName),
+  'SHA256SUMS',
+  'config.example.json',
+  'install.sh',
+  'install.ps1',
+];
 
 /** `sha256sum`-compatible lines, so `sha256sum -c SHA256SUMS` works on a download directory. */
 export function sha256sums(files: Record<string, Uint8Array>): string {
@@ -37,28 +44,8 @@ export function sha256sums(files: Record<string, Uint8Array>): string {
     .join('');
 }
 
-export interface Upload {
-  key: string;
-  contentType: string;
-  cacheControl: string;
-}
-
-/** Versioned objects first, then the installers, then the `latest.txt` pointer that makes them live. */
-export function uploadPlan(ver: string): Upload[] {
-  const dir = `v${ver}`;
-  return [
-    ...TARGETS.map((t) => ({
-      key: `${dir}/${assetName(t)}`,
-      contentType: 'application/octet-stream',
-      cacheControl: IMMUTABLE,
-    })),
-    { key: `${dir}/config.example.json`, contentType: 'application/json', cacheControl: IMMUTABLE },
-    { key: `${dir}/SHA256SUMS`, contentType: 'text/plain; charset=utf-8', cacheControl: IMMUTABLE },
-    { key: 'install.sh', contentType: 'text/plain; charset=utf-8', cacheControl: REVALIDATE },
-    { key: 'install.ps1', contentType: 'text/plain; charset=utf-8', cacheControl: REVALIDATE },
-    { key: 'latest.txt', contentType: 'text/plain; charset=utf-8', cacheControl: REVALIDATE },
-  ];
-}
+/** A `-rc.1` style suffix marks a pre-release, so `releases/latest` keeps pointing at the last stable one. */
+export const isPrerelease = (ver: string) => ver.includes('-');
 
 function hostTarget(): Target | undefined {
   const os = { linux: 'linux', darwin: 'darwin', win32: 'windows' }[process.platform as string];
@@ -91,30 +78,35 @@ async function build() {
 
   writeFileSync(join(dir, 'SHA256SUMS'), sha256sums(binaries));
   copyFileSync(join(ROOT, 'config.example.json'), join(dir, 'config.example.json'));
-  copyFileSync(join(ROOT, 'scripts/install.sh'), join(DIST, 'install.sh'));
-  copyFileSync(join(ROOT, 'scripts/install.ps1'), join(DIST, 'install.ps1'));
-  writeFileSync(join(DIST, 'latest.txt'), `${version}\n`);
+  copyFileSync(join(ROOT, 'scripts/install.sh'), join(dir, 'install.sh'));
+  copyFileSync(join(ROOT, 'scripts/install.ps1'), join(dir, 'install.ps1'));
+  return dir;
 }
 
-async function upload() {
-  for (const { key, contentType, cacheControl } of uploadPlan(version)) {
-    console.log(`uploading ${BUCKET}/${key}`);
-    await execOrThrow([
-      'bunx',
-      'wrangler@4',
-      'r2',
-      'object',
-      'put',
-      `${BUCKET}/${key}`,
-      '--remote',
-      '--file',
-      join(DIST, key),
-      '--content-type',
-      contentType,
-      '--cache-control',
-      cacheControl,
-    ]);
+async function publish(dir: string) {
+  const tag = `v${version}`;
+  const files = releaseAssets().map((name) => join(dir, name));
+  const exists = (await exec(['gh', 'release', 'view', tag, '--repo', REPO])).code === 0;
+  if (exists) {
+    console.log(`release ${tag} exists; replacing its assets`);
+    await execOrThrow(['gh', 'release', 'upload', tag, ...files, '--repo', REPO, '--clobber']);
+    return;
   }
+  console.log(`creating release ${tag}`);
+  await execOrThrow([
+    'gh',
+    'release',
+    'create',
+    tag,
+    ...files,
+    '--repo',
+    REPO,
+    '--verify-tag',
+    '--title',
+    tag,
+    '--generate-notes',
+    ...(isPrerelease(version) ? ['--prerelease'] : []),
+  ]);
 }
 
 async function main() {
@@ -127,11 +119,11 @@ async function main() {
     throw new Error('working tree has changes; commit them or pass --skip-upload');
   }
 
-  await build();
-  console.log(`staged v${version} in ${DIST}`);
+  const dir = await build();
+  console.log(`staged v${version} in ${dir}`);
   if (values['skip-upload']) return;
-  await upload();
-  console.log(`published v${version}: https://downloads.reviewrelay.dev/install.sh`);
+  await publish(dir);
+  console.log(`published v${version}: https://github.com/${REPO}/releases/tag/v${version}`);
 }
 
 if (import.meta.main) {

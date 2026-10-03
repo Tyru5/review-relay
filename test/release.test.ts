@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { assetName, sha256sums, TARGETS, uploadPlan } from '../scripts/release.ts';
+import { assetName, isPrerelease, releaseAssets, sha256sums, TARGETS } from '../scripts/release.ts';
 
 test('assetName adds .exe only for Windows', () => {
   expect(assetName('linux-x64')).toBe('review-relay-linux-x64');
@@ -13,15 +13,17 @@ test('sha256sums writes sha256sum -c compatible lines', () => {
   );
 });
 
-test('uploadPlan publishes every binary immutably and flips latest.txt last', () => {
-  const plan = uploadPlan('1.2.3');
-  for (const t of TARGETS) {
-    expect(plan).toContainEqual(
-      expect.objectContaining({ key: `v1.2.3/${assetName(t)}`, cacheControl: expect.stringContaining('immutable') }),
-    );
-  }
-  expect(plan.at(-1)).toEqual(expect.objectContaining({ key: 'latest.txt', cacheControl: 'no-cache' }));
-  const index = (key: string) => plan.findIndex((u) => u.key === key);
-  expect(index('v1.2.3/SHA256SUMS')).toBeLessThan(index('install.sh'));
-  expect(new Set(plan.map((u) => u.key)).size).toBe(plan.length);
+test('releaseAssets attaches every binary, the checksums the installers verify, and the installers', () => {
+  const assets = releaseAssets();
+  for (const t of TARGETS) expect(assets).toContain(assetName(t));
+  expect(assets).toContain('SHA256SUMS');
+  expect(assets).toContain('config.example.json');
+  expect(assets).toContain('install.sh');
+  expect(assets).toContain('install.ps1');
+  expect(new Set(assets).size).toBe(assets.length);
+});
+
+test('isPrerelease keys off a semver suffix', () => {
+  expect(isPrerelease('1.2.3')).toBe(false);
+  expect(isPrerelease('1.2.3-rc.1')).toBe(true);
 });
