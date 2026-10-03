@@ -510,7 +510,10 @@ const REVIEWERS_STEP: Step = {
   validate: (state) => (state.selected.length > 0 ? undefined : 'select at least one reviewer'),
 };
 
-/** The save step's lines: the repos, the reviewers and their settings, then the warnings; all scroll together. */
+/**
+ * The save step's lines: the warnings first, so they show before anything scrolls, then the repos, the reviewers and
+ * their settings; all scroll together, so many warnings never push the key help off a short terminal.
+ */
 function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] {
   const reviewersChanged =
     ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
@@ -551,10 +554,10 @@ function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] 
       .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`),
   ];
   return [
+    ...(warnings.length > 0 ? [...warnings, ''] : []),
     ...repoRows,
     `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
     ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
-    ...(warnings.length > 0 ? ['', ...warnings] : []),
   ];
 }
 
