@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { HARNESSES } from '../src/reviewers/index.ts';
 import {
   formatJson,
   hasChanges,
@@ -332,6 +333,24 @@ describe('renderSetup', () => {
     expect(text).toContain('reviewers  codex, claude → claude\n');
     expect(text).toContain('claude     model claude-opus-5-5 · effort max\n');
     expect(text).toContain('enter save · ← back · q quit');
+  });
+
+  test('save step scrolls its settings rows when the terminal is short', () => {
+    // Every harness selected, two of them not on PATH: 13 settings rows plus the warnings outgrow 24 lines.
+    const everything = Object.keys(HARNESSES);
+    const ctx = ctxFor({ reviewers: everything }, everything.slice(0, -2));
+    const all = { ...initialState(ctx), selected: ctx.options };
+    const save = press(ctx, ['enter', ...ctx.options.flatMap((name) => modelKeys(name).map(() => 'enter'))], all);
+    const top = renderSetup(save, ctx, false, 24);
+    expect(top.length).toBeLessThanOrEqual(24);
+    expect(top.join('\n')).toContain('Nothing changed.');
+    expect(top.join('\n')).toContain('! vibe is not on PATH');
+    expect(top.join('\n')).toMatch(/codex\s+model gpt-6-astra/);
+    expect(top.join('\n')).toMatch(/↓ \d+ more/);
+    expect(top.join('\n')).toContain('enter exit · ↑↓ scroll · ← back · q quit');
+    const bottom = render(press(ctx, ['up'], save), ctx, 24);
+    expect(bottom).toMatch(/↑ \d+ more/);
+    expect(bottom).toMatch(/vibe\s+model vibe's default/);
   });
 
   test('save step says when nothing changed', () => {

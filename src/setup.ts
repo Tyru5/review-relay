@@ -309,7 +309,7 @@ const REVIEWERS_STEP: Step = {
 
 const SAVE_STEP: Step = {
   group: 'Save',
-  body: (state, ctx, paint) => {
+  body: (state, ctx, paint, height) => {
     const changed = hasChanges(state, ctx);
     const reviewersChanged =
       ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
@@ -327,15 +327,27 @@ const SAVE_STEP: Step = {
     const warnings = state.selected
       .filter((name) => !ctx.installed[name])
       .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`);
+    const rows = state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`);
+    const footer = warnings.length > 0 ? ['', ...warnings] : [];
     return [
       !ctx.raw ? 'Create the config file with these settings?' : changed ? 'Save these changes?' : 'Nothing changed.',
       '',
       `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
-      ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
-      ...(warnings.length > 0 ? ['', ...warnings] : []),
+      ...windowed(rows, state.cursor, height - 3 - footer.length, paint),
+      ...footer,
     ];
   },
-  hint: (state, ctx) => `enter ${hasChanges(state, ctx) ? 'save' : 'exit'} · ← back · q quit`,
+  hint: (state, ctx) =>
+    [`enter ${hasChanges(state, ctx) ? 'save' : 'exit'}`, state.selected.length > 1 && '↑↓ scroll', '← back', 'q quit']
+      .filter(Boolean)
+      .join(' · '),
+  // The rows scroll like a list, around a cursor that isn't drawn.
+  onKey: (state, key) => {
+    const n = state.selected.length;
+    if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
+    if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
+    return state;
+  },
 };
 
 /** The reviewers step, a model and (where the CLI takes one) an effort step per selected reviewer, then save. */
