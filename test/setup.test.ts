@@ -231,6 +231,31 @@ describe('repos step', () => {
     expect(render(save, ctx)).toContain('repos      acme/lib  ~/old-lib → /home/u/lib · github\n');
   });
 
+  test('leaves a stale repo alone when several clones of it were found, unless setup runs from one', () => {
+    const twin = { fullName: 'acme/lib', localPath: '/home/u/lib2' };
+    const disk: Disk = {
+      ...DISK,
+      found: [...DISK.found, twin],
+      at: (dir) => [...CLONES, twin].find((c) => c.localPath === dir),
+    };
+    const file = { repos: [{ fullName: 'acme/lib', localPath: '/home/u/old-lib' }] };
+    const ctx = ctxFor(file, undefined, disk);
+    expect(ctx.repos.map((row) => [row.fullName, row.localPath, row.exists, row.candidates])).toEqual([
+      ['acme/lib', '/home/u/old-lib', false, 2],
+      ['acme/app', '/home/u/app', true, undefined],
+    ]);
+    expect(initialState(ctx).repos[0]!.on).toBe(false);
+    expect(render(initialState(ctx), ctx)).toContain('no clone at this path; 2 found, type one under other');
+    // Typing one of them moves the row there.
+    const picked = press(ctx, ['down', 'enter', ...'/home/u/lib2', 'enter'], initialState(ctx));
+    expect(picked.repos[0]).toMatchObject({ localPath: '/home/u/lib2', exists: true, on: true, candidates: 2 });
+    expect(nextRepos(picked)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib2' }, APP]);
+    // Running setup from one of the clones settles it.
+    const fromTwin = ctxFor(file, undefined, { ...disk, here: twin });
+    expect(fromTwin.repos[0]).toMatchObject({ localPath: '/home/u/lib2', exists: true });
+    expect(initialState(fromTwin).repos.map((row) => row.on)).toEqual([true, false]);
+  });
+
   test('typing the path of a listed repo moves it there and selects it', () => {
     const ctx = ctxFor({ repos: [{ fullName: 'acme/tool', localPath: '/home/u/stale', postToPr: false }] });
     expect(ctx.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/home/u/stale', exists: false });
