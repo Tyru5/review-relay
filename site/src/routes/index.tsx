@@ -1,10 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
-import { CommandBlock, InlineCode } from '../components/Code';
-import { Install } from '../components/Install';
+import { JudgesDesk, ResultBoard } from '../components/JudgesPanel';
 import { Logo } from '../components/Logo';
-import { ReviewPreview } from '../components/ReviewPreview';
-import { Timeline, TimelineDot } from '../components/Timeline';
+import { CheckIcon, LowerThird } from '../components/LowerThird';
+import { Scoresheet } from '../components/Scoresheet';
 import { DOWNLOADS, getLatestVersion } from '../lib/downloads';
 
 export const Route = createFileRoute('/')({
@@ -14,135 +13,212 @@ export const Route = createFileRoute('/')({
   component: Home,
 });
 
-const STEPS = [
+const EVENTS: { title: string; body: ReactNode }[] = [
   {
     title: 'A review starts',
-    body: "Greptile's check run begins, a pull request is opened or marked ready, or a collaborator comments @review-relay.",
+    body: (
+      <>
+        Greptile&rsquo;s check run begins, a pull request is opened or marked ready, or a collaborator comments{' '}
+        <Code>@review-relay</Code>. Each repo picks its trigger: <Code>auto</Code>, <Code>greptile</Code>, or{' '}
+        <Code>github</Code>.
+      </>
+    ),
   },
   {
     title: 'The commit is checked out locally',
-    body: 'review-relay fetches the PR head into a temporary worktree of your own clone, so reviews run against real code with your own agent logins and keys.',
+    body: 'review-relay fetches the PR head into a temporary worktree of your own clone, so the panel reads real code using your own agent logins and keys.',
   },
   {
-    title: 'Your agents review in parallel',
-    body: "Every agent you configured, whichever harness or model it runs on, reviews against the same rubric, reading your repo's own conventions, lint config, and the callers of changed code.",
+    title: 'The panel reviews in parallel',
+    body: "Every agent you configured, on whichever harness or model, reviews read-only against the same rubric: your repo's conventions, lint config, and the callers of changed code.",
   },
   {
-    title: 'One scored comment lands on the PR',
-    body: 'Findings are merged across reviewers and linked to exact lines. The headline is the lowest score among your reviewers, and later reviews edit the same comment.',
+    title: 'One scored comment lands',
+    body: 'Findings are merged across judges and linked to exact lines. Later reviews edit the same comment. Each commit is reviewed once, and drafts wait until they are ready.',
   },
 ];
+
+const CONTAINER = 'mx-auto w-full max-w-[84rem] px-5 sm:px-8';
 
 function Home() {
   const version = Route.useLoaderData();
 
   return (
-    <div className="mx-auto max-w-6xl px-5 sm:px-8">
-      <header className="flex items-center justify-between py-6">
-        <a href="/" className="flex items-center gap-2.5 text-lg font-extrabold tracking-tight">
-          <Logo className="size-8" />
-          review-relay
-        </a>
-        {version && <span className="font-mono text-xs text-muted">v{version}</span>}
-      </header>
+    <>
+      <section className="flex min-h-svh flex-col">
+        <header className={`${CONTAINER} flex items-center justify-between pt-5`}>
+          <a
+            href="/"
+            className="flex items-center gap-2.5 bg-board py-2 pr-4 pl-3 text-lg font-extrabold [font-stretch:85%]"
+          >
+            <Logo className="size-7" cue="var(--color-haze)" check="var(--color-gold)" />
+            review-relay
+          </a>
+          {version && <span className="bg-board px-3 py-2 font-mono text-xs text-haze">v{version}</span>}
+        </header>
 
-      <main>
-        <section className="grid items-center gap-x-12 gap-y-16 pt-10 pb-28 lg:grid-cols-[minmax(0,1fr)_minmax(0,27rem)] lg:pt-16">
-          <div className="min-w-0">
-            <h1 className="max-w-xl text-[2.5rem] leading-[1.05] font-extrabold tracking-tight text-balance sm:text-6xl">
-              Your coding agents review every pull request, from your machine.
-            </h1>
-            <p className="mt-6 max-w-[34rem] text-lg leading-relaxed text-pretty text-muted">
-              Pick any agentic CLI or model, as many as you like.{' '}
-              <span className="whitespace-nowrap">review-relay</span> starts them the moment a review begins on GitHub,
-              then posts one comment with their findings and a 1-5 merge confidence score.
-            </p>
-            <div className="mt-9 max-w-[38rem]">
-              <Install />
-              <p className="mt-3 text-sm text-muted">
-                Installs a standalone binary and verifies its checksum. Run it again to update.
-              </p>
-            </div>
-          </div>
-          <div className="min-w-0">
-            <ReviewPreview />
-          </div>
-        </section>
-
-        <Section title="How a review runs" lede="Nothing to click. The review shows up on the pull request by itself.">
-          <Timeline>
-            <ol className="space-y-9">
-              {STEPS.map((step, i) => (
-                <li key={step.title} className="relative">
-                  <TimelineDot signal={i === STEPS.length - 1 ? 'go' : 'relay'} className="top-1.5" />
-                  <h3 className="font-semibold">{step.title}</h3>
-                  <p className="mt-1.5 max-w-[60ch] leading-relaxed text-muted">{step.body}</p>
-                </li>
-              ))}
-            </ol>
-          </Timeline>
-        </Section>
-
-        <Section title="Before you start" lede="review-relay drives tools you already use. Have these signed in first.">
-          <ul className="max-w-[60ch] divide-y divide-line border-y border-line">
-            <Requirement>
-              <InlineCode>gh</InlineCode> signed in with access to the repos you watch, plus its webhook extension:
-              <code className="mt-2 block w-fit max-w-full overflow-x-auto font-mono text-[0.84rem] whitespace-nowrap text-ink">
-                <span className="text-muted select-none">$ </span>gh extension install cli/gh-webhook
-              </code>
-            </Requirement>
-            <Requirement>
-              The coding agents or models you want reviewing, signed in or set up with an API key
-            </Requirement>
-            <Requirement>A local clone of each repo you want reviewed</Requirement>
-          </ul>
-          <p className="mt-10 max-w-[60ch] leading-relaxed text-muted">
-            The installer writes an example config to <InlineCode>~/.review-relay/config.json</InlineCode>. Point it at
-            your repos and local clones, list the agents you want reviewing, then start watching:
+        <main
+          className={`${CONTAINER} grid flex-1 content-center gap-x-12 gap-y-6 pt-6 pb-10 sm:gap-y-9 sm:pt-8 lg:grid-cols-[minmax(0,1fr)_22rem]`}
+        >
+          <h1 className="type-broadcast text-[clamp(3.1rem,6.4vw,5.25rem)] text-balance">
+            <span className="block">Your agents judge every pull request.</span>
+            <span className="block text-gold">The lowest score counts.</span>
+          </h1>
+          <p className="max-w-[34rem] self-end text-lg leading-relaxed text-pretty text-haze">
+            Pick any coding agents or models as your panel, as many as you like.{' '}
+            <span className="whitespace-nowrap text-chalk">review-relay</span> starts them the moment a review begins on
+            GitHub, then posts one comment with their findings and a 1&ndash;5 merge confidence score.
           </p>
-          <div className="mt-4 max-w-[60ch]">
-            <CommandBlock lines={['review-relay start', 'review-relay status']} />
+          <div className="min-w-0 lg:col-start-1 lg:row-start-2">
+            <JudgesDesk />
           </div>
-        </Section>
-      </main>
+          <div className="max-lg:order-last lg:col-start-2 lg:row-start-2 lg:self-end">
+            <ResultBoard />
+          </div>
+          <div id="install" className="min-w-0 lg:col-span-2 lg:row-start-3">
+            <LowerThird id="hero-install" />
+            <p className="mt-3 text-sm text-haze">
+              Installs a standalone binary and verifies its checksum. Run it again to update.
+            </p>
+          </div>
+        </main>
+      </section>
 
-      <footer className="flex flex-wrap items-center justify-between gap-4 border-t border-line py-8 text-sm text-muted">
-        <span className="flex items-center gap-2">
-          <Logo className="size-5" />
-          review-relay
-        </span>
-        <nav aria-label="Downloads" className="flex flex-wrap gap-x-6 gap-y-2">
-          <FooterLink href={`${DOWNLOADS}/install.sh`}>install.sh</FooterLink>
-          <FooterLink href={`${DOWNLOADS}/install.ps1`}>install.ps1</FooterLink>
-          {version && <FooterLink href={`${DOWNLOADS}/v${version}/SHA256SUMS`}>Checksums for v{version}</FooterLink>}
-        </nav>
+      <section className="border-t-2 border-rule py-24">
+        <div className={CONTAINER}>
+          <Scoresheet />
+        </div>
+      </section>
+
+      <section className="bg-arena-deep py-24">
+        <div className={CONTAINER}>
+          <div className="grid items-end gap-x-12 gap-y-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
+            <h2 className="type-broadcast text-[clamp(2.75rem,5.5vw,4.25rem)]">Order of events</h2>
+            <p className="leading-relaxed text-haze">
+              Nothing to click. The panel convenes on its own, and GitHub events reach your machine through{' '}
+              <Code>gh webhook forward</Code>, so there is no public URL to host.
+            </p>
+          </div>
+          <ol className="mt-14 space-y-2">
+            {EVENTS.map((event, i) => {
+              const lands = i === EVENTS.length - 1;
+              return (
+                <li
+                  key={event.title}
+                  className="grid grid-cols-[4.5rem_minmax(0,1fr)] bg-arena sm:grid-cols-[6.5rem_minmax(0,1fr)]"
+                >
+                  <span
+                    aria-hidden
+                    className={`type-led grid place-items-center text-[3rem] sm:text-[4rem] ${lands ? 'bg-gold text-navy' : 'bg-board text-haze'}`}
+                  >
+                    {i + 1}
+                  </span>
+                  <div className="grid gap-x-10 gap-y-2 px-5 py-6 sm:px-8 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+                    <h3 className="type-broadcast text-[1.9rem] text-balance">{event.title}</h3>
+                    <p className="max-w-[62ch] leading-relaxed text-haze lg:pt-1">{event.body}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      </section>
+
+      <section className="on-paper bg-paper py-24 text-navy">
+        <div className={`${CONTAINER} grid gap-x-14 gap-y-10 lg:grid-cols-[19rem_minmax(0,1fr)]`}>
+          <div>
+            <h2 className="type-broadcast text-[clamp(2.75rem,5.5vw,4.25rem)] text-balance">Before the panel sits</h2>
+            <p className="mt-4 leading-relaxed text-slate">
+              review-relay drives tools you already use. Have these signed in first.
+            </p>
+          </div>
+          <div className="min-w-0 max-w-[44rem]">
+            <ul className="divide-y divide-paper-rule border-y border-paper-rule">
+              <Requirement>
+                <Code tone="paper">gh</Code> signed in with access to the repos you watch, plus its webhook extension:
+                <Terminal lines={['gh extension install cli/gh-webhook']} />
+              </Requirement>
+              <Requirement>
+                The coding agents or models you want judging, signed in or set up with an API key
+              </Requirement>
+              <Requirement>A local clone of each repo you want reviewed</Requirement>
+            </ul>
+            <p className="mt-10 leading-relaxed">
+              The installer writes an example config to <Code tone="paper">~/.review-relay/config.json</Code>. Point it
+              at your repos and local clones, list the agents on your panel, then start watching:
+            </p>
+            <Terminal lines={['review-relay start', 'review-relay status']} />
+            <p className="mt-8 border-t border-paper-rule pt-5 text-sm leading-relaxed text-slate">
+              Reviews run from your machine, and your code goes to whichever providers your chosen agents and models
+              use.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="on-paper bg-gold py-20 text-navy">
+        <div className={CONTAINER}>
+          <h2 className="type-broadcast text-[clamp(3.25rem,9vw,6rem)]">Seat your panel.</h2>
+          <p className="mt-4 max-w-[40rem] text-lg leading-relaxed">
+            Free to use. One command installs a standalone binary for macOS, Linux, or Windows.
+          </p>
+          <div className="mt-9">
+            <LowerThird id="close-install" tone="gold" />
+          </div>
+        </div>
+      </section>
+
+      <footer className="bg-board">
+        <div className={`${CONTAINER} flex flex-wrap items-center justify-between gap-4 py-8 text-sm text-haze`}>
+          <span className="flex items-center gap-2 font-bold [font-stretch:85%] text-chalk">
+            <Logo className="size-5" cue="var(--color-haze)" check="var(--color-gold)" />
+            review-relay
+          </span>
+          <nav aria-label="Downloads" className="flex flex-wrap gap-x-6 gap-y-2">
+            <FooterLink href={`${DOWNLOADS}/install.sh`}>install.sh</FooterLink>
+            <FooterLink href={`${DOWNLOADS}/install.ps1`}>install.ps1</FooterLink>
+            {version && <FooterLink href={`${DOWNLOADS}/v${version}/SHA256SUMS`}>Checksums for v{version}</FooterLink>}
+          </nav>
+        </div>
       </footer>
-    </div>
+    </>
   );
 }
 
-/** The ledger: heading and one-line lede on the left, the content on the right. */
-function Section({ title, lede, children }: { title: string; lede: string; children: ReactNode }) {
+function Code({ children, tone = 'arena' }: { children: ReactNode; tone?: 'arena' | 'paper' }) {
+  return <code className={`font-mono text-[0.86em] ${tone === 'paper' ? 'text-navy' : 'text-chalk'}`}>{children}</code>;
+}
+
+/** Terminal lines with a non-selectable prompt, so copying a selection yields runnable commands. */
+function Terminal({ lines }: { lines: string[] }) {
   return (
-    <section className="grid gap-x-16 gap-y-10 border-t border-line py-20 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      <div>
-        <h2 className="text-3xl font-extrabold tracking-tight text-balance">{title}</h2>
-        <p className="mt-3 leading-relaxed text-muted">{lede}</p>
-      </div>
-      <div className="min-w-0">{children}</div>
-    </section>
+    <pre className="mt-4 overflow-x-auto rounded-md bg-navy px-4 py-3 font-mono text-[0.84rem] leading-relaxed text-chalk">
+      {lines.map((line) => (
+        <span key={line} className="block">
+          <span className="text-haze select-none">$ </span>
+          {line}
+        </span>
+      ))}
+    </pre>
   );
 }
 
 function Requirement({ children }: { children: ReactNode }) {
-  return <li className="py-4 leading-relaxed">{children}</li>;
+  return (
+    <li className="flex gap-3 py-4 leading-relaxed">
+      <span className="mt-1 grid size-5 shrink-0 place-items-center rounded-full bg-navy text-paper">
+        <CheckIcon className="size-3" />
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </li>
+  );
 }
 
 function FooterLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <a
       href={href}
-      className="underline decoration-line underline-offset-4 transition-colors hover:text-ink hover:decoration-muted"
+      className="underline decoration-rule underline-offset-4 transition-colors hover:text-chalk hover:decoration-haze"
     >
       {children}
     </a>
