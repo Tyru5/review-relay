@@ -16,6 +16,7 @@ export const qwen: Harness = {
   bins: ['qwen'],
   // Reasoning effort is a settings-file option, so there is no per-run effort.
   defaults: {},
+  choices: { model: [] },
   schema: 'native',
   // Headless plan mode puts the shell, edit, and write tools on the deny list.
   shell: 'none',

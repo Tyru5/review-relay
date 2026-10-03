@@ -6,6 +6,7 @@ export const pi: Harness = {
   product: 'pi',
   bins: ['pi'],
   defaults: {},
+  choices: { model: [], effort: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] },
   schema: 'prompt',
   shell: 'none',
   projectFiles: ['.pi'],

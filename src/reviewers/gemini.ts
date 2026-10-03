@@ -14,6 +14,7 @@ export const gemini: Harness = {
   bins: ['gemini'],
   // Thinking is a settings-file option, so there is no per-run effort.
   defaults: {},
+  choices: { model: [] },
   schema: 'prompt',
   // Plan mode denies the shell tool outright.
   shell: 'none',

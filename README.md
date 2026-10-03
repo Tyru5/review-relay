@@ -40,13 +40,13 @@ Then edit `~/.review-relay/config.json` and run `review-relay start`.
 bun install
 mkdir -p ~/.review-relay
 cp config.example.json ~/.review-relay/config.json   # then edit repos
-bun src/cli.ts setup                                 # optional: pick reviewers in a terminal UI
+bun src/cli.ts setup                                 # optional: pick reviewers and models in a terminal UI
 bun src/cli.ts start
 ```
 
 ## Config
 
-`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs (↑/↓ to move, space to toggle, enter to continue). Claude Code and Codex start selected when installed. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover are kept.
+`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs (↑/↓ to move, space to toggle, enter to continue). Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default clears that field in the file, except that a file which already pins the default value keeps it. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and the repos, are kept.
 
 | Field | Default | Meaning |
 | - | - | - |
@@ -119,7 +119,7 @@ bun src/cli.ts run --repo owner/name --pr 123       # review an open PR now
 bun src/cli.ts replay events.jsonl --dry-run        # test trigger logic with recorded deliveries
 bun src/cli.ts status [--limit N]                   # recent jobs: scores, per-reviewer timings, finding counts
 bun src/cli.ts config                               # resolved config as JSON
-bun src/cli.ts setup                                # interactive config: pick reviewers, then save
+bun src/cli.ts setup                                # interactive config: pick reviewers and their models, then save
 ```
 
 ## Development
