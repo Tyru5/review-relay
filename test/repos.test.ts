@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cloneAt, discoverClones, originUrl, parseGithubRemote } from '../src/repos.ts';
+import { cloneAround, cloneAt, discoverClones, originUrl, parseGithubRemote } from '../src/repos.ts';
 
 describe('parseGithubRemote', () => {
   test('reads owner/name from every URL form git accepts for GitHub', () => {
@@ -67,6 +67,14 @@ describe('clones on disk', () => {
     });
     expect(cloneAt(join(root, 'code', 'elsewhere'))).toBeUndefined();
     expect(cloneAt(join(root, 'missing'))).toBeUndefined();
+  });
+
+  test('cloneAround finds the nearest clone above a folder, so a nested clone wins over its parent', () => {
+    expect(cloneAround(join(root, 'code', 'app', 'src', 'deep'))?.fullName).toBe('acme/app');
+    expect(cloneAround(join(root, 'code', 'app', 'nested', 'lib'))?.fullName).toBe('acme/nested');
+    expect(cloneAround(join(root, 'code', 'app', 'nested'))?.localPath).toBe(join(root, 'code', 'app', 'nested'));
+    expect(cloneAround(join(root, 'code', 'elsewhere', 'x'))).toBeUndefined();
+    expect(cloneAround(root)).toBeUndefined();
   });
 
   test('discoverClones finds GitHub clones to the scan depth, skipping hidden, dependency, nested, and linked folders', () => {

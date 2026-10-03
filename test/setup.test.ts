@@ -28,7 +28,7 @@ const CLONES = [
 const DISK: Disk = {
   found: CLONES.slice(0, 2),
   at: (dir) => CLONES.find((clone) => clone.localPath === dir),
-  cwd: APP.localPath,
+  here: APP,
 };
 
 /**
@@ -192,11 +192,56 @@ describe('repos step', () => {
     ]);
     expect(nextRepos(state)).toEqual([APP]);
     expect(state.cursor).toBe(0);
-    const lib = ctxFor(undefined, undefined, { ...DISK, cwd: '/home/u/lib' });
+    const lib = ctxFor(undefined, undefined, { ...DISK, here: CLONES[1] });
     expect(initialState(lib).repos.map((row) => row.on)).toEqual([false, true]);
     expect(initialState(lib).cursor).toBe(1);
-    expect(initialState(ctxFor(undefined, undefined, { ...DISK, cwd: '/home/u/app/src' })).repos[0]!.on).toBe(true);
-    expect(initialState(ctxFor(undefined, undefined, { ...DISK, cwd: '/home/u/other' })).repos[0]!.on).toBe(false);
+    expect(initialState(ctxFor(undefined, undefined, { ...DISK, here: undefined })).repos[0]!.on).toBe(false);
+  });
+
+  test('lists the clone setup was run from even when the scan missed it, and preselects it', () => {
+    const tool = ctxFor(undefined, undefined, { ...DISK, here: CLONES[2] });
+    const state = initialState(tool);
+    expect(state.repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/app', false],
+      ['acme/lib', false],
+      ['acme/tool', true],
+    ]);
+    expect(state.cursor).toBe(2);
+    // With repos configured, the current clone is listed but the configured ones stay the selection.
+    const configured = ctxFor({}, undefined, { ...DISK, here: CLONES[2] });
+    expect(initialState(configured).repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/app', true],
+      ['acme/lib', false],
+      ['acme/tool', false],
+    ]);
+  });
+
+  test('a configured repo whose clone moved takes the path the clone was found at', () => {
+    const ctx = ctxFor({ repos: [{ fullName: 'acme/lib', localPath: '~/old-lib', trigger: 'github' }] });
+    expect(ctx.repos.map((row) => [row.fullName, row.localPath, row.exists])).toEqual([
+      ['acme/lib', '/home/u/lib', true],
+      ['acme/app', '/home/u/app', true],
+    ]);
+    const state = initialState(ctx);
+    expect(state.repos[0]!.on).toBe(true);
+    expect(nextRepos(state)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib', trigger: 'github' }]);
+    expect(hasChanges(state, ctx)).toBe(true);
+    expect(render(state, ctx)).toMatch(/› ■ acme\/lib\s+\/home\/u\/lib\s+github\s+moved\n/);
+    const save = press(ctx, ['enter', ...walk(ctx)], state);
+    expect(render(save, ctx)).toContain('repos      acme/lib  ~/old-lib → /home/u/lib · github\n');
+  });
+
+  test('typing the path of a listed repo moves it there and selects it', () => {
+    const ctx = ctxFor({ repos: [{ fullName: 'acme/tool', localPath: '/home/u/stale', postToPr: false }] });
+    expect(ctx.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/home/u/stale', exists: false });
+    const state = press(ctx, ['down', 'down', 'enter', ...'/opt/tool', 'enter'], initialState(ctx));
+    expect(state.typing).toBeUndefined();
+    expect(state.repos).toHaveLength(3);
+    expect(state.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/opt/tool', exists: true, on: true });
+    // `app` was preselected as the clone setup runs from, since the file's only repo had no clone.
+    expect(nextRepos(state)).toEqual([{ fullName: 'acme/tool', localPath: '/opt/tool', postToPr: false }, APP]);
+    // Typing the path it already has toggles it instead.
+    expect(press(ctx, ['enter', ...'/opt/tool', 'enter'], state).repos[0]!.on).toBe(false);
   });
 
   test('space toggles a repo, and saving keeps the configured entry as it was', () => {
