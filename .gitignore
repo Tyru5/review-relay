@@ -60,3 +60,6 @@ Thumbs.db
 
 # Local tool state
 .impeccable/config.local.json
+.impeccable/review/
+.impeccable/decision/
+.impeccable/mocks/
