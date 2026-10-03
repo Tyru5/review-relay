@@ -1,8 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
+import { CommandBlock, InlineCode } from '../components/Code';
 import { Install } from '../components/Install';
 import { Logo } from '../components/Logo';
 import { ReviewPreview } from '../components/ReviewPreview';
+import { Timeline, TimelineDot } from '../components/Timeline';
 import { DOWNLOADS, getLatestVersion } from '../lib/downloads';
 
 export const Route = createFileRoute('/')({
@@ -19,15 +21,15 @@ const STEPS = [
   },
   {
     title: 'The commit is checked out locally',
-    body: 'review-relay fetches the PR head into a temporary worktree of your own clone, so reviews run against real code with your own codex and claude logins.',
+    body: 'review-relay fetches the PR head into a temporary worktree of your own clone, so reviews run against real code with your own agent logins and keys.',
   },
   {
-    title: 'Codex and Claude review in parallel',
-    body: "Both run read-only against the same rubric, reading your repo's own conventions, lint config, and the callers of changed code.",
+    title: 'Your agents review in parallel',
+    body: "Every agent you configured, whichever harness or model it runs on, reviews against the same rubric, reading your repo's own conventions, lint config, and the callers of changed code.",
   },
   {
     title: 'One scored comment lands on the PR',
-    body: 'Findings are merged across reviewers and linked to exact lines. The headline is the lower of the two scores, and later reviews edit the same comment.',
+    body: 'Findings are merged across reviewers and linked to exact lines. The headline is the lowest score among your reviewers, and later reviews edit the same comment.',
   },
 ];
 
@@ -41,25 +43,19 @@ function Home() {
           <Logo className="size-8" />
           review-relay
         </a>
-        {version && (
-          <a
-            href={`${DOWNLOADS}/v${version}/SHA256SUMS`}
-            className="font-mono text-xs text-muted transition-colors hover:text-ink"
-          >
-            v{version}
-          </a>
-        )}
+        {version && <span className="font-mono text-xs text-muted">v{version}</span>}
       </header>
 
       <main>
-        <section className="grid items-center gap-12 pt-10 pb-24 lg:grid-cols-[minmax(0,1fr)_minmax(0,27rem)] lg:pt-16">
+        <section className="grid items-center gap-x-12 gap-y-16 pt-10 pb-28 lg:grid-cols-[minmax(0,1fr)_minmax(0,27rem)] lg:pt-16">
           <div className="min-w-0">
             <h1 className="max-w-xl text-[2.5rem] leading-[1.05] font-extrabold tracking-tight text-balance sm:text-6xl">
-              Codex and Claude review every pull request, from your machine.
+              Your coding agents review every pull request, from your machine.
             </h1>
-            <p className="mt-6 max-w-[34rem] text-lg leading-relaxed text-muted">
-              review-relay starts both reviewers the moment a review begins on GitHub, then posts one comment with their
-              findings and a 1-5 merge confidence score.
+            <p className="mt-6 max-w-[34rem] text-lg leading-relaxed text-pretty text-muted">
+              Pick any agentic CLI or model, as many as you like.{' '}
+              <span className="whitespace-nowrap">review-relay</span> starts them the moment a review begins on GitHub,
+              then posts one comment with their findings and a 1-5 merge confidence score.
             </p>
             <div className="mt-9 max-w-[38rem]">
               <Install />
@@ -73,46 +69,39 @@ function Home() {
           </div>
         </section>
 
-        <Section title="How a review runs">
-          <ol className="grid gap-x-10 gap-y-9 sm:grid-cols-2">
-            {STEPS.map((step, i) => (
-              <li key={step.title} className="flex gap-4">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line font-mono text-sm text-relay">
-                  {i + 1}
-                </span>
-                <div>
+        <Section title="How a review runs" lede="Nothing to click. The review shows up on the pull request by itself.">
+          <Timeline>
+            <ol className="space-y-9">
+              {STEPS.map((step, i) => (
+                <li key={step.title} className="relative">
+                  <TimelineDot signal={i === STEPS.length - 1 ? 'go' : 'relay'} className="top-1.5" />
                   <h3 className="font-semibold">{step.title}</h3>
-                  <p className="mt-1.5 leading-relaxed text-muted">{step.body}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
+                  <p className="mt-1.5 max-w-[60ch] leading-relaxed text-muted">{step.body}</p>
+                </li>
+              ))}
+            </ol>
+          </Timeline>
         </Section>
 
-        <Section title="Before you start">
-          <div className="grid gap-10 lg:grid-cols-2">
-            <ul className="space-y-4 leading-relaxed">
-              <Requirement>
-                <code className="font-mono text-[0.9em]">gh</code> signed in with access to the repos you watch, plus
-                its webhook extension: <Command>gh extension install cli/gh-webhook</Command>
-              </Requirement>
-              <Requirement>
-                The <code className="font-mono text-[0.9em]">codex</code> and{' '}
-                <code className="font-mono text-[0.9em]">claude</code> CLIs, signed in
-              </Requirement>
-              <Requirement>A local clone of each repo you want reviewed</Requirement>
-            </ul>
-            <div>
-              <p className="leading-relaxed text-muted">
-                The installer writes an example config to{' '}
-                <code className="font-mono text-[0.9em] text-ink">~/.review-relay/config.json</code>. Point it at your
-                repos and local clones, then start watching:
-              </p>
-              <pre className="mt-4 overflow-x-auto rounded-xl border border-line bg-surface/90 px-4 py-3 font-mono text-[0.84rem] leading-relaxed">
-                <span className="text-muted select-none">$ </span>review-relay start{'\n'}
-                <span className="text-muted select-none">$ </span>review-relay status
-              </pre>
-            </div>
+        <Section title="Before you start" lede="review-relay drives tools you already use. Have these signed in first.">
+          <ul className="max-w-[60ch] divide-y divide-line border-y border-line">
+            <Requirement>
+              <InlineCode>gh</InlineCode> signed in with access to the repos you watch, plus its webhook extension:
+              <code className="mt-2 block w-fit max-w-full overflow-x-auto font-mono text-[0.84rem] whitespace-nowrap text-ink">
+                <span className="text-muted select-none">$ </span>gh extension install cli/gh-webhook
+              </code>
+            </Requirement>
+            <Requirement>
+              The coding agents or models you want reviewing, signed in or set up with an API key
+            </Requirement>
+            <Requirement>A local clone of each repo you want reviewed</Requirement>
+          </ul>
+          <p className="mt-10 max-w-[60ch] leading-relaxed text-muted">
+            The installer writes an example config to <InlineCode>~/.review-relay/config.json</InlineCode>. Point it at
+            your repos and local clones, list the agents you want reviewing, then start watching:
+          </p>
+          <div className="mt-4 max-w-[60ch]">
+            <CommandBlock lines={['review-relay start', 'review-relay status']} />
           </div>
         </Section>
       </main>
@@ -122,46 +111,40 @@ function Home() {
           <Logo className="size-5" />
           review-relay
         </span>
-        <nav aria-label="Downloads" className="flex gap-6">
-          <a href={`${DOWNLOADS}/install.sh`} className="transition-colors hover:text-ink">
-            install.sh
-          </a>
-          <a href={`${DOWNLOADS}/install.ps1`} className="transition-colors hover:text-ink">
-            install.ps1
-          </a>
-          {version && (
-            <a href={`${DOWNLOADS}/v${version}/SHA256SUMS`} className="transition-colors hover:text-ink">
-              Checksums for v{version}
-            </a>
-          )}
+        <nav aria-label="Downloads" className="flex flex-wrap gap-x-6 gap-y-2">
+          <FooterLink href={`${DOWNLOADS}/install.sh`}>install.sh</FooterLink>
+          <FooterLink href={`${DOWNLOADS}/install.ps1`}>install.ps1</FooterLink>
+          {version && <FooterLink href={`${DOWNLOADS}/v${version}/SHA256SUMS`}>Checksums for v{version}</FooterLink>}
         </nav>
       </footer>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** The ledger: heading and one-line lede on the left, the content on the right. */
+function Section({ title, lede, children }: { title: string; lede: string; children: ReactNode }) {
   return (
-    <section className="border-t border-line py-20">
-      <h2 className="mb-10 text-3xl font-extrabold tracking-tight">{title}</h2>
-      {children}
+    <section className="grid gap-x-16 gap-y-10 border-t border-line py-20 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div>
+        <h2 className="text-3xl font-extrabold tracking-tight text-balance">{title}</h2>
+        <p className="mt-3 leading-relaxed text-muted">{lede}</p>
+      </div>
+      <div className="min-w-0">{children}</div>
     </section>
   );
 }
 
 function Requirement({ children }: { children: ReactNode }) {
-  return (
-    <li className="flex gap-3">
-      <span aria-hidden className="mt-2.5 size-1.5 shrink-0 rounded-full bg-go" />
-      <span>{children}</span>
-    </li>
-  );
+  return <li className="py-4 leading-relaxed">{children}</li>;
 }
 
-function Command({ children }: { children: ReactNode }) {
+function FooterLink({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <code className="mt-2 block w-fit max-w-full overflow-x-auto rounded-md border border-line bg-surface px-2.5 py-1 font-mono text-[0.84rem] whitespace-nowrap">
+    <a
+      href={href}
+      className="underline decoration-line underline-offset-4 transition-colors hover:text-ink hover:decoration-muted"
+    >
       {children}
-    </code>
+    </a>
   );
 }

@@ -3,9 +3,9 @@ import type { ReactNode } from 'react';
 import appCss from '../styles.css?url';
 
 const SITE = 'https://reviewrelay.dev';
-const TITLE = 'review-relay: local Codex and Claude reviews on every pull request';
+const TITLE = 'review-relay: your coding agents review every pull request';
 const DESCRIPTION =
-  'review-relay runs Codex and Claude on your machine the moment a review starts on GitHub, then posts one PR comment with findings and a 1-5 merge confidence score.';
+  'review-relay runs the coding agents and models you choose on your machine the moment a review starts on GitHub, then posts one PR comment with findings and a 1-5 merge confidence score.';
 
 export const Route = createRootRoute({
   head: () => ({
