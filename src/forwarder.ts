@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { RepoConfig } from './config.ts';
+import type { ForwarderInfo } from './daemon.ts';
 import type { TriggerMode } from './types.ts';
 
 /** Event types each trigger mode needs; `issue_comment` carries the mention trigger in every mode. */
@@ -19,18 +20,35 @@ export class Forwarder {
   private proc: ChildProcess | null = null;
   private stopped = false;
   private backoffMs = 1_000;
+  private restarts = -1;
+  private since = new Date().toISOString();
 
   constructor(
     private readonly repo: RepoConfig,
     private readonly url: string,
     private readonly secret: string,
     private readonly log: (message: string) => void = console.log,
+    /** Called after each spawn and exit, so the daemon can record forwarder pids for `status`. */
+    private readonly onChange: () => void = () => {},
   ) {}
+
+  /** What `status` shows for this forwarder. */
+  info(): ForwarderInfo {
+    return {
+      repo: this.repo.fullName,
+      pid: this.proc?.pid ?? null,
+      events: EVENTS_BY_MODE[this.repo.trigger].join(','),
+      since: this.since,
+      restarts: Math.max(0, this.restarts),
+    };
+  }
 
   start(): void {
     if (this.stopped) return;
     const events = EVENTS_BY_MODE[this.repo.trigger].join(',');
     const startedAt = Date.now();
+    this.restarts++;
+    this.since = new Date(startedAt).toISOString();
     const proc = spawn(
       'gh',
       [
@@ -45,6 +63,7 @@ export class Forwarder {
     );
     this.proc = proc;
     this.log(`[${this.repo.fullName}] forwarding ${events} (trigger=${this.repo.trigger})`);
+    this.onChange();
     for (const stream of [proc.stdout, proc.stderr]) {
       if (!stream) continue;
       createInterface({ input: stream }).on('line', (line) => {
@@ -53,6 +72,7 @@ export class Forwarder {
     }
     proc.on('exit', (code) => {
       if (this.proc === proc) this.proc = null;
+      this.onChange();
       if (this.stopped) return;
       if (Date.now() - startedAt > 60_000) this.backoffMs = 1_000;
       this.log(`[${this.repo.fullName}] forwarder exited (${code}); restarting in ${this.backoffMs / 1000}s`);
