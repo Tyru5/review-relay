@@ -153,7 +153,7 @@ function Install-ReviewRelay {
     Write-Host @"
 
 Next
-  notepad $Config
+  review-relay setup        # pick repos, reviewers, and models (or notepad $Config)
   review-relay start        # watch configured repos
   review-relay status       # recent jobs
   rerun the installer to update

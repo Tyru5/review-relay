@@ -152,7 +152,7 @@ esac
 cat <<NEXT
 
 ${B}Next${N}
-  \$EDITOR $CONFIG
+  review-relay setup        ${D}# pick repos, reviewers, and models (or \$EDITOR $CONFIG)${N}
   review-relay start        ${D}# watch configured repos${N}
   review-relay status       ${D}# recent jobs${N}
   rerun the installer to update
