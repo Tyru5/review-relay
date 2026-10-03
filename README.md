@@ -46,17 +46,20 @@ bun src/cli.ts start
 
 ## Config
 
-`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step picks the repos to watch (↑/↓ to move, space to toggle, enter to continue): it lists the repos the config already names, then every GitHub clone it finds up to four folders deep under your home folder (hidden folders, `node_modules`, and build output are skipped), and `other` takes the path of a clone anywhere else. The configured repos start selected, or, for a new config, the clone setup was run from. A configured repo whose clone is no longer at its path is moved to the clone when that is unambiguous (the clone setup was run from, or the only one found); otherwise it stays selected with a warning, and typing its new path under `other` moves it. A new repo is saved with just `fullName` and `localPath`, so it gets the defaults below (`auto` trigger, posting to the PR); a repo already in the config keeps its entry as it was (with the new path when it moved), and one toggled off is removed. The next step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs. Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default clears that field in the file, except that a file which already pins the default value keeps it. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and each repo's `trigger`, are kept.
+`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step picks the repos to watch (↑/↓ to move, space to toggle, enter to continue): it lists the repos the config already names, then every GitHub clone it finds up to four folders deep under your home folder (hidden folders, `node_modules`, and build output are skipped), and `other` takes the path of a clone anywhere else. The configured repos start selected, or, for a new config, the clone setup was run from. A configured repo whose clone is no longer at its path is moved to the clone when that is unambiguous (the clone setup was run from, or the only one found); otherwise it stays selected with a warning, and typing its new path under `other` moves it. A new repo is saved with just `fullName` and `localPath`, so it gets the defaults below (`auto` trigger, posting to the PR); a repo already in the config keeps its entry as it was (with the new path when it moved), and one toggled off is removed. The next step lists the supported agent CLIs it finds on PATH, plus any the config already names and its [custom reviewers](#custom-reviewers), and picks which ones review PRs. Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default clears that field in the file, except that a file which already pins the default value keeps it. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and each repo's `trigger`, are kept.
 
 | Field | Default | Meaning |
 | - | - | - |
 | `port` | `9988` | Local port for forwarded webhooks |
 | `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
-| `reviewers` | `["codex", "claude"]` | Which reviewers to run, by the names under [Supported agents](#supported-agents) |
-| `models.<reviewer>` | see below | `model` and `effort` for that reviewer's CLI, passed with the flags listed under Supported agents. Unset means the CLI's own default. `provider` is also read for `hermes`. |
+| `reviewers` | `["codex", "claude"]` | Which reviewers run, by the names under [Supported agents](#supported-agents) or the ids of [custom reviewers](#custom-reviewers) |
+| `models.<id>` | see below | `model` and `effort` for that reviewer's CLI, passed with the flags listed under Supported agents. Unset means review-relay's default for that CLI, below, and otherwise the CLI's own default. `provider` is also read for `hermes`. |
+| `models.<id>.harness` | the id | The CLI a [custom reviewer](#custom-reviewers) runs |
+| `models.<id>.label` | the CLI's name, or the custom id | The reviewer's name in the PR comment |
 | `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | |
 | `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | |
+| `routes` | none | Rules that pick the reviewers for each PR; see [Routing](#routing) |
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
 | `repos[].fullName` | required | `owner/name` |
 | `repos[].localPath` | required | Local clone used to create worktrees |
@@ -64,6 +67,80 @@ bun src/cli.ts start
 | `repos[].postToPr` | `true` | Post the scored review as one PR comment (edited in place on later reviews) |
 | `repos[].github.onPush` | `false` | Review new commits pushed to an open PR (`synchronize`) |
 | `repos[].github.mention` | `@review-relay` | Comment text that requests a review |
+
+### Custom reviewers
+
+A key in `models` that isn't a CLI name defines a custom reviewer. Its `harness` names the CLI it runs, so one CLI can review with two models, even on the same PR:
+
+```json
+"reviewers": ["claude", "haiku"],
+"models": {
+  "haiku": { "harness": "claude", "model": "claude-haiku-4-5", "label": "Haiku" }
+}
+```
+
+- Ids use lowercase letters, digits, and dashes, up to 32 characters. Each id gets its own report file and `status` column.
+- Unset settings fall back to the CLI's defaults and never to another entry. `haiku` above runs at the claude default effort, `max`, whatever `models.claude` says.
+- The reviewers in `reviewers` need different labels.
+- `setup` lists custom reviewers next to the CLIs and edits their model and effort. Adding or removing one happens in the file.
+
+A mistake in a custom entry stops the config from loading: an unknown setting, a `harness` that isn't a supported CLI, an `effort` for a CLI without one, or a `provider` for anything but hermes. In an entry named after a CLI, an unknown setting, a stray `effort`, or a stray `provider` only prints a warning and is ignored, as before, so configs that loaded still load.
+
+### Routing
+
+Without `routes`, every PR gets the same `reviewers`. Routes pick the reviewers for each PR from what git and GitHub report about it: the repo, the base branch, the trigger, which files changed, and how much. They are optional; a config without them works as it always has.
+
+```json
+"reviewers": ["codex", "claude"],
+"models": { "haiku": { "harness": "claude", "model": "claude-haiku-4-5", "label": "Haiku" } },
+"routes": [
+  { "name": "docs", "when": { "onlyPaths": ["docs/**"] }, "skip": true },
+  { "name": "risky", "when": { "wideImpact": true }, "reviewers": ["claude", "codex"], "timeoutMs": 3600000 },
+  { "name": "tiny", "when": { "maxLines": 30, "wideImpact": false }, "reviewers": ["haiku"] },
+  { "name": "side", "when": { "repos": ["Tyru5/side-*"] }, "reviewers": ["haiku"] }
+]
+```
+
+review-relay checks routes from the top. The first route whose `when` matches decides the review, and `reviewers` runs when none match. Order is precedence: here a risky change in a side project still gets Claude and Codex.
+
+| Field | Meaning |
+| - | - |
+| `name` | Required and unique: lowercase letters, digits, and dashes. Shown in the PR comment, `status`, and logs. |
+| `when` | At least one condition. Every condition must hold; a condition that takes a list matches when any item does. |
+| `reviewers` | Reviewer ids to run, CLI names or [custom reviewers](#custom-reviewers) |
+| `skip` | `true` skips the review. A route sets exactly one of `reviewers` and `skip`. |
+| `timeoutMs` | Per-reviewer timeout for this route, in place of the global `timeoutMs` |
+
+| Condition | Matches when |
+| - | - |
+| `repos` | The repo's `owner/name` matches one of these globs, ignoring case. Each must match a configured repo. |
+| `baseBranches` | The base branch matches one of these globs, such as `release/*` |
+| `sources` | The trigger is one of `greptile`, `github`, `mention`, `manual` (`run`) |
+| `paths` | Any changed file matches one of these globs |
+| `onlyPaths` | At least one file changed, and every changed file matches one of these globs |
+| `minLines`, `maxLines` | Lines added plus deleted, lockfiles left out, are at least or at most this many |
+| `minFiles`, `maxFiles` | Changed files, lockfiles left out, are at least or at most this many |
+| `wideImpact` | `true`: a wide-impact file changed, such as a manifest, lockfile, CI file, migration, or schema. `false`: none did. |
+
+Globs work like GitHub Actions `paths:` filters: `*.md` matches only root files, `**/*.md` matches at any depth, and paths are case-sensitive. A renamed file matches on its old and new paths, and `onlyPaths` needs both, so moving `src/x.ts` to `docs/x.md` is not a docs-only change. Lockfiles (`bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `go.sum`, and the like) don't count toward size, so a dependency bump with 20 lines of code counts as 20 lines. They still count as wide-impact.
+
+A skip route reviews nothing and posts nothing; `status` shows the commit as `skipped`. Skip routes are guarded:
+
+- They may only use `onlyPaths`, `repos`, `baseBranches`, and `sources`. A skip on `paths` would skip code that changed next to docs, and a skip on size would let a small change through unreviewed, so the config won't load. Send small PRs to a cheap route instead.
+- A mention or `run` never skips: they go on to the next route that matches, or to `reviewers`.
+- A PR that changes an agent file is never skipped: AGENTS.md, CLAUDE.md, or GEMINI.md at any depth, `.github/copilot-instructions.md`, `.cursorrules`, `.claude/`, `.cursor/`, and every path listed under [Supported agents](#supported-agents) as deleted for a CLI. These files steer coding agents, and review-relay's own reviewers read them as the repo's standards.
+
+A mention can name a route: `@review-relay risky` runs the `risky` route whatever its `when` says. Any other word after the mention gets normal routing. `run --route risky` does the same from the command line.
+
+When the config has routes, the PR comment gets a second line under the headline with the route and why it matched, then each reviewer's model and effort:
+
+```
+Route `risky` (wide-impact: bun.lock, .github/workflows/ci.yml) · Claude: claude-opus-5-5, max · Codex: gpt-6-astra, high
+```
+
+`review-relay route --repo owner/name --pr 123` shows which route a PR matches and why, without reviewing it. It fetches the PR, checks every route, and prints the first condition each failed. It works on closed and merged PRs too, so you can try rules on past PRs. `--source mention` shows what a mention would get.
+
+A config error in a route names it, such as `routes[1] "tiny": skip can't use maxLines`. `config` prints the routes as parsed, and `info` lists them.
 
 ### Trigger modes
 
@@ -123,6 +200,8 @@ review-relay restart                                # stop, then start -d
 review-relay status [--limit N]                     # daemon (pid, uptime, endpoint, health), forwarders, recent jobs; exit 3 if stopped
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
+review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
+review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
 review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
 review-relay config                                 # resolved config as JSON (info --json)
@@ -168,16 +247,17 @@ The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, ver
 
 From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 
-Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<reviewer>.json` per reviewer, and `meta.json`.
+Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
 
 ## How a review runs
 
 1. Fetch `refs/pull/<n>/head` and the base branch into the local clone.
-2. Create a detached worktree at the PR head commit.
-3. Compute diff stats (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
-4. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
-5. Run the selected reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any configured reviewer whose CLI isn't on PATH.
-6. Write reports, post or update the PR comment, remove the worktree.
+2. Compute diff stats in the clone (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
+3. Pick the route (see [Routing](#routing)). A skip route stops here, before any worktree exists.
+4. Create a detached worktree at the PR head commit.
+5. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
+6. Run the route's reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any reviewer, in `reviewers` or a route, whose CLI isn't on PATH.
+7. Write reports, post or update the PR comment, remove the worktree.
 
 Reviewers are spawned directly, not through your shell, so shell aliases (for example a `codex` alias that bypasses the sandbox) do not apply.
 
@@ -196,7 +276,7 @@ Each reviewer reads the repo's own standards (AGENTS.md, CLAUDE.md, CONTRIBUTING
 
 The reviewer also gives an overall merge confidence (5 = merge as is, 4 = minor issues, 3 = fix before merging, 2 = critical issue or wide blast radius with weak tests, 1 = should not merge). Code then applies caps so the number matches the findings: a critical finding limits it to 2, a major finding to 3, and it can be at most one above the weakest dimension.
 
-The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, one `<reviewer>.json` per reviewer, and `meta.json`.
+The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
 
 ## Limits
 
@@ -204,3 +284,4 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
+- Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.

@@ -1,9 +1,9 @@
 import { homedir } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
-import { DEFAULT_MODELS, DEFAULT_REVIEWERS, REVIEWERS, type ModelConfig } from './config.ts';
+import { DEFAULT_MODELS, DEFAULT_REVIEWERS, REVIEWER_ID, type ModelConfig } from './config.ts';
 import { cloneAround, cloneAt, discoverClones, type Clone } from './repos.ts';
-import { findBin, HARNESSES } from './reviewers/index.ts';
-import type { ReviewerName } from './types.ts';
+import { findBin, HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
+import type { HarnessName, ReviewerId } from './types.ts';
 
 /** The `models` keys setup configures, in the order their steps run. */
 export type ModelKey = 'model' | 'effort';
@@ -40,14 +40,19 @@ export interface SetupContext {
   disk: Disk;
   /** `reviewers` as the file lists them, or the default when unset. */
   current: string[];
-  /** Rows on the reviewers step: configured reviewers first, so saving keeps their order, then every installed one. */
-  options: ReviewerName[];
+  /**
+   * Rows on the reviewers step: configured reviewers first, so saving keeps their order, then every installed CLI,
+   * then the file's other custom reviewers.
+   */
+  options: ReviewerId[];
+  /** The CLI each reviewer runs: a CLI name runs itself, and a custom entry names its CLI in `harness`. */
+  harnessOf: Record<ReviewerId, HarnessName>;
   /** Executable found on PATH for each installed harness. */
-  installed: Partial<Record<ReviewerName, string>>;
+  installed: Partial<Record<HarnessName, string>>;
   /** Supported harnesses that are neither installed nor configured, named under the list. */
-  notFound: ReviewerName[];
+  notFound: HarnessName[];
   /** Each reviewer's model and effort as reviews would use them: the file's values over the harness defaults. */
-  models: Record<ReviewerName, ModelConfig>;
+  models: Record<ReviewerId, ModelConfig>;
 }
 
 export interface SetupState {
@@ -57,9 +62,9 @@ export interface SetupState {
   cursor: number;
   /** Like `SetupContext.repos`, with the user's toggles and typed paths applied. */
   repos: RepoOption[];
-  selected: ReviewerName[];
+  selected: ReviewerId[];
   /** Like `SetupContext.models`, with the user's picks applied. */
-  models: Record<ReviewerName, ModelConfig>;
+  models: Record<ReviewerId, ModelConfig>;
   /** The text typed on a list step after picking "other"; undefined while its list is shown. */
   typing?: string;
   /** Why the current step can't be left yet. */
@@ -94,8 +99,6 @@ const DIM = '2';
 const GREEN = '32';
 const YELLOW = '33';
 const CYAN = '36';
-
-const isReviewer = (name: unknown): name is ReviewerName => REVIEWERS.includes(name as ReviewerName);
 
 /** `value` when it is a plain object, else an empty one, so a malformed config section reads as unset. */
 const plain = (value: unknown): Record<string, any> =>
@@ -163,6 +166,16 @@ function repoOptions(current: Record<string, any>[], disk: Disk): RepoOption[] {
 }
 
 /**
+ * The file's custom reviewers, with the CLI each runs: entries under a valid id that isn't a CLI name, whose
+ * `harness` names a supported CLI. Setup edits their model and effort but never creates or removes one.
+ */
+const customReviewers = (raw: Record<string, any> | undefined): [ReviewerId, HarnessName][] =>
+  Object.entries(plain(raw?.models)).flatMap(([id, entry]): [ReviewerId, HarnessName][] => {
+    const harness = plain(entry).harness;
+    return !isHarness(id) && REVIEWER_ID.test(id) && isHarness(harness) ? [[id, harness]] : [];
+  });
+
+/**
  * `raw` is the parsed config file, or undefined when there is none yet. `which` looks an executable up on PATH, and
  * `disk` is what the scan for clones found.
  */
@@ -176,19 +189,31 @@ export function setupContext(
   const current = [raw?.reviewers ?? DEFAULT_REVIEWERS].flat().map(String);
   const currentRepos = listRepos(raw);
   const installed: SetupContext['installed'] = {};
-  for (const name of REVIEWERS) {
+  for (const name of HARNESS_NAMES) {
     const bin = findBin(name, which);
     if (bin) installed[name] = bin;
   }
-  const options = [...new Set([...current.filter(isReviewer), ...REVIEWERS.filter((name) => installed[name])])];
+  const custom = customReviewers(raw);
+  const harnessOf: Record<ReviewerId, HarnessName> = Object.fromEntries([
+    ...HARNESS_NAMES.map((name) => [name, name]),
+    ...custom,
+  ]);
+  const known = (id: string) => Object.hasOwn(harnessOf, id);
+  const options = [
+    ...new Set([
+      ...current.filter(known),
+      ...HARNESS_NAMES.filter((name) => installed[name]),
+      ...custom.map(([id]) => id),
+    ]),
+  ];
   const models = Object.fromEntries(
-    REVIEWERS.map((name) => {
-      const file = plain(plain(raw?.models)[name]);
-      const model = asText(file.model) ?? DEFAULT_MODELS[name].model;
-      const effort = asText(file.effort) ?? DEFAULT_MODELS[name].effort;
-      return [name, { model, effort }];
+    Object.entries(harnessOf).map(([id, harness]) => {
+      const file = plain(plain(raw?.models)[id]);
+      const model = asText(file.model) ?? DEFAULT_MODELS[harness].model;
+      const effort = asText(file.effort) ?? DEFAULT_MODELS[harness].effort;
+      return [id, { model, effort }];
     }),
-  ) as Record<ReviewerName, ModelConfig>;
+  ) as Record<ReviewerId, ModelConfig>;
   return {
     path,
     raw,
@@ -197,8 +222,9 @@ export function setupContext(
     disk,
     current,
     options,
+    harnessOf,
     installed,
-    notFound: REVIEWERS.filter((name) => !options.includes(name)),
+    notFound: HARNESS_NAMES.filter((name) => !options.includes(name)),
     models,
   };
 }
@@ -213,9 +239,12 @@ export function initialState(ctx: SetupContext): SetupState {
   const here = ctx.disk.here && ctx.repos.find((row) => sameRepo(row.fullName, ctx.disk.here!.fullName));
   const start = configured.length > 0 ? configured : here ? [here] : [];
   const repos = ctx.repos.map((row) => ({ ...row, on: start.includes(row) }));
-  const usable = ctx.options.filter((name) => ctx.current.includes(name) && ctx.installed[name]);
-  const first = ctx.options.find((name) => ctx.installed[name]);
-  const models = Object.fromEntries(REVIEWERS.map((name) => [name, { ...ctx.models[name] }])) as SetupState['models'];
+  const runs = (id: ReviewerId) => !!ctx.installed[ctx.harnessOf[id]!];
+  const usable = ctx.options.filter((id) => ctx.current.includes(id) && runs(id));
+  const first = ctx.options.find(runs);
+  const models = Object.fromEntries(
+    Object.keys(ctx.harnessOf).map((id) => [id, { ...ctx.models[id] }]),
+  ) as SetupState['models'];
   const state = { step: 0, cursor: 0, repos, selected: usable.length > 0 ? usable : first ? [first] : [], models };
   return { ...state, cursor: REPOS_STEP.cursor!(state, ctx) };
 }
@@ -247,9 +276,9 @@ export const nextRepos = (state: SetupState): Record<string, any>[] =>
 /** The trigger mode a repo's entry sets, or the default. */
 const triggerOf = (row: RepoOption) => asText(row.entry?.trigger) ?? 'auto';
 
-/** The keys a reviewer's model steps set: `effort` only when its CLI takes one. */
-export const modelKeys = (name: ReviewerName): ModelKey[] =>
-  HARNESSES[name].choices.effort ? ['model', 'effort'] : ['model'];
+/** The keys a reviewer's model steps set, by the CLI it runs: `effort` only when the CLI takes one. */
+export const modelKeys = (harness: HarnessName): ModelKey[] =>
+  HARNESSES[harness].choices.effort ? ['model', 'effort'] : ['model'];
 
 /**
  * The file's `models` with the picks applied. Unselected reviewers and keys the steps don't set (`provider`) stay as
@@ -259,12 +288,14 @@ export function nextModels(state: SetupState, ctx: SetupContext): Record<string,
   const file = plain(ctx.raw?.models);
   const next = { ...file };
   for (const name of state.selected) {
+    const harness = ctx.harnessOf[name]!;
+    // A custom entry keeps `harness` and `label`, so it is never dropped as empty.
     const entry = { ...plain(file[name]) };
-    for (const key of modelKeys(name)) {
-      const value = state.models[name][key];
+    for (const key of modelKeys(harness)) {
+      const value = state.models[name]![key];
       // Strict equality keeps a value the file pins, and still rewrites a malformed one (a number) as text.
       if (value === entry[key]) continue;
-      if (value === undefined || value === DEFAULT_MODELS[name][key]) delete entry[key];
+      if (value === undefined || value === DEFAULT_MODELS[harness][key]) delete entry[key];
       else entry[key] = value;
     }
     if (Object.keys(entry).length > 0 || JSON.stringify(entry) === JSON.stringify(file[name])) next[name] = entry;
@@ -290,21 +321,22 @@ interface Row {
 }
 
 /** The current pick and the file's value lead when they aren't listed, so they stay visible and selectable. */
-export function modelRows(name: ReviewerName, field: ModelKey, state: SetupState, ctx: SetupContext): Row[] {
-  const fallback = DEFAULT_MODELS[name][field];
-  const listed = HARNESSES[name].choices[field] ?? [];
-  const extra = [state.models[name][field], ctx.models[name][field]].filter(
+export function modelRows(name: ReviewerId, field: ModelKey, state: SetupState, ctx: SetupContext): Row[] {
+  const harness = ctx.harnessOf[name]!;
+  const fallback = DEFAULT_MODELS[harness][field];
+  const listed = HARNESSES[harness].choices[field] ?? [];
+  const extra = [state.models[name]![field], ctx.models[name]![field]].filter(
     (value): value is string => !!value && !listed.includes(value),
   );
   return [
     ...[...new Set(extra)].map((value) => ({ value, label: value })),
-    ...(fallback ? [] : [{ label: `${HARNESSES[name].bins[0]}'s default` }]),
+    ...(fallback ? [] : [{ label: `${HARNESSES[harness].bins[0]}'s default` }]),
     ...listed.map((value) => ({ value, label: value, note: value === fallback ? 'default' : undefined })),
     { label: 'other…', other: true },
   ];
 }
 
-const setModel = (state: SetupState, name: ReviewerName, field: ModelKey, value: string | undefined): SetupState => ({
+const setModel = (state: SetupState, name: ReviewerId, field: ModelKey, value: string | undefined): SetupState => ({
   ...state,
   models: { ...state.models, [name]: { ...state.models[name], [field]: value } },
   typing: undefined,
@@ -331,8 +363,8 @@ function move(state: SetupState, key: string, n: number): SetupState {
 }
 
 /** The step that picks one reviewer's model or effort: a list of values, with "other" opening a text input. */
-function modelStep(name: ReviewerName, field: ModelKey): Step {
-  const { product, choices } = HARNESSES[name];
+function modelStep(name: ReviewerId, harness: HarnessName, field: ModelKey): Step {
+  const { product, choices } = HARNESSES[harness];
   const rows = (state: SetupState, ctx: SetupContext) => modelRows(name, field, state, ctx);
   return {
     group: 'Models',
@@ -369,7 +401,7 @@ function modelStep(name: ReviewerName, field: ModelKey): Step {
     cursor: (state, ctx) =>
       Math.max(
         0,
-        rows(state, ctx).findIndex((row) => !row.other && row.value === state.models[name][field]),
+        rows(state, ctx).findIndex((row) => !row.other && row.value === state.models[name]![field]),
       ),
     onKey: (state, key, ctx) => {
       if (state.typing !== undefined) {
@@ -466,28 +498,33 @@ const REPOS_STEP: Step = {
 const REVIEWERS_STEP: Step = {
   group: 'Reviewers',
   body: (state, ctx, paint, height) => {
-    const found = REVIEWERS.filter((name) => ctx.installed[name]).length;
-    const modelText = (name: ReviewerName) => {
-      const { model, effort } = state.models[name];
+    const found = HARNESS_NAMES.filter((name) => ctx.installed[name]).length;
+    const modelText = (name: ReviewerId) => {
+      const { model, effort } = state.models[name]!;
       return [model ?? 'default model', effort && `effort ${effort}`].filter(Boolean).join(' · ');
     };
-    const width = (text: (name: ReviewerName) => string) => Math.max(...ctx.options.map((n) => text(n).length));
-    const [nameW, productW, modelW] = [width((n) => n), width((n) => HARNESSES[n].product), width(modelText)];
+    const product = (name: ReviewerId) => HARNESSES[ctx.harnessOf[name]!].product;
+    const width = (text: (name: ReviewerId) => string) => Math.max(...ctx.options.map((n) => text(n).length));
+    const [nameW, productW, modelW] = [width((n) => n), width(product), width(modelText)];
     const rows = ctx.options.map((name, i) => {
       const active = i === state.cursor;
+      const harness = ctx.harnessOf[name]!;
       const row = [
         active ? paint(CYAN, '›') : ' ',
         state.selected.includes(name) ? paint(GREEN, '■') : paint(DIM, '□'),
         paint(active ? BOLD : '', name.padEnd(nameW)),
-        ` ${HARNESSES[name].product.padEnd(productW)}`,
+        ` ${product(name).padEnd(productW)}`,
         ` ${modelText(name).padEnd(modelW)}`,
-        ctx.installed[name] ? '' : ` ${paint(YELLOW, 'not found on PATH')}`,
+        ctx.installed[harness] ? '' : ` ${paint(YELLOW, `${harness === name ? '' : `${harness} `}not found on PATH`)}`,
       ];
       return row.join(' ').trimEnd();
     });
     const intro =
       found > 0
-        ? paint(DIM, `Found ${found} of ${REVIEWERS.length} supported agent CLIs. Each one selected reviews every PR.`)
+        ? paint(
+            DIM,
+            `Found ${found} of ${HARNESS_NAMES.length} supported agent CLIs. Each one selected reviews every PR.`,
+          )
         : `${paint(YELLOW, '!')} No supported agent CLI is on PATH. Install one, then run setup again.`;
     const footer = ctx.notFound.length > 0 ? ['', paint(DIM, `Not installed: ${ctx.notFound.join(', ')}`)] : [];
     return [
@@ -535,11 +572,11 @@ function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] 
     ),
     ...dropped.map((row) => `${row.fullName.padEnd(nameW)}  ${paint(YELLOW, 'removed')}`),
   ].map((text, i) => `  ${paint(DIM, (i === 0 ? 'repos' : '').padEnd(width))}  ${text}`);
-  const settings = (name: ReviewerName) =>
-    modelKeys(name)
+  const settings = (name: ReviewerId) =>
+    modelKeys(ctx.harnessOf[name]!)
       .map((key) => {
-        const show = (v: string | undefined) => v ?? `${HARNESSES[name].bins[0]}'s default`;
-        const [was, now] = [ctx.models[name][key], state.models[name][key]];
+        const show = (v: string | undefined) => v ?? `${HARNESSES[ctx.harnessOf[name]!].bins[0]}'s default`;
+        const [was, now] = [ctx.models[name]![key], state.models[name]![key]];
         return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
       })
       .join(' · ');
@@ -550,14 +587,25 @@ function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] 
         (row) => `${paint(YELLOW, '!')} ${row.fullName} has no clone at ${tildify(row.localPath)}, so its reviews fail`,
       ),
     ...state.selected
-      .filter((name) => !ctx.installed[name])
-      .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`),
+      .filter((name) => !ctx.installed[ctx.harnessOf[name]!])
+      .map((name) => {
+        const harness = ctx.harnessOf[name]!;
+        const what = harness === name ? `${name} is` : `${name} runs ${harness}, which is`;
+        return `${paint(YELLOW, '!')} ${what} not on PATH, so its reviews fail until it is installed`;
+      }),
   ];
+  // Routes are edited in the file only, so they are listed as they are, and saving keeps them.
+  const routeRows = (Array.isArray(ctx.raw?.routes) ? ctx.raw.routes : []).map((entry: unknown, i: number) => {
+    const route = plain(entry);
+    const runs = route.skip === true ? 'skip' : [route.reviewers].flat().filter(Boolean).join(', ') || '?';
+    return `  ${paint(DIM, (i === 0 ? 'routes' : '').padEnd(width))}  ${asText(route.name) ?? '?'} ${paint(DIM, '→')} ${runs}`;
+  });
   return [
     ...(warnings.length > 0 ? [...warnings, ''] : []),
     ...repoRows,
     `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
     ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
+    ...routeRows,
   ];
 }
 
@@ -579,23 +627,26 @@ const SAVE_STEP: Step = {
 };
 
 /** The repos and reviewers steps, a model and (where the CLI takes one) an effort step per selected reviewer, then save. */
-const steps = (state: SetupState): Step[] => [
+const steps = (state: SetupState, ctx: SetupContext): Step[] => [
   REPOS_STEP,
   REVIEWERS_STEP,
-  ...state.selected.flatMap((name) => modelKeys(name).map((field) => modelStep(name, field))),
+  ...state.selected.flatMap((name) => {
+    const harness = ctx.harnessOf[name]!;
+    return modelKeys(harness).map((field) => modelStep(name, harness, field));
+  }),
   SAVE_STEP,
 ];
 
 /** Moves to step `index` with the row that step starts on highlighted. */
 function goTo(state: SetupState, index: number, ctx: SetupContext): SetupState {
   const next: SetupState = { ...state, step: index, error: undefined, typing: undefined };
-  return { ...next, cursor: steps(next)[index]!.cursor?.(next, ctx) ?? 0 };
+  return { ...next, cursor: steps(next, ctx)[index]!.cursor?.(next, ctx) ?? 0 };
 }
 
 /** Applies one key from `parseKeys`. Sets `done` when the user saves or quits. */
 export function reduce(state: SetupState, key: string, ctx: SetupContext): SetupState {
   if (key === 'ctrl-c') return { ...state, done: 'cancel' };
-  const list = steps(state);
+  const list = steps(state, ctx);
   const step = list[state.step]!;
   // A key the step handles clears the last error, unless the step raises one of its own.
   const cleared = state.error === undefined ? state : { ...state, error: undefined };
@@ -620,7 +671,7 @@ export function reduce(state: SetupState, key: string, ctx: SetupContext): Setup
 /** `height` is the terminal's row count; the lists scroll when the frame would not fit. */
 export function renderSetup(state: SetupState, ctx: SetupContext, color: boolean, height = Infinity): string[] {
   const paint: Paint = (code, text) => (color && code && text ? `\x1b[${code}m${text}\x1b[0m` : text);
-  const list = steps(state);
+  const list = steps(state, ctx);
   const step = list[state.step]!;
   const pages = list.filter((s) => s.group === 'Models');
   const active = GROUPS.indexOf(step.group);

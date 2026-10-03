@@ -6,15 +6,9 @@ import type { ResolvedJob } from './types.ts';
 
 export const baseRemoteRef = (job: ResolvedJob) => `origin/${job.baseRef}`;
 
-/** Checks out the PR head in a detached worktree of the local clone, runs `fn`, then removes it. */
-export async function withWorktree<T>(
-  repo: RepoConfig,
-  job: ResolvedJob,
-  dataDir: string,
-  fn: (dir: string) => Promise<T>,
-): Promise<T> {
+/** Fetches the base branch and the PR head into the local clone, so the diff can be read before any checkout. */
+export async function fetchPr(repo: RepoConfig, job: ResolvedJob): Promise<void> {
   const git = (...args: string[]) => execOrThrow(['git', '-C', repo.localPath, ...args]);
-
   // `refs/pull/N/head` also covers fork PRs, whose commits are not on any branch of origin.
   await git(
     'fetch',
@@ -25,12 +19,20 @@ export async function withWorktree<T>(
   );
   const hasCommit = await exec(['git', '-C', repo.localPath, 'cat-file', '-e', `${job.headSha}^{commit}`]);
   if (hasCommit.code !== 0) await git('fetch', '--quiet', 'origin', job.headSha);
+}
 
+/** Checks out the fetched PR head in a detached worktree of the local clone, runs `fn`, then removes it. */
+export async function withCheckout<T>(
+  repo: RepoConfig,
+  job: ResolvedJob,
+  dataDir: string,
+  fn: (dir: string) => Promise<T>,
+): Promise<T> {
   const root = join(dataDir, 'worktrees');
   mkdirSync(root, { recursive: true });
   const dir = join(root, `${job.repo.replace('/', '__')}-pr${job.pr}-${job.headSha.slice(0, 8)}`);
   await exec(['git', '-C', repo.localPath, 'worktree', 'remove', '--force', dir]);
-  await git('worktree', 'add', '--detach', '--quiet', dir, job.headSha);
+  await execOrThrow(['git', '-C', repo.localPath, 'worktree', 'add', '--detach', '--quiet', dir, job.headSha]);
   try {
     return await fn(dir);
   } finally {

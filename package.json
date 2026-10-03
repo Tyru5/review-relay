@@ -28,6 +28,7 @@
     "relay:help": "scripts/relay help",
     "relay:config": "scripts/relay config",
     "relay:run": "scripts/relay run",
+    "relay:route": "scripts/relay route",
     "relay:replay": "scripts/relay replay",
     "lint": "oxlint --fix",
     "lint:check": "oxlint",
