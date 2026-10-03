@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
 import type { JobRecord } from './state.ts';
-import type { ReviewerName } from './types.ts';
+import type { ReviewerId } from './types.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
 
 interface ReviewerMeta {
-  name: ReviewerName;
+  name: ReviewerId;
   ok: boolean;
   score?: number;
   error?: string;
@@ -73,7 +73,7 @@ const countCell = (n: number, color: string): Cell => (n > 0 ? { text: String(n)
 
 export interface StatusOptions {
   dataDir: string;
-  reviewers: ReviewerName[];
+  reviewers: ReviewerId[];
   color: boolean;
   now?: number;
 }

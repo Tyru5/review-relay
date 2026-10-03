@@ -46,15 +46,17 @@ bun src/cli.ts start
 
 ## Config
 
-`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step picks the repos to watch (↑/↓ to move, space to toggle, enter to continue): it lists the repos the config already names, then every GitHub clone it finds up to four folders deep under your home folder (hidden folders, `node_modules`, and build output are skipped), and `other` takes the path of a clone anywhere else. The configured repos start selected, or, for a new config, the clone setup was run from. A configured repo whose clone is no longer at its path is moved to the clone when that is unambiguous (the clone setup was run from, or the only one found); otherwise it stays selected with a warning, and typing its new path under `other` moves it. A new repo is saved with just `fullName` and `localPath`, so it gets the defaults below (`auto` trigger, posting to the PR); a repo already in the config keeps its entry as it was (with the new path when it moved), and one toggled off is removed. The next step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs. Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default clears that field in the file, except that a file which already pins the default value keeps it. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and each repo's `trigger`, are kept.
+`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step picks the repos to watch (↑/↓ to move, space to toggle, enter to continue): it lists the repos the config already names, then every GitHub clone it finds up to four folders deep under your home folder (hidden folders, `node_modules`, and build output are skipped), and `other` takes the path of a clone anywhere else. The configured repos start selected, or, for a new config, the clone setup was run from. A configured repo whose clone is no longer at its path is moved to the clone when that is unambiguous (the clone setup was run from, or the only one found); otherwise it stays selected with a warning, and typing its new path under `other` moves it. A new repo is saved with just `fullName` and `localPath`, so it gets the defaults below (`auto` trigger, posting to the PR); a repo already in the config keeps its entry as it was (with the new path when it moved), and one toggled off is removed. The next step lists the supported agent CLIs it finds on PATH, plus any the config already names and its [custom reviewers](#custom-reviewers), and picks which ones review PRs. Claude Code and Codex start selected when installed. Then each selected reviewer gets a step that picks its model and, for CLIs that take one, a step that picks its reasoning effort: a list of values the CLI accepts with the current one highlighted, or `other` to type any value. Picking the default clears that field in the file, except that a file which already pins the default value keeps it. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover, such as `provider` and each repo's `trigger`, are kept.
 
 | Field | Default | Meaning |
 | - | - | - |
 | `port` | `9988` | Local port for forwarded webhooks |
 | `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
-| `reviewers` | `["codex", "claude"]` | Which reviewers to run, by the names under [Supported agents](#supported-agents) |
-| `models.<reviewer>` | see below | `model` and `effort` for that reviewer's CLI, passed with the flags listed under Supported agents. Unset means the CLI's own default. `provider` is also read for `hermes`. |
+| `reviewers` | `["codex", "claude"]` | Which reviewers run, by the names under [Supported agents](#supported-agents) or the ids of [custom reviewers](#custom-reviewers) |
+| `models.<id>` | see below | `model` and `effort` for that reviewer's CLI, passed with the flags listed under Supported agents. Unset means review-relay's default for that CLI, below, and otherwise the CLI's own default. `provider` is also read for `hermes`. |
+| `models.<id>.harness` | the id | The CLI a [custom reviewer](#custom-reviewers) runs |
+| `models.<id>.label` | the CLI's name, or the custom id | The reviewer's name in the PR comment |
 | `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | |
 | `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | |
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
@@ -64,6 +66,24 @@ bun src/cli.ts start
 | `repos[].postToPr` | `true` | Post the scored review as one PR comment (edited in place on later reviews) |
 | `repos[].github.onPush` | `false` | Review new commits pushed to an open PR (`synchronize`) |
 | `repos[].github.mention` | `@review-relay` | Comment text that requests a review |
+
+### Custom reviewers
+
+A key in `models` that isn't a CLI name defines a custom reviewer. Its `harness` names the CLI it runs, so one CLI can review with two models, even on the same PR:
+
+```json
+"reviewers": ["claude", "haiku"],
+"models": {
+  "haiku": { "harness": "claude", "model": "claude-haiku-4-5", "label": "Haiku" }
+}
+```
+
+- Ids use lowercase letters, digits, and dashes, up to 32 characters. Each id gets its own report file and `status` column.
+- Unset settings fall back to the CLI's defaults and never to another entry. `haiku` above runs at the claude default effort, `max`, whatever `models.claude` says.
+- The reviewers in `reviewers` need different labels.
+- `setup` lists custom reviewers next to the CLIs and edits their model and effort. Adding or removing one happens in the file.
+
+A mistake in a custom entry stops the config from loading: an unknown setting, a `harness` that isn't a supported CLI, an `effort` for a CLI without one, or a `provider` for anything but hermes. In an entry named after a CLI, an unknown setting, a stray `effort`, or a stray `provider` only prints a warning and is ignored, as before, so configs that loaded still load.
 
 ### Trigger modes
 
@@ -167,7 +187,7 @@ scripts/relay logs [N|-f]
 
 Also available as `bun run relay:<command>` (e.g. `bun run relay:logs -f`). Needs `jq`.
 
-Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<reviewer>.json` per reviewer, and `meta.json`.
+Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
 
 ## How a review runs
 
@@ -195,7 +215,7 @@ Each reviewer reads the repo's own standards (AGENTS.md, CLAUDE.md, CONTRIBUTING
 
 The reviewer also gives an overall merge confidence (5 = merge as is, 4 = minor issues, 3 = fix before merging, 2 = critical issue or wide blast radius with weak tests, 1 = should not merge). Code then applies caps so the number matches the findings: a critical finding limits it to 2, a major finding to 3, and it can be at most one above the weakest dimension.
 
-The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, one `<reviewer>.json` per reviewer, and `meta.json`.
+The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
 
 ## Limits
 

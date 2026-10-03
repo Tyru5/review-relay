@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { HARNESSES, REVIEWER_NAMES } from './reviewers/index.ts';
-import type { ReviewerName, TriggerMode } from './types.ts';
+import { HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
+import type { HarnessName, ReviewerId, TriggerMode } from './types.ts';
 
 export interface GithubTriggerConfig {
   /** Also review on `pull_request.synchronize` (new commits). */
@@ -21,10 +21,16 @@ export interface RepoConfig {
 export interface ModelConfig {
   /** Unset uses the CLI's own default model. */
   model?: string;
-  /** Reasoning effort, for CLIs that take one (claude: low..max, codex: low..ultra). */
+  /** Reasoning effort, for CLIs that take one (claude: low..max, codex: minimal..ultra). */
   effort?: string;
   /** Model provider, for CLIs that take it apart from the model (hermes). */
   provider?: string;
+}
+
+/** A reviewer as reviews run it: the CLI, its name in the PR comment, and the model settings. */
+export interface ReviewerEntry extends ModelConfig {
+  harness: HarnessName;
+  label: string;
 }
 
 export interface Config {
@@ -33,8 +39,10 @@ export interface Config {
   graceMs: number;
   /** Per-reviewer timeout. */
   timeoutMs: number;
-  reviewers: ReviewerName[];
-  models: Record<ReviewerName, ModelConfig>;
+  /** Ids of the reviewers that review every PR. */
+  reviewers: ReviewerId[];
+  /** Every reviewer by id: each CLI under its own name, plus the file's custom entries. */
+  models: Record<ReviewerId, ReviewerEntry>;
   dataDir: string;
   repos: RepoConfig[];
 }
@@ -43,38 +51,138 @@ export const DEFAULT_DATA_DIR = join(homedir(), '.review-relay');
 
 export const defaultConfigPath = () => process.env.REVIEW_RELAY_CONFIG ?? join(DEFAULT_DATA_DIR, 'config.json');
 
-export const REVIEWERS = REVIEWER_NAMES;
-
 /** Reviewers when the config lists none. */
-export const DEFAULT_REVIEWERS: ReviewerName[] = ['codex', 'claude'];
+export const DEFAULT_REVIEWERS: ReviewerId[] = ['codex', 'claude'];
 
+/** Each CLI's settings when its entry sets none; unset ones fall back to the CLI's own default. */
 export const DEFAULT_MODELS = Object.fromEntries(
-  REVIEWERS.map((name) => [name, { ...HARNESSES[name].defaults }]),
-) as Record<ReviewerName, ModelConfig>;
+  HARNESS_NAMES.map((name) => [name, { ...HARNESSES[name].defaults }]),
+) as Record<HarnessName, ModelConfig>;
+
+/** A custom reviewer id; ids become report file names and status columns. */
+export const REVIEWER_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+const ENTRY_FIELDS = ['harness', 'model', 'effort', 'provider', 'label'];
 
 const TRIGGERS: TriggerMode[] = ['auto', 'greptile', 'github'];
 
-export function parseConfig(raw: unknown): Config {
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+/** Unset settings fall back to the CLI's defaults, never to another entry. */
+function resolveEntry(id: ReviewerId, harness: HarnessName, settings: Record<string, string>): ReviewerEntry {
+  const entry: ReviewerEntry = { harness, label: settings.label ?? (id === harness ? HARNESSES[harness].label : id) };
+  const model = settings.model ?? DEFAULT_MODELS[harness].model;
+  const effort = settings.effort ?? DEFAULT_MODELS[harness].effort;
+  if (model) entry.model = model;
+  if (effort) entry.effort = effort;
+  if (settings.provider) entry.provider = settings.provider;
+  return entry;
+}
+
+/**
+ * One entry per reviewer id. A custom entry (one with `harness`) is new, so its mistakes are errors. The shapes older
+ * configs use keep loading: their mistakes go to `warn`, and the setting is ignored as it always was.
+ */
+function parseModels(raw: unknown, warn: (message: string) => void): Record<ReviewerId, ReviewerEntry> {
+  const entries: Record<ReviewerId, ReviewerEntry> = {};
+  for (const name of HARNESS_NAMES) entries[name] = resolveEntry(name, name, {});
+  if (raw === undefined) return entries;
+  if (!isObject(raw)) {
+    warn('models is not an object; ignored');
+    return entries;
+  }
+  for (const [id, value] of Object.entries(raw)) {
+    const cli = isHarness(id);
+    if (!isObject(value) || (!cli && value.harness === undefined)) {
+      warn(
+        cli ? `models.${id} is not an object; ignored` : `models.${id} is not a CLI name and has no harness; ignored`,
+      );
+      continue;
+    }
+    if (value.harness !== undefined && !isHarness(value.harness)) {
+      throw new Error(`models.${id}.harness must be one of ${HARNESS_NAMES.join(', ')}`);
+    }
+    if (cli && value.harness !== undefined && value.harness !== id) {
+      throw new Error(`models.${id}.harness must be "${id}"; a CLI name always runs that CLI`);
+    }
+    if (!cli && !REVIEWER_ID.test(id)) {
+      throw new Error(`models.${id}: custom ids use lowercase letters, digits, and dashes, up to 32 characters`);
+    }
+    const harness = cli ? id : (value.harness as HarnessName);
+    // Mistakes in a custom entry stop the load; in a CLI-named entry, which older configs have, they warn.
+    const reject = (message: string) => {
+      if (!cli) throw new Error(message);
+      warn(`${message}; ignored`);
+    };
+    const settings: Record<string, string> = {};
+    for (const [key, setting] of Object.entries(value)) {
+      if (key === 'harness') continue;
+      if (!ENTRY_FIELDS.includes(key)) {
+        reject(`models.${id}.${key} is not a setting (expected ${ENTRY_FIELDS.join(', ')})`);
+        continue;
+      }
+      if (typeof setting !== 'string' || !setting) throw new Error(`models.${id}.${key} must be a non-empty string`);
+      if (key === 'effort' && !HARNESSES[harness].choices.effort) {
+        reject(`models.${id}.effort: ${harness} has no effort setting`);
+        continue;
+      }
+      if (key === 'provider' && harness !== 'hermes') {
+        reject(`models.${id}.provider: only hermes takes a provider`);
+        continue;
+      }
+      settings[key] = setting;
+    }
+    entries[id] = resolveEntry(id, harness, settings);
+  }
+  return entries;
+}
+
+/** The reviewers every PR gets: ids with an entry, each once, with labels that tell them apart in the comment. */
+function parseReviewers(
+  raw: unknown,
+  models: Record<ReviewerId, ReviewerEntry>,
+  file: unknown,
+  warn: (message: string) => void,
+): ReviewerId[] {
+  const listed = raw ?? DEFAULT_REVIEWERS;
+  if (!Array.isArray(listed)) throw new Error('reviewers must be a list of reviewer ids');
+  if (listed.length === 0) throw new Error('reviewers must name at least one reviewer');
+  const ids: ReviewerId[] = [];
+  for (const id of listed) {
+    if (typeof id !== 'string' || !Object.hasOwn(models, id)) {
+      const named = typeof id === 'string' && isObject(file) && Object.hasOwn(file, id);
+      throw new Error(
+        named
+          ? `unknown reviewer "${id}": models.${id} needs a harness naming its CLI`
+          : `unknown reviewer ${JSON.stringify(id)} (expected a CLI name, ${HARNESS_NAMES.join(', ')}, or a models key with a harness)`,
+      );
+    }
+    if (ids.includes(id)) {
+      warn(`reviewers lists "${id}" twice; it runs once`);
+      continue;
+    }
+    ids.push(id);
+  }
+  const byLabel = new Map<string, ReviewerId>();
+  for (const id of ids) {
+    const { label } = models[id]!;
+    const other = byLabel.get(label.toLowerCase());
+    if (other)
+      throw new Error(`reviewers "${other}" and "${id}" share the label "${label}"; set a different label on one`);
+    byLabel.set(label.toLowerCase(), id);
+  }
+  return ids;
+}
+
+/** Validates and fills in defaults. Problems the file has always been allowed to have go to `warn` instead. */
+export function parseConfig(raw: unknown, warn: (message: string) => void = () => {}): Config {
   if (!raw || typeof raw !== 'object') throw new Error('config must be a JSON object');
   const c = raw as Record<string, any>;
   if (!Array.isArray(c.repos) || c.repos.length === 0) throw new Error('config.repos must list at least one repo');
 
-  const reviewers: ReviewerName[] = c.reviewers ?? DEFAULT_REVIEWERS;
-  for (const r of reviewers) {
-    if (!REVIEWERS.includes(r)) throw new Error(`unknown reviewer "${r}" (expected ${REVIEWERS.join(', ')})`);
-  }
-
-  const models = { ...DEFAULT_MODELS };
-  for (const name of REVIEWERS) {
-    const m = c.models?.[name];
-    if (m === undefined) continue;
-    for (const key of ['model', 'effort', 'provider'] as const) {
-      if (m[key] !== undefined && (typeof m[key] !== 'string' || !m[key])) {
-        throw new Error(`models.${name}.${key} must be a non-empty string`);
-      }
-    }
-    models[name] = { ...DEFAULT_MODELS[name], ...m };
-  }
+  const models = parseModels(c.models, warn);
+  const reviewers = parseReviewers(c.reviewers, models, c.models, warn);
 
   const repos = c.repos.map((r: Record<string, any>, i: number): RepoConfig => {
     if (typeof r.fullName !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r.fullName)) {
@@ -103,12 +211,12 @@ export function parseConfig(raw: unknown): Config {
   };
 }
 
-export async function loadConfig(path = defaultConfigPath()): Promise<Config> {
+export async function loadConfig(path = defaultConfigPath(), warn?: (message: string) => void): Promise<Config> {
   const file = Bun.file(path);
   if (!(await file.exists())) {
     throw new Error(`no config at ${path} (copy config.example.json there, or set REVIEW_RELAY_CONFIG)`);
   }
-  return parseConfig(await file.json());
+  return parseConfig(await file.json(), warn);
 }
 
 export const findRepo = (config: Config, fullName: string | undefined) =>

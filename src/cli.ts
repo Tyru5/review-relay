@@ -50,8 +50,9 @@ async function start(config: Config) {
   const secret = randomBytes(24).toString('hex');
   const server = startServer(config, scheduler, secret);
   log(`listening on http://127.0.0.1:${server.port}/hook (reviewers: ${config.reviewers.join(', ')})`);
-  for (const name of config.reviewers) {
-    if (!findBin(name)) log(`warning: ${HARNESSES[name].bins.join(' or ')} not on PATH, so ${name} reviews will fail`);
+  for (const [harness, ids] of Map.groupBy(config.reviewers, (id) => config.models[id]!.harness)) {
+    if (findBin(harness)) continue;
+    log(`warning: ${HARNESSES[harness].bins.join(' or ')} not on PATH, so ${ids.join(' and ')} reviews will fail`);
   }
 
   const forwarders = config.repos.map(
@@ -143,7 +144,8 @@ async function main() {
   // setup writes the config, so it must not require a valid one first.
   if (command === 'setup') return setup(values.config ?? defaultConfigPath());
 
-  const config = await loadConfig(values.config);
+  // On stderr, so `config` output stays plain JSON.
+  const config = await loadConfig(values.config, (message) => console.error(`warning: ${message}`));
   switch (command) {
     case 'start':
       return start(config);

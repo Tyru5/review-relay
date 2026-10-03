@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findBin, HARNESSES, REVIEWER_NAMES } from '../src/reviewers/index.ts';
+import { findBin, HARNESS_NAMES, HARNESSES } from '../src/reviewers/index.ts';
 import { resultText } from '../src/reviewers/run.ts';
 import type { ReviewerInput } from '../src/reviewers/types.ts';
 import { removeProjectFiles } from '../src/runner.ts';
-import type { ReviewerName } from '../src/types.ts';
+import type { HarnessName } from '../src/types.ts';
 import { DIMENSIONS, type Verdict } from '../src/verdict.ts';
 
 const verdict: Verdict = {
@@ -67,7 +67,7 @@ exit ${opts.exitCode ?? 0}
   };
 }
 
-const run = (name: ReviewerName, cli: ReturnType<typeof fakeCli>, input: Partial<ReviewerInput> = {}) =>
+const run = (name: HarnessName, cli: ReturnType<typeof fakeCli>, input: Partial<ReviewerInput> = {}) =>
   HARNESSES[name].run({
     bin: cli.bin,
     dir: cli.dir,
@@ -323,7 +323,7 @@ test('copilot hides all but read tools, denies write and shell, and skips instru
 test('only harnesses whose shell is sandboxed or flag-checked get to run git', () => {
   // codex runs commands in its read-only OS sandbox; vibe's plan agent refuses git flags that write or run programs.
   // Any other harness that could run `git diff --output=<file>` or `git grep -O<cmd>` must use the inline diff.
-  expect(REVIEWER_NAMES.filter((name) => HARNESSES[name].shell === 'git')).toEqual(['codex', 'vibe']);
+  expect(HARNESS_NAMES.filter((name) => HARNESSES[name].shell === 'git')).toEqual(['codex', 'vibe']);
 });
 
 test('resultText reads the result envelope after banners and stops on is_error', () => {
@@ -363,7 +363,7 @@ test('findBin takes the first executable on PATH from the harness list', () => {
 
 describe('choices', () => {
   test('every harness lists its defaults among its choices and passes an effort exactly when it offers one', async () => {
-    for (const name of REVIEWER_NAMES) {
+    for (const name of HARNESS_NAMES) {
       const { defaults, choices } = HARNESSES[name];
       if (defaults.model) expect(choices.model).toContain(defaults.model);
       if (defaults.effort) expect(choices.effort).toContain(defaults.effort);

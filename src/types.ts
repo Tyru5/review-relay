@@ -4,7 +4,8 @@ export type TriggerMode = 'auto' | 'greptile' | 'github';
 
 export type JobSource = 'greptile' | 'github' | 'mention' | 'manual';
 
-export type ReviewerName =
+/** A supported agent CLI. */
+export type HarnessName =
   | 'claude'
   | 'codex'
   | 'auggie'
@@ -18,6 +19,9 @@ export type ReviewerName =
   | 'pi'
   | 'qwen'
   | 'vibe';
+
+/** A reviewer: a CLI name, or a custom key in `models` that names its CLI in `harness`. */
+export type ReviewerId = string;
 
 /** A review request. `headSha`/`baseRef` are absent for comment triggers until resolved via `gh`. */
 export interface ReviewJob {
@@ -36,7 +40,16 @@ export interface ResolvedJob extends ReviewJob {
 }
 
 export interface ReviewerResult {
-  name: ReviewerName;
+  /** The reviewer's id, which also names its report file. */
+  name: ReviewerId;
+  harness: HarnessName;
+  /** Name in the PR comment. */
+  label: string;
+  /** What the reviewer ran with; unset model and effort mean the CLI's own default. */
+  model?: string;
+  effort?: string;
+  provider?: string;
+  timeoutMs: number;
   ok: boolean;
   /** Raw reviewer output, kept for debugging. */
   output: string;
