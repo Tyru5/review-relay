@@ -2,8 +2,8 @@ import { basename } from 'node:path';
 import type { Config } from './config.ts';
 import { LOCKFILES, pathsOf, type DiffStats } from './diffstats.ts';
 import { HARNESS_NAMES, HARNESSES } from './reviewers/index.ts';
-import { fmtDuration } from './status.ts';
 import type { JobSource, ResolvedJob, ReviewerId } from './types.ts';
+import { fmtDuration } from './ui.ts';
 
 /** Route names, like reviewer ids, so a mention can name one. */
 export const ROUTE_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;

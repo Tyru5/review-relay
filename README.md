@@ -140,7 +140,7 @@ Route `risky` (wide-impact: bun.lock, .github/workflows/ci.yml) · Claude: claud
 
 `review-relay route --repo owner/name --pr 123` shows which route a PR matches and why, without reviewing it. It fetches the PR, checks every route, and prints the first condition each failed. It works on closed and merged PRs too, so you can try rules on past PRs. `--source mention` shows what a mention would get.
 
-A config error in a route names it, such as `routes[1] "tiny": skip can't use maxLines`. `config` prints the routes as parsed, and `scripts/relay info` lists them.
+A config error in a route names it, such as `routes[1] "tiny": skip can't use maxLines`. `config` prints the routes as parsed, and `info` lists them.
 
 ### Trigger modes
 
@@ -190,16 +190,25 @@ Not evaluated yet: Continue (`cn`), Kimi Code, Letta Code, Qoder, CodeBuddy, Doc
 
 ## Commands
 
+Installed binary (`review-relay`) or repo checkout (`bun src/cli.ts`); both take the same commands:
+
 ```sh
-bun src/cli.ts start                                # watch all configured repos
-bun src/cli.ts run --repo owner/name --pr 123       # review an open PR now
-bun src/cli.ts run --repo owner/name --pr 123 --route risky   # ... with this route
-bun src/cli.ts route --repo owner/name --pr 123     # which route a PR matches and why, without reviewing
-bun src/cli.ts replay events.jsonl --dry-run        # test trigger logic with recorded deliveries
-bun src/cli.ts status [--limit N]                   # recent jobs: scores, per-reviewer timings, finding counts
-bun src/cli.ts config                               # resolved config as JSON
-bun src/cli.ts setup                                # interactive config: pick repos, reviewers, and models, then save
+review-relay start                                  # watch all configured repos in the foreground
+review-relay start -d                               # same, as a background daemon (pid + log in dataDir)
+review-relay stop                                   # SIGTERM so temporary repo webhooks get deleted; forces after 20s
+review-relay restart                                # stop, then start -d
+review-relay status [--limit N]                     # daemon (pid, uptime, endpoint, health), forwarders, recent jobs; exit 3 if stopped
+review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
+review-relay run --repo owner/name --pr 123         # review an open PR now
+review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
+review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
+review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
+review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
+review-relay config                                 # resolved config as JSON (info --json)
+review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
+
+Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `review-relay --help` groups the commands with examples.
 
 ## Development
 
@@ -234,17 +243,9 @@ git tag v0.2.0 && git push origin v0.2.0
 
 ## Daemon control
 
-```sh
-scripts/relay setup      # interactive config; works before a config exists
-scripts/relay start      # background daemon; pid + log in dataDir (daemon.pid, daemon.log)
-scripts/relay stop       # SIGTERM so temporary repo webhooks get deleted; forces after 20s
-scripts/relay restart
-scripts/relay status     # daemon, health, forwarders, recent jobs (exit 3 if stopped)
-scripts/relay info       # resolved config incl. defaults; flags edits not yet applied; --json for raw
-scripts/relay logs [N|-f]
-```
+The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, version, and each `gh webhook forward` child), and `status`, `stop`, and `info` read that record, confirm the pid is still a review-relay process, and ping `GET /health`. Logs from `start -d` go to `<dataDir>/daemon.log`.
 
-Also available as `bun run relay:<command>` (e.g. `bun run relay:logs -f`). Needs `jq`.
+From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 
 Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
 
