@@ -6,7 +6,18 @@
  * review-relay process, and ping `/health` on the port.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 export interface ForwarderInfo {
@@ -41,7 +52,12 @@ export function writeDaemonInfo(dataDir: string, info: DaemonInfo): void {
   writeFileSync(pidFilePath(dataDir), `${info.pid}\n`);
 }
 
-export function clearDaemonInfo(dataDir: string): void {
+/** Removes the record; with `pid`, only while the record still names that pid (a newer daemon may own it now). */
+export function clearDaemonInfo(dataDir: string, pid?: number): void {
+  if (pid !== undefined) {
+    const recorded = readInfoFile(dataDir)?.pid ?? readLegacyPid(dataDir);
+    if (recorded !== null && recorded !== pid) return;
+  }
   for (const path of [daemonInfoPath(dataDir), pidFilePath(dataDir)]) rmSync(path, { force: true });
 }
 
@@ -55,30 +71,76 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** The process's command line, or null when it cannot be read. */
-export function commandLine(pid: number): string | null {
+export interface ProcessInfo {
+  commandLine: string;
+  /** Epoch ms the process started, when the platform reports it. */
+  startedMs: number | null;
+}
+
+function powershell(script: string): string | null {
+  const out = Bun.spawnSync(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
+    stdout: 'pipe',
+    stderr: 'ignore',
+  });
+  return out.success ? out.stdout.toString().trim() : null;
+}
+
+/** Seconds the process has been running, from `ps`; null when unavailable. */
+function elapsedSeconds(pid: number): number | null {
+  const out = Bun.spawnSync(['ps', '-o', 'etimes=', '-p', String(pid)], { stdout: 'pipe', stderr: 'ignore' });
+  const n = Number(out.stdout.toString().trim());
+  return out.success && Number.isFinite(n) ? n : null;
+}
+
+/** Command line and start time of a process, or null when it cannot be read (gone, or no permission). */
+export function probeProcess(pid: number): ProcessInfo | null {
   try {
-    if (process.platform === 'linux') return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
-    const out = Bun.spawnSync(['ps', '-o', 'args=', '-p', String(pid)], { stdout: 'pipe', stderr: 'ignore' });
-    return out.success ? out.stdout.toString().trim() : null;
+    if (process.platform === 'win32') {
+      // One CIM query for both; `ps` does not exist on a stock Windows install.
+      const raw = powershell(
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { ConvertTo-Json @{ cmd = $p.CommandLine; start = [int64](Get-Date $p.CreationDate -UFormat %s) * 1000 } }`,
+      );
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { cmd?: string | null; start?: number };
+      return parsed.cmd ? { commandLine: parsed.cmd, startedMs: parsed.start ?? null } : null;
+    }
+    let commandLine: string | null;
+    if (process.platform === 'linux') {
+      commandLine = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
+    } else {
+      const out = Bun.spawnSync(['ps', '-o', 'args=', '-p', String(pid)], { stdout: 'pipe', stderr: 'ignore' });
+      commandLine = out.success ? out.stdout.toString().trim() : null;
+    }
+    if (!commandLine) return null;
+    const elapsed = elapsedSeconds(pid);
+    return { commandLine, startedMs: elapsed === null ? null : Date.now() - elapsed * 1000 };
   } catch {
     return null;
   }
 }
 
+/** The process's command line, or null when it cannot be read. */
+export const commandLine = (pid: number): string | null => probeProcess(pid)?.commandLine ?? null;
+
+/** True for a `review-relay start` (or `bun src/cli.ts start`) command line. */
+export const isRelayCommand = (cmd: string): boolean => /\bstart\b/.test(cmd) && /review-relay|cli\.ts/.test(cmd);
+
 /** True when the pid is a `review-relay start` (or `bun src/cli.ts start`) process. */
 export function isRelayProcess(pid: number): boolean {
   const cmd = commandLine(pid);
-  if (!cmd) return false;
-  return /\bstart\b/.test(cmd) && /review-relay|cli\.ts/.test(cmd);
+  return cmd !== null && isRelayCommand(cmd);
 }
 
-/** Seconds the process has been running, from `ps`; null when unavailable (Windows, or the pid is gone). */
-function elapsedSeconds(pid: number): number | null {
-  if (process.platform === 'win32') return null;
-  const out = Bun.spawnSync(['ps', '-o', 'etimes=', '-p', String(pid)], { stdout: 'pipe', stderr: 'ignore' });
-  const n = Number(out.stdout.toString().trim());
-  return out.success && Number.isFinite(n) ? n : null;
+/**
+ * Pids get reused. A process that started well after the record was written is a different daemon,
+ * even when it is also `review-relay start`; the record's own daemon started just before it was written.
+ */
+export const RECORD_SKEW_MS = 10_000;
+export function matchesRecord(proc: ProcessInfo, startedAt: string | null): boolean {
+  if (!isRelayCommand(proc.commandLine)) return false;
+  if (startedAt === null || proc.startedMs === null) return true;
+  const recorded = Date.parse(startedAt);
+  return Number.isNaN(recorded) || proc.startedMs <= recorded + RECORD_SKEW_MS;
 }
 
 function readInfoFile(dataDir: string): DaemonInfo | null {
@@ -151,13 +213,12 @@ export async function inspectDaemon(dataDir: string, port: number): Promise<Daem
     forwarders: [],
     foreign: false,
   };
-  if (pid !== null && isAlive(pid) && isRelayProcess(pid)) {
+  const proc = pid !== null && isAlive(pid) ? probeProcess(pid) : null;
+  if (pid !== null && proc && matchesRecord(proc, info?.startedAt ?? null)) {
     state.running = true;
-    const elapsed = elapsedSeconds(pid);
-    state.uptimeMs =
-      elapsed !== null ? elapsed * 1000 : info?.startedAt ? Date.now() - Date.parse(info.startedAt) : null;
-    if (state.startedAt === null && elapsed !== null)
-      state.startedAt = new Date(Date.now() - elapsed * 1000).toISOString();
+    const startedMs = proc.startedMs ?? (info?.startedAt ? Date.parse(info.startedAt) : null);
+    state.uptimeMs = startedMs === null ? null : Date.now() - startedMs;
+    if (state.startedAt === null && startedMs !== null) state.startedAt = new Date(startedMs).toISOString();
     state.health = await probeHealth(state.port);
     state.forwarders = (info?.forwarders ?? []).map((f) => ({ ...f, alive: f.pid !== null && isAlive(f.pid) }));
     return state;
@@ -223,7 +284,8 @@ export async function stopDaemon(state: DaemonState, dataDir: string, graceMs = 
     signal(pid, 'SIGKILL');
     for (const f of state.forwarders) if (f.pid) signal(-f.pid, 'SIGINT');
   }
-  clearDaemonInfo(dataDir);
+  // A daemon started meanwhile owns the record now; leave it alone.
+  clearDaemonInfo(dataDir, pid);
   return { pid, clean };
 }
 
@@ -236,3 +298,39 @@ function signal(target: number, sig: NodeJS.Signals): void {
 }
 
 export const logExists = (dataDir: string) => existsSync(logFilePath(dataDir));
+
+/** Bytes `[from, to)` of a file, decoded as one UTF-8 string. */
+export function readRange(path: string, from: number, to: number): string {
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.alloc(Math.max(0, to - from));
+    readSync(fd, buf, 0, buf.length, from);
+    return buf.toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Last `n` lines of a file, reading from the end in chunks and decoding once so multibyte text stays intact. */
+export function readLast(path: string, n: number, chunk = 64 * 1024): string[] {
+  if (n <= 0) return [];
+  const fd = openSync(path, 'r');
+  try {
+    let pos = statSync(path).size;
+    const parts: Buffer[] = [];
+    let newlines = 0;
+    while (pos > 0 && newlines <= n) {
+      const len = Math.min(chunk, pos);
+      pos -= len;
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, pos);
+      parts.unshift(buf);
+      for (const byte of buf) if (byte === 10) newlines++;
+    }
+    const lines = Buffer.concat(parts).toString('utf8').split('\n');
+    if (lines.at(-1) === '') lines.pop();
+    return lines.slice(-n);
+  } finally {
+    closeSync(fd);
+  }
+}

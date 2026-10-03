@@ -11,6 +11,5 @@ case "$cmd" in
     # Old form: logs [N] [-f|--follow]; -f and --follow are flags, N is positional.
     args=(); for a in "$@"; do [[ "$a" == --follow ]] && a=-f; args+=("$a"); done
     exec bun "$ROOT/src/cli.ts" logs "${args[@]}" ;;
-  info) [[ "${1:-}" == --json ]] && exec bun "$ROOT/src/cli.ts" config; exec bun "$ROOT/src/cli.ts" info "$@" ;;
   *) exec bun "$ROOT/src/cli.ts" "$cmd" "$@" ;;
 esac
