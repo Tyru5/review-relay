@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { parseNumstat } from '../src/diffstats.ts';
 import { combinedScore, commentBody } from '../src/report.ts';
+import { HARNESSES } from '../src/reviewers/index.ts';
 import type { ResolvedJob, ReviewerResult } from '../src/types.ts';
 import {
   DIMENSIONS,
@@ -119,8 +120,14 @@ describe('commentBody', () => {
     baseRef: 'main',
   };
   const stats = parseNumstat('10\t2\tsrc/a.ts');
-  const result = (name: 'codex' | 'claude', v: Verdict): ReviewerResult => ({
+  const ran = (name: 'codex' | 'claude') => ({
     name,
+    harness: name,
+    label: HARNESSES[name].label,
+    timeoutMs: 1_800_000,
+  });
+  const result = (name: 'codex' | 'claude', v: Verdict): ReviewerResult => ({
+    ...ran(name),
     ok: true,
     output: '',
     verdict: v,
@@ -141,7 +148,7 @@ describe('commentBody', () => {
 
   test('a failed reviewer is shown and excluded from the score', () => {
     const failed: ReviewerResult = {
-      name: 'codex',
+      ...ran('codex'),
       ok: false,
       output: '',
       error: 'timed out after 1800s',

@@ -23,14 +23,14 @@ test('parseConfig applies defaults and validates trigger modes', () => {
   });
   expect(config.graceMs).toBe(120_000);
   expect(config.reviewers).toEqual(['codex', 'claude']);
-  expect(config.models.claude).toEqual({ model: 'claude-opus-5-5', effort: 'max' });
-  expect(config.models.codex).toEqual({ model: 'gpt-6-astra', effort: 'high' });
+  expect(config.models.claude).toEqual({ harness: 'claude', label: 'Claude', model: 'claude-opus-5-5', effort: 'max' });
+  expect(config.models.codex).toEqual({ harness: 'codex', label: 'Codex', model: 'gpt-6-astra', effort: 'high' });
   const tuned = parseConfig({
     repos: [{ fullName: 'Tyru5/Agendex', localPath: '/tmp/x' }],
     models: { codex: { effort: 'xhigh' } },
   });
-  expect(tuned.models.codex).toEqual({ model: 'gpt-6-astra', effort: 'xhigh' });
-  expect(tuned.models.claude.model).toBe('claude-opus-5-5');
+  expect(tuned.models.codex).toEqual({ harness: 'codex', label: 'Codex', model: 'gpt-6-astra', effort: 'xhigh' });
+  expect(tuned.models.claude!.model).toBe('claude-opus-5-5');
   expect(() =>
     parseConfig({ repos: [{ fullName: 'a/b', localPath: '/x' }], models: { claude: { model: '' } } }),
   ).toThrow();

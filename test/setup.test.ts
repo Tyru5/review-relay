@@ -55,7 +55,7 @@ const render = (state: SetupState, ctx: SetupContext, height?: number) =>
 /** Keys that go from the reviewers step to the save step keeping every pick: one enter per model step. */
 const walk = (ctx: SetupContext) => [
   'enter',
-  ...initialState(ctx).selected.flatMap((name) => modelKeys(name).map(() => 'enter')),
+  ...initialState(ctx).selected.flatMap((name) => modelKeys(ctx.harnessOf[name]!).map(() => 'enter')),
 ];
 
 describe('setupContext', () => {
@@ -439,7 +439,7 @@ describe('model steps', () => {
       models: { claude: { model: 'claude-sonnet-5-5', effort: 'max' } },
     });
     const state = press(changed, ['enter', 'up', 'up', 'enter']);
-    expect(state.models.claude.model).toBe('claude-opus-5-5');
+    expect(state.models.claude!.model).toBe('claude-opus-5-5');
     expect(nextModels(state, changed)).toEqual({ claude: { effort: 'max' } });
     expect(hasChanges(state, changed)).toBe(true);
     const pinned = ctxFor({ reviewers: ['claude'], models: { claude: { model: 'claude-opus-5-5' } } });
@@ -452,7 +452,7 @@ describe('model steps', () => {
     const ctx = ctxFor({ reviewers: ['claude'], models: { claude: { model: 'claude-opus-4-8' } } });
     const state = press(ctx, ['enter']);
     expect(render(state, ctx)).toMatch(/› claude-opus-4-8\n\s+claude-opus-5-5\s+default\n/);
-    expect(press(ctx, ['enter'], state).models.claude.model).toBe('claude-opus-4-8');
+    expect(press(ctx, ['enter'], state).models.claude!.model).toBe('claude-opus-4-8');
     expect(nextModels(press(ctx, ['enter'], state), ctx)).toEqual({ claude: { model: 'claude-opus-4-8' } });
   });
 
@@ -491,7 +491,7 @@ describe('model steps', () => {
     expect(back.typing).toBeUndefined();
     expect(press(ctx, ['q'], back).done).toBe('cancel');
     const done = press(ctx, ['enter'], typing);
-    expect(done.models.claude.model).toBe('qwen');
+    expect(done.models.claude!.model).toBe('qwen');
     expect(done.step).toBe(list.step + 1);
     expect(done.typing).toBeUndefined();
     expect(render(press(ctx, ['left'], done), ctx)).toMatch(/› qwen\n\s+claude-opus-5-5\s+default\n/);
@@ -514,6 +514,55 @@ describe('model steps', () => {
     const cleared = press(ctx, ['enter', 'enter', 'enter', 'up', 'enter', 'enter']);
     expect(nextModels(cleared, ctx)).toEqual({ claude: {} });
     expect(render(cleared, ctx)).toContain('codex      model gpt-6-sol → gpt-6-astra · effort high');
+  });
+});
+
+describe('custom reviewers', () => {
+  const HAIKU = { harness: 'claude', model: 'claude-haiku-4-5', label: 'Haiku' };
+
+  test('are rows with their CLI: configured ones first, the rest after the installed CLIs', () => {
+    const ctx = ctxFor({ reviewers: ['haiku', 'codex'], models: { haiku: HAIKU, spare: { harness: 'gemini' } } });
+    expect(ctx.options).toEqual(['haiku', 'codex', 'claude', 'spare']);
+    expect(ctx.harnessOf.haiku).toBe('claude');
+    expect(ctx.models.haiku).toEqual({ model: 'claude-haiku-4-5', effort: 'max' });
+    expect(initialState(ctx).selected).toEqual(['haiku', 'codex']);
+    const text = render(atReviewers(ctx), ctx);
+    expect(text).toMatch(/› ■ haiku\s+Claude Code\s+claude-haiku-4-5 · effort max\n/);
+    expect(text).toMatch(/ {2}□ spare\s+Gemini CLI\s+default model\s+gemini not found on PATH/);
+  });
+
+  test("get their CLI's model and effort steps, and walking through changes nothing", () => {
+    const ctx = ctxFor({ reviewers: ['haiku'], models: { haiku: HAIKU } });
+    const model = press(ctx, ['enter']);
+    expect(render(model, ctx)).toContain('Which model should haiku (Claude Code) use?');
+    expect(render(model, ctx)).toMatch(/› claude-haiku-4-5\n/);
+    const effort = press(ctx, ['enter'], model);
+    expect(render(effort, ctx)).toContain('How much reasoning effort should haiku (Claude Code) use?');
+    const save = press(ctx, ['enter'], effort);
+    expect(nextModels(save, ctx)).toEqual({ haiku: HAIKU });
+    expect(hasChanges(save, ctx)).toBe(false);
+    expect(render(save, ctx)).toMatch(/haiku\s+model claude-haiku-4-5 · effort max/);
+  });
+
+  test('picking the CLI default clears the field and keeps harness and label', () => {
+    const ctx = ctxFor({ reviewers: ['haiku'], models: { haiku: HAIKU } });
+    // claude-opus-5-5, the claude default, is three rows above claude-haiku-4-5.
+    const state = press(ctx, ['enter', 'up', 'up', 'up', 'enter', 'enter']);
+    expect(nextModels(state, ctx)).toEqual({ haiku: { harness: 'claude', label: 'Haiku' } });
+  });
+
+  test('warn on save when their CLI is missing; invalid entries are not rows and stay in the file', () => {
+    const models = { haiku: HAIKU, Bad: { harness: 'claude' }, odd: { harness: 'cursor' } };
+    const ctx = ctxFor({ reviewers: ['haiku', 'codex'], models }, ['codex']);
+    expect(ctx.options).toEqual(['haiku', 'codex']);
+    expect(initialState(ctx).selected).toEqual(['codex']);
+    const both = press(ctx, ['space']);
+    expect(both.selected).toEqual(['haiku', 'codex']);
+    const save = press(ctx, ['enter', 'enter', 'enter', 'enter', 'enter'], both);
+    expect(render(save, ctx)).toContain(
+      '! haiku runs claude, which is not on PATH, so its reviews fail until it is installed',
+    );
+    expect(nextModels(save, ctx)).toEqual(models);
   });
 });
 
@@ -555,7 +604,11 @@ describe('renderSetup', () => {
     const everything = Object.keys(HARNESSES);
     const ctx = ctxFor({ reviewers: everything }, everything.slice(0, -2));
     const all = { ...atReviewers(ctx), selected: ctx.options };
-    const save = press(ctx, ['enter', ...ctx.options.flatMap((name) => modelKeys(name).map(() => 'enter'))], all);
+    const save = press(
+      ctx,
+      ['enter', ...ctx.options.flatMap((name) => modelKeys(ctx.harnessOf[name]!).map(() => 'enter'))],
+      all,
+    );
     const top = renderSetup(save, ctx, false, 24);
     expect(top.length).toBeLessThanOrEqual(24);
     expect(top.join('\n')).toContain('Nothing changed.');

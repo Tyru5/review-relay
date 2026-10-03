@@ -134,9 +134,14 @@ cmd_stop() {
 }
 
 cmd_info() {
-  local json
-  json="$(cd "$ROOT" && bun src/cli.ts config --config "$CONFIG" 2>&1)" || { err "invalid config: $json"; return 1; }
-  [[ "${1:-}" == --json ]] && { echo "$json"; return 0; }
+  local json errs warnings
+  # Warnings go to stderr, so read them apart from the JSON.
+  errs="$(mktemp)"
+  json="$(cd "$ROOT" && bun src/cli.ts config --config "$CONFIG" 2>"$errs")" || {
+    err "invalid config: $(cat "$errs")"; rm -f "$errs"; return 1
+  }
+  warnings="$(cat "$errs")"; rm -f "$errs"
+  [[ "${1:-}" == --json ]] && { [[ -n "$warnings" ]] && echo "$warnings" >&2; echo "$json"; return 0; }
 
   local pid file_note=""
   if pid="$(daemon_pid)"; then
@@ -159,11 +164,12 @@ cmd_info() {
   }
 
   echo; echo "${B}Reviewers${N}"
-  # Harnesses without a configured model or effort use the CLI's own default.
-  jq -r '.reviewers[] as $r | [$r, .models[$r].model // "default model", .models[$r].effort // ""] | @tsv' <<<"$json" |
-  while IFS=$'\t' read -r name model effort; do
+  # Harnesses without a configured model or effort use the CLI's own default. Custom reviewers name their CLI.
+  jq -r '.reviewers[] as $r | [$r, .models[$r].harness, .models[$r].model // "default model", .models[$r].effort // ""] | @tsv' <<<"$json" |
+  while IFS=$'\t' read -r name harness model effort; do
     printf '  %s●%s %-10s %-20s' "$G" "$N" "$name" "$model"
     [[ -n "$effort" ]] && printf ' %seffort%s %s' "$D" "$N" "$effort"
+    [[ "$harness" != "$name" ]] && printf ' %son%s %s' "$D" "$N" "$harness"
     echo
   done
 
@@ -175,6 +181,11 @@ cmd_info() {
       "$D" "$N" "$trigger" "$D" "$N" "$post" "$D" "$N" "$push" "$D" "$N" "$mention"
     printf '      %spath%s    %s\n' "$D" "$N" "${path/#$HOME/\~}"
   done
+
+  if [[ -n "$warnings" ]]; then
+    echo; echo "${B}Warnings${N}"
+    while IFS= read -r line; do printf '  %s!%s %s\n' "$Y" "$N" "${line#warning: }"; done <<<"$warnings"
+  fi
 }
 
 cmd_logs() { exec tail -n "${2:-50}" ${FOLLOW:+-f} "$LOGFILE"; }
