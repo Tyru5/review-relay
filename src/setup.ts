@@ -24,6 +24,8 @@ export interface RepoOption extends Clone {
   entry?: Record<string, any>;
   /** False for a configured repo with no clone at its path. */
   exists: boolean;
+  /** For a configured repo with no clone at its path, how many clones of it were found: more than one is for the user to pick from. */
+  candidates?: number;
   on: boolean;
 }
 
@@ -131,28 +133,32 @@ const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const entryPath = (entry: Record<string, any>) => untildify(asText(entry.localPath) ?? '');
 
 /**
- * Adds `clone` to `rows`, or when a row already names its repo, moves that row to the clone's path if the row's own
- * path has no clone (the clone moved since the file was written).
+ * A configured row whose path has no clone, moved to where its clone is now when that is unambiguous: the clone
+ * setup runs from, or the only clone of that repo found. With several found and none current, the row stays put and
+ * counts them, so the user picks one by typing its path.
  */
-function placeClone(rows: RepoOption[], clone: Clone) {
-  const known = rows.find((row) => sameRepo(row.fullName, clone.fullName));
-  if (!known) return rows.push({ ...clone, exists: true, on: false });
-  if (known.exists || known.localPath === clone.localPath) return;
-  rows.splice(rows.indexOf(known), 1, { ...known, localPath: clone.localPath, exists: true });
+function relocate(row: RepoOption, disk: Disk): RepoOption {
+  if (row.exists) return row;
+  const matches = disk.found.filter((clone) => sameRepo(clone.fullName, row.fullName));
+  const here = disk.here && sameRepo(disk.here.fullName, row.fullName) ? disk.here : undefined;
+  const clone = here ?? (matches.length === 1 ? matches[0] : undefined);
+  return clone ? { ...row, localPath: clone.localPath, exists: true } : { ...row, candidates: matches.length };
 }
 
 /**
- * Rows on the repos step: the file's repos (first entry per name), then the clones found and the clone setup runs
- * from when they aren't among them.
+ * Rows on the repos step: the file's repos (first entry per name, moved to their clone when it is elsewhere), then
+ * the clones found and the clone setup runs from when they aren't among them.
  */
 function repoOptions(current: Record<string, any>[], disk: Disk): RepoOption[] {
   const rows: RepoOption[] = [];
   for (const entry of current) {
     if (rows.some((row) => sameRepo(row.fullName, entry.fullName))) continue;
     const localPath = entryPath(entry);
-    rows.push({ fullName: entry.fullName, localPath, entry, exists: !!disk.at(localPath), on: false });
+    rows.push(relocate({ fullName: entry.fullName, localPath, entry, exists: !!disk.at(localPath), on: false }, disk));
   }
-  for (const clone of [...disk.found, ...(disk.here ? [disk.here] : [])]) placeClone(rows, clone);
+  for (const clone of [...disk.found, ...(disk.here ? [disk.here] : [])]) {
+    if (!rows.some((row) => sameRepo(row.fullName, clone.fullName))) rows.push({ ...clone, exists: true, on: false });
+  }
   return rows;
 }
 
@@ -212,6 +218,12 @@ export function initialState(ctx: SetupContext): SetupState {
   const state = { step: 0, cursor: 0, repos, selected: usable.length > 0 ? usable : first ? [first] : [], models };
   return { ...state, cursor: REPOS_STEP.cursor!(state, ctx) };
 }
+
+/** Why a configured row can't be selected as it is, with the way out when several clones of it were found. */
+const missing = (row: RepoOption) =>
+  (row.candidates ?? 0) > 1
+    ? `no clone at this path; ${row.candidates} found, type one under other`
+    : 'no clone at this path';
 
 /** True for a configured row whose path setup changed, by finding its clone elsewhere or being told where it is. */
 const moved = (row: RepoOption) => !!row.entry && entryPath(row.entry) !== row.localPath;
@@ -408,7 +420,7 @@ const REPOS_STEP: Step = {
         paint(active ? BOLD : '', row.fullName.padEnd(nameW)),
         ` ${tildify(row.localPath).padEnd(pathW)}`,
         ` ${paint(DIM, triggerOf(row))}`,
-        moved(row) ? ` ${paint(GREEN, 'moved')}` : row.exists ? '' : ` ${paint(YELLOW, 'no clone at this path')}`,
+        moved(row) ? ` ${paint(GREEN, 'moved')}` : row.exists ? '' : ` ${paint(YELLOW, missing(row))}`,
       ]
         .join(' ')
         .trimEnd();
