@@ -1,15 +1,43 @@
 import { homedir } from 'node:os';
+import { resolve as resolvePath } from 'node:path';
 import { DEFAULT_MODELS, DEFAULT_REVIEWERS, REVIEWERS, type ModelConfig } from './config.ts';
+import { cloneAround, cloneAt, discoverClones, type Clone } from './repos.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import type { ReviewerName } from './types.ts';
 
 /** The `models` keys setup configures, in the order their steps run. */
 export type ModelKey = 'model' | 'effort';
 
+/** What setup found on disk; the pieces that touch the file system, so tests can stand in for them. */
+export interface Disk {
+  /** GitHub clones found under the home folder. */
+  found: Clone[];
+  /** The clone at a folder the user names, or undefined when there is none. */
+  at: (dir: string) => Clone | undefined;
+  /** The clone setup was run from, listed even when the scan missed it and preselected when the file lists no repos. */
+  here?: Clone;
+}
+
+/** A row on the repos step. */
+export interface RepoOption extends Clone {
+  /** The file's entry for this repo, kept as is (trigger and the rest) when saving, except for a changed `localPath`. */
+  entry?: Record<string, any>;
+  /** False for a configured repo with no clone at its path. */
+  exists: boolean;
+  /** For a configured repo with no clone at its path, how many clones of it were found: more than one is for the user to pick from. */
+  candidates?: number;
+  on: boolean;
+}
+
 export interface SetupContext {
   path: string;
   /** The parsed config file, or undefined when saving creates it. */
   raw: Record<string, any> | undefined;
+  /** The file's `repos` entries that name a repo, in order. */
+  currentRepos: Record<string, any>[];
+  /** Rows on the repos step: configured repos first, so saving keeps their order, then every clone found. */
+  repos: RepoOption[];
+  disk: Disk;
   /** `reviewers` as the file lists them, or the default when unset. */
   current: string[];
   /** Rows on the reviewers step: configured reviewers first, so saving keeps their order, then every installed one. */
@@ -27,10 +55,12 @@ export interface SetupState {
   step: number;
   /** Highlighted row on list steps. */
   cursor: number;
+  /** Like `SetupContext.repos`, with the user's toggles and typed paths applied. */
+  repos: RepoOption[];
   selected: ReviewerName[];
   /** Like `SetupContext.models`, with the user's picks applied. */
   models: Record<ReviewerName, ModelConfig>;
-  /** The text typed on a model step after picking "other"; undefined while its list is shown. */
+  /** The text typed on a list step after picking "other"; undefined while its list is shown. */
   typing?: string;
   /** Why the current step can't be left yet. */
   error?: string;
@@ -40,8 +70,8 @@ export interface SetupState {
 type Paint = (code: string, text: string) => string;
 
 /** Items on the progress line; every model step belongs to the one `Models` item. */
-type Group = 'Reviewers' | 'Models' | 'Save';
-const GROUPS: Group[] = ['Reviewers', 'Models', 'Save'];
+type Group = 'Repos' | 'Reviewers' | 'Models' | 'Save';
+const GROUPS: Group[] = ['Repos', 'Reviewers', 'Models', 'Save'];
 
 interface Step {
   group: Group;
@@ -87,15 +117,64 @@ function windowed(rows: string[], cursor: number, room: number, paint: Paint): s
   ];
 }
 const tildify = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
+const untildify = (path: string) => resolvePath(path.replace(/^~(?=\/|$)/, homedir()));
 
-/** `raw` is the parsed config file, or undefined when there is none yet. `which` looks an executable up on PATH. */
+const NO_DISK: Disk = { found: [], at: () => undefined };
+
+/** The file's `repos` entries setup can show: objects with a `fullName`. Others are dropped on save. */
+const listRepos = (raw: Record<string, any> | undefined): Record<string, any>[] =>
+  (Array.isArray(raw?.repos) ? raw.repos : []).filter(
+    (entry: unknown) => typeof plain(entry).fullName === 'string' && plain(entry).fullName,
+  );
+
+const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** The path an entry sets, as the row compares it. */
+const entryPath = (entry: Record<string, any>) => untildify(asText(entry.localPath) ?? '');
+
+/**
+ * A configured row whose path has no clone, moved to where its clone is now when that is unambiguous: the clone
+ * setup runs from, or the only clone of that repo found. With several found and none current, the row stays put and
+ * counts them, so the user picks one by typing its path.
+ */
+function relocate(row: RepoOption, disk: Disk): RepoOption {
+  if (row.exists) return row;
+  const matches = disk.found.filter((clone) => sameRepo(clone.fullName, row.fullName));
+  const here = disk.here && sameRepo(disk.here.fullName, row.fullName) ? disk.here : undefined;
+  const clone = here ?? (matches.length === 1 ? matches[0] : undefined);
+  return clone ? { ...row, localPath: clone.localPath, exists: true } : { ...row, candidates: matches.length };
+}
+
+/**
+ * Rows on the repos step: the file's repos (first entry per name, moved to their clone when it is elsewhere), then
+ * the clones found and the clone setup runs from when they aren't among them.
+ */
+function repoOptions(current: Record<string, any>[], disk: Disk): RepoOption[] {
+  const rows: RepoOption[] = [];
+  for (const entry of current) {
+    if (rows.some((row) => sameRepo(row.fullName, entry.fullName))) continue;
+    const localPath = entryPath(entry);
+    rows.push(relocate({ fullName: entry.fullName, localPath, entry, exists: !!disk.at(localPath), on: false }, disk));
+  }
+  for (const clone of [...disk.found, ...(disk.here ? [disk.here] : [])]) {
+    if (!rows.some((row) => sameRepo(row.fullName, clone.fullName))) rows.push({ ...clone, exists: true, on: false });
+  }
+  return rows;
+}
+
+/**
+ * `raw` is the parsed config file, or undefined when there is none yet. `which` looks an executable up on PATH, and
+ * `disk` is what the scan for clones found.
+ */
 export function setupContext(
   path: string,
   raw: Record<string, any> | undefined,
   which: (bin: string) => string | null,
+  disk: Disk = NO_DISK,
 ): SetupContext {
   // A bare string (a slip for a one-item list) shows as that one reviewer.
   const current = [raw?.reviewers ?? DEFAULT_REVIEWERS].flat().map(String);
+  const currentRepos = listRepos(raw);
   const installed: SetupContext['installed'] = {};
   for (const name of REVIEWERS) {
     const bin = findBin(name, which);
@@ -113,6 +192,9 @@ export function setupContext(
   return {
     path,
     raw,
+    currentRepos,
+    repos: repoOptions(currentRepos, disk),
+    disk,
     current,
     options,
     installed,
@@ -121,13 +203,49 @@ export function setupContext(
   };
 }
 
-/** Preselects the configured (or default) reviewers that are installed, else the first installed harness. */
+/**
+ * Preselects the configured repos (even one whose clone is missing, so accepting the defaults never drops a repo),
+ * else the clone setup was run from; and the configured (or default) reviewers that are installed, else the first
+ * installed harness.
+ */
 export function initialState(ctx: SetupContext): SetupState {
+  const configured = ctx.repos.filter((row) => row.entry);
+  const here = ctx.disk.here && ctx.repos.find((row) => sameRepo(row.fullName, ctx.disk.here!.fullName));
+  const start = configured.length > 0 ? configured : here ? [here] : [];
+  const repos = ctx.repos.map((row) => ({ ...row, on: start.includes(row) }));
   const usable = ctx.options.filter((name) => ctx.current.includes(name) && ctx.installed[name]);
   const first = ctx.options.find((name) => ctx.installed[name]);
   const models = Object.fromEntries(REVIEWERS.map((name) => [name, { ...ctx.models[name] }])) as SetupState['models'];
-  return { step: 0, cursor: 0, selected: usable.length > 0 ? usable : first ? [first] : [], models };
+  const state = { step: 0, cursor: 0, repos, selected: usable.length > 0 ? usable : first ? [first] : [], models };
+  return { ...state, cursor: REPOS_STEP.cursor!(state, ctx) };
 }
+
+/** Why a configured row can't be selected as it is, with the way out when several clones of it were found. */
+const missing = (row: RepoOption) =>
+  (row.candidates ?? 0) > 1
+    ? `no clone at this path; ${row.candidates} found, type one under other`
+    : 'no clone at this path';
+
+/** True for a configured row whose path setup changed, by finding its clone elsewhere or being told where it is. */
+const moved = (row: RepoOption) => !!row.entry && entryPath(row.entry) !== row.localPath;
+
+/**
+ * The file's `repos` after the toggles: configured entries as they were (with the new path when the row moved), and
+ * a new clone as a minimal entry.
+ */
+export const nextRepos = (state: SetupState): Record<string, any>[] =>
+  state.repos
+    .filter((row) => row.on)
+    .map((row) =>
+      !row.entry
+        ? { fullName: row.fullName, localPath: tildify(row.localPath) }
+        : moved(row)
+          ? { ...row.entry, localPath: tildify(row.localPath) }
+          : row.entry,
+    );
+
+/** The trigger mode a repo's entry sets, or the default. */
+const triggerOf = (row: RepoOption) => asText(row.entry?.trigger) ?? 'auto';
 
 /** The keys a reviewer's model steps set: `effort` only when its CLI takes one. */
 export const modelKeys = (name: ReviewerName): ModelKey[] =>
@@ -158,6 +276,7 @@ export function nextModels(state: SetupState, ctx: SetupContext): Record<string,
 /** Compares against the file's own values, so saving also repairs a malformed `reviewers` or `models`. */
 export const hasChanges = (state: SetupState, ctx: SetupContext) =>
   !ctx.raw ||
+  JSON.stringify(nextRepos(state)) !== JSON.stringify(ctx.raw.repos ?? []) ||
   JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS) ||
   JSON.stringify(nextModels(state, ctx)) !== JSON.stringify(plain(ctx.raw.models));
 
@@ -190,6 +309,26 @@ const setModel = (state: SetupState, name: ReviewerName, field: ModelKey, value:
   models: { ...state.models, [name]: { ...state.models[name], [field]: value } },
   typing: undefined,
 });
+
+/** Keys while a text input is open: editing keys, escape back to the list, and enter handing the text to `use`. */
+function typed(state: SetupState, key: string, use: (text: string) => SetupState): SetupState {
+  const text = state.typing!;
+  if (key === 'escape') return { ...state, typing: undefined };
+  if (key === 'backspace') return { ...state, typing: text.slice(0, -1) };
+  if (key === 'ctrl-u') return { ...state, typing: '' };
+  // An empty input is a change of mind, back to the list.
+  if (key === 'enter') return text ? use(text) : { ...state, typing: undefined };
+  // Printable characters only; named keys, escape sequences, and control characters do nothing.
+  return key.length === 1 && key > ' ' ? { ...state, typing: text + key } : state;
+}
+
+/** Moves the cursor over `n` rows, wrapping; or returns `state` when `key` isn't a movement. */
+function move(state: SetupState, key: string, n: number): SetupState {
+  if (n === 0) return state;
+  if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
+  if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
+  return state;
+}
 
 /** The step that picks one reviewer's model or effort: a list of values, with "other" opening a text input. */
 function modelStep(name: ReviewerName, field: ModelKey): Step {
@@ -234,21 +373,11 @@ function modelStep(name: ReviewerName, field: ModelKey): Step {
       ),
     onKey: (state, key, ctx) => {
       if (state.typing !== undefined) {
-        if (key === 'escape') return { ...state, typing: undefined };
-        if (key === 'backspace') return { ...state, typing: state.typing.slice(0, -1) };
-        if (key === 'ctrl-u') return { ...state, typing: '' };
-        if (key === 'enter') {
-          // An empty input is a change of mind, back to the list.
-          if (!state.typing) return { ...state, typing: undefined };
-          return goTo(setModel(state, name, field, state.typing), state.step + 1, ctx);
-        }
-        // Printable characters only; named keys, escape sequences, and control characters do nothing.
-        return key.length === 1 && key > ' ' ? { ...state, typing: state.typing + key } : state;
+        return typed(state, key, (text) => goTo(setModel(state, name, field, text), state.step + 1, ctx));
       }
       const list = rows(state, ctx);
-      const n = list.length;
-      if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
-      if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
+      const stepped = move(state, key, list.length);
+      if (stepped !== state) return stepped;
       if ((key === 'enter' || key === 'right') && list[state.cursor]?.other) return { ...state, typing: '' };
       return state;
     },
@@ -258,6 +387,81 @@ function modelStep(name: ReviewerName, field: ModelKey): Step {
     },
   };
 }
+
+/**
+ * Selects `clone`: toggles the row at its path, moves the row that names its repo to the typed path and selects it,
+ * or adds a selected row above "other" when no row names it.
+ */
+function selectRepo(state: SetupState, clone: Clone): SetupState {
+  const known = state.repos.find((row) => sameRepo(row.fullName, clone.fullName));
+  if (known) {
+    const next =
+      known.localPath === clone.localPath
+        ? { ...known, on: !known.on }
+        : { ...known, ...clone, exists: true, on: true };
+    const repos = state.repos.map((row) => (row === known ? next : row));
+    return { ...state, repos, typing: undefined };
+  }
+  const repos = [...state.repos, { ...clone, exists: true, on: true }];
+  // The cursor stays on "other", which the new row pushed down.
+  return { ...state, repos, cursor: repos.length, typing: undefined };
+}
+
+const REPOS_STEP: Step = {
+  group: 'Repos',
+  body: (state, ctx, paint, height) => {
+    const other = state.repos.length;
+    const width = (text: (row: RepoOption) => string) => Math.max(0, ...state.repos.map((row) => text(row).length));
+    const [nameW, pathW] = [width((row) => row.fullName), width((row) => tildify(row.localPath))];
+    const rows = state.repos.map((row, i) => {
+      const active = i === state.cursor;
+      return [
+        active ? paint(CYAN, '›') : ' ',
+        row.on ? paint(GREEN, '■') : paint(DIM, '□'),
+        paint(active ? BOLD : '', row.fullName.padEnd(nameW)),
+        ` ${tildify(row.localPath).padEnd(pathW)}`,
+        ` ${paint(DIM, triggerOf(row))}`,
+        moved(row) ? ` ${paint(GREEN, 'moved')}` : row.exists ? '' : ` ${paint(YELLOW, missing(row))}`,
+      ]
+        .join(' ')
+        .trimEnd();
+    });
+    const active = state.cursor === other;
+    const label = state.typing === undefined ? 'other…' : `${state.typing}▏`;
+    rows.push(`${active ? paint(CYAN, '›') : ' '} ${paint(DIM, ' ')} ${paint(active ? BOLD : '', label)}`);
+    const found = ctx.disk.found.length;
+    const intro =
+      found > 0
+        ? paint(DIM, `Found ${found} GitHub clones under ~. Each repo selected is reviewed on every PR.`)
+        : paint(DIM, "No GitHub clone found under ~; pick other to type a clone's path.");
+    return ['Which repos should review-relay watch?', intro, '', ...windowed(rows, state.cursor, height - 3, paint)];
+  },
+  // Starts on the first selected repo, which a long list of clones may otherwise scroll out of view.
+  cursor: (state) =>
+    Math.max(
+      0,
+      state.repos.findIndex((row) => row.on),
+    ),
+  hint: (state) => {
+    if (state.typing !== undefined) return "type a clone's path · enter add it · esc back to the list";
+    return `↑↓ move · ${state.cursor === state.repos.length ? 'enter type a path' : 'space select · enter next'} · q quit`;
+  },
+  onKey: (state, key, ctx) => {
+    if (state.typing !== undefined) {
+      return typed(state, key, (text) => {
+        const dir = untildify(text);
+        const clone = ctx.disk.at(dir);
+        return clone ? selectRepo(state, clone) : { ...state, error: `no GitHub clone at ${tildify(dir)}` };
+      });
+    }
+    const stepped = move(state, key, state.repos.length + 1);
+    if (stepped !== state) return stepped;
+    const row = state.repos[state.cursor];
+    if (!row) return key === 'enter' || key === 'right' ? { ...state, typing: '' } : state;
+    return key === 'space' ? selectRepo(state, row) : state;
+  },
+  validate: (state) => (state.repos.some((row) => row.on) ? undefined : 'select at least one repo'),
+};
 
 const REVIEWERS_STEP: Step = {
   group: 'Reviewers',
@@ -296,9 +500,8 @@ const REVIEWERS_STEP: Step = {
   },
   hint: () => '↑↓ move · space select · enter next · q quit',
   onKey: (state, key, ctx) => {
-    const n = ctx.options.length;
-    if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
-    if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
+    const stepped = move(state, key, ctx.options.length);
+    if (stepped !== state) return stepped;
     if (key !== 'space') return state;
     const name = ctx.options[state.cursor]!;
     const on = state.selected.includes(name);
@@ -307,51 +510,77 @@ const REVIEWERS_STEP: Step = {
   validate: (state) => (state.selected.length > 0 ? undefined : 'select at least one reviewer'),
 };
 
+/**
+ * The save step's lines: the warnings first, so they show before anything scrolls, then the repos, the reviewers and
+ * their settings; all scroll together, so many warnings never push the key help off a short terminal.
+ */
+function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] {
+  const reviewersChanged =
+    ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
+  const after = state.selected.join(', ');
+  const value = reviewersChanged ? `${ctx.current.join(', ') || 'none'} ${paint(DIM, '→')} ${after}` : after;
+  const width = Math.max('reviewers'.length, ...state.selected.map((name) => name.length));
+  const watched = state.repos.filter((row) => row.on);
+  const dropped = ctx.repos.filter((row) => row.entry && !watched.some((w) => sameRepo(w.fullName, row.fullName)));
+  const nameW = Math.max(0, ...[...watched, ...dropped].map((row) => row.fullName.length));
+  const repoRows = [
+    ...watched.map((row) =>
+      [
+        row.fullName.padEnd(nameW),
+        `${moved(row) ? `${tildify(entryPath(row.entry!))} ${paint(DIM, '→')} ` : ''}${tildify(row.localPath)} · ${triggerOf(row)}`,
+        !row.entry && paint(GREEN, 'new'),
+      ]
+        .filter(Boolean)
+        .join('  '),
+    ),
+    ...dropped.map((row) => `${row.fullName.padEnd(nameW)}  ${paint(YELLOW, 'removed')}`),
+  ].map((text, i) => `  ${paint(DIM, (i === 0 ? 'repos' : '').padEnd(width))}  ${text}`);
+  const settings = (name: ReviewerName) =>
+    modelKeys(name)
+      .map((key) => {
+        const show = (v: string | undefined) => v ?? `${HARNESSES[name].bins[0]}'s default`;
+        const [was, now] = [ctx.models[name][key], state.models[name][key]];
+        return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
+      })
+      .join(' · ');
+  const warnings = [
+    ...watched
+      .filter((row) => !row.exists)
+      .map(
+        (row) => `${paint(YELLOW, '!')} ${row.fullName} has no clone at ${tildify(row.localPath)}, so its reviews fail`,
+      ),
+    ...state.selected
+      .filter((name) => !ctx.installed[name])
+      .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`),
+  ];
+  return [
+    ...(warnings.length > 0 ? [...warnings, ''] : []),
+    ...repoRows,
+    `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
+    ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
+  ];
+}
+
 const SAVE_STEP: Step = {
   group: 'Save',
-  body: (state, ctx, paint, height) => {
-    const changed = hasChanges(state, ctx);
-    const reviewersChanged =
-      ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
-    const after = state.selected.join(', ');
-    const value = reviewersChanged ? `${ctx.current.join(', ') || 'none'} ${paint(DIM, '→')} ${after}` : after;
-    const width = Math.max('reviewers'.length, ...state.selected.map((name) => name.length));
-    const settings = (name: ReviewerName) =>
-      modelKeys(name)
-        .map((key) => {
-          const show = (v: string | undefined) => v ?? `${HARNESSES[name].bins[0]}'s default`;
-          const [was, now] = [ctx.models[name][key], state.models[name][key]];
-          return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
-        })
-        .join(' · ');
-    const warnings = state.selected
-      .filter((name) => !ctx.installed[name])
-      .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`);
-    const rows = state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`);
-    const footer = warnings.length > 0 ? ['', ...warnings] : [];
-    return [
-      !ctx.raw ? 'Create the config file with these settings?' : changed ? 'Save these changes?' : 'Nothing changed.',
-      '',
-      `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
-      ...windowed(rows, state.cursor, height - 3 - footer.length, paint),
-      ...footer,
-    ];
-  },
+  body: (state, ctx, paint, height) => [
+    !ctx.raw
+      ? 'Create the config file with these settings?'
+      : hasChanges(state, ctx)
+        ? 'Save these changes?'
+        : 'Nothing changed.',
+    '',
+    ...windowed(saveRows(state, ctx, paint), state.cursor, height - 2, paint),
+  ],
   hint: (state, ctx) =>
-    [`enter ${hasChanges(state, ctx) ? 'save' : 'exit'}`, state.selected.length > 1 && '↑↓ scroll', '← back', 'q quit']
-      .filter(Boolean)
-      .join(' · '),
+    [`enter ${hasChanges(state, ctx) ? 'save' : 'exit'}`, '↑↓ scroll', '← back', 'q quit'].join(' · '),
   // The rows scroll like a list, around a cursor that isn't drawn.
-  onKey: (state, key) => {
-    const n = state.selected.length;
-    if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
-    if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
-    return state;
-  },
+  onKey: (state, key, ctx) => move(state, key, saveRows(state, ctx, (_, text) => text).length),
 };
 
-/** The reviewers step, a model and (where the CLI takes one) an effort step per selected reviewer, then save. */
+/** The repos and reviewers steps, a model and (where the CLI takes one) an effort step per selected reviewer, then save. */
 const steps = (state: SetupState): Step[] => [
+  REPOS_STEP,
   REVIEWERS_STEP,
   ...state.selected.flatMap((name) => modelKeys(name).map((field) => modelStep(name, field))),
   SAVE_STEP,
@@ -368,8 +597,10 @@ export function reduce(state: SetupState, key: string, ctx: SetupContext): Setup
   if (key === 'ctrl-c') return { ...state, done: 'cancel' };
   const list = steps(state);
   const step = list[state.step]!;
-  const own = step.onKey?.(state, key, ctx) ?? state;
-  if (own !== state) return { ...own, error: undefined };
+  // A key the step handles clears the last error, unless the step raises one of its own.
+  const cleared = state.error === undefined ? state : { ...state, error: undefined };
+  const own = step.onKey?.(cleared, key, ctx) ?? cleared;
+  if (own !== cleared) return own;
   // A text input takes every other key as well, so q and the arrows can't act on the setup while typing.
   if (state.typing !== undefined) return state;
   if (key === 'q' || key === 'escape') return { ...state, done: 'cancel' };
@@ -520,24 +751,25 @@ function interact(ctx: SetupContext): Promise<SetupState> {
   });
 }
 
-/** Interactive setup: pick reviewers and their models, then write them into the config file (created when missing). */
+/**
+ * Interactive setup: pick the repos to watch, the reviewers, and their models, then write them into the config file
+ * (created when missing).
+ */
 export async function setup(path: string) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('setup needs an interactive terminal');
   const raw = await readRawConfig(path);
-  const ctx = setupContext(path, raw, (bin) => Bun.which(bin));
+  const disk: Disk = { found: discoverClones(), at: cloneAt, here: cloneAround(process.cwd()) };
+  const ctx = setupContext(path, raw, (bin) => Bun.which(bin), disk);
   const result = await interact(ctx);
   if (result.done === 'cancel') return console.log('setup cancelled, nothing saved');
   if (!hasChanges(result, ctx)) return console.log(`nothing changed in ${tildify(path)}`);
 
   const models = nextModels(result, ctx);
-  const next: Record<string, any> = { ...raw, reviewers: result.selected };
+  const next: Record<string, any> = { ...raw, reviewers: result.selected, repos: nextRepos(result) };
   // A file that never had `models` gains it only when a pick put something there.
   if (raw?.models !== undefined || Object.keys(models).length > 0) next.models = models;
   await Bun.write(path, `${formatJson(next)}\n`);
-  console.log(`\x1b[32m✔\x1b[0m saved reviewers (${result.selected.join(', ')}) and their models to ${tildify(path)}`);
-  console.log(
-    Array.isArray(next.repos) && next.repos.length > 0
-      ? '  if the daemon is running, apply with: scripts/relay restart'
-      : '  next: add the repos to watch (see config.example.json)',
-  );
+  const repos = next.repos.map((entry: Record<string, any>) => entry.fullName).join(', ');
+  console.log(`\x1b[32m✔\x1b[0m saved repos (${repos}), reviewers (${result.selected.join(', ')}), and their models`);
+  console.log(`  to ${tildify(path)}; if the daemon is running, apply with: scripts/relay restart`);
 }

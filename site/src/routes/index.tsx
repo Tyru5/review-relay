@@ -174,10 +174,10 @@ function Home() {
               <Requirement>A local clone of each repo you want reviewed</Requirement>
             </ul>
             <p className="mt-10 leading-relaxed">
-              The installer writes an example config to <Code tone="paper">~/.review-relay/config.json</Code>. Point it
-              at your repos and local clones. <Code tone="paper">setup</Code> then lists the agent CLIs on your PATH so
-              you can pick your panel and each judge&rsquo;s model and effort, and <Code tone="paper">start</Code> keeps
-              watching:
+              <Code tone="paper">setup</Code> finds the GitHub clones under your home folder so you can pick the repos
+              to watch, then lists the agent CLIs on your PATH so you can pick your panel and each judge&rsquo;s model
+              and effort. It writes <Code tone="paper">~/.review-relay/config.json</Code>, and{' '}
+              <Code tone="paper">start</Code> keeps watching:
             </p>
             <Terminal lines={['review-relay setup', 'review-relay start', 'review-relay status']} />
             <p className="mt-8 border-t border-paper-rule pt-5 text-sm leading-relaxed text-slate">

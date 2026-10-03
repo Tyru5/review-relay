@@ -183,7 +183,7 @@ usage() {
   cat <<USAGE
 ${B}usage:${N} scripts/relay <command>
 
-  setup       pick reviewers and their models interactively; creates the config if missing
+  setup       pick repos, reviewers, and models interactively; creates the config if missing
   start       start daemon in background
   stop        stop daemon, remove its temporary webhooks
   restart     stop then start
