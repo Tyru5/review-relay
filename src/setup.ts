@@ -204,11 +204,12 @@ export function setupContext(
 }
 
 /**
- * Preselects the configured repos that have a clone, else the clone setup was run from; and the configured (or
- * default) reviewers that are installed, else the first installed harness.
+ * Preselects the configured repos (even one whose clone is missing, so accepting the defaults never drops a repo),
+ * else the clone setup was run from; and the configured (or default) reviewers that are installed, else the first
+ * installed harness.
  */
 export function initialState(ctx: SetupContext): SetupState {
-  const configured = ctx.repos.filter((row) => row.entry && row.exists);
+  const configured = ctx.repos.filter((row) => row.entry);
   const here = ctx.disk.here && ctx.repos.find((row) => sameRepo(row.fullName, ctx.disk.here!.fullName));
   const start = configured.length > 0 ? configured : here ? [here] : [];
   const repos = ctx.repos.map((row) => ({ ...row, on: start.includes(row) }));
@@ -527,7 +528,6 @@ const SAVE_STEP: Step = {
           row.fullName.padEnd(nameW),
           `${moved(row) ? `${tildify(entryPath(row.entry!))} ${paint(DIM, '→')} ` : ''}${tildify(row.localPath)} · ${triggerOf(row)}`,
           !row.entry && paint(GREEN, 'new'),
-          !row.exists && paint(YELLOW, 'no clone at this path'),
         ]
           .filter(Boolean)
           .join('  '),
@@ -542,9 +542,17 @@ const SAVE_STEP: Step = {
           return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
         })
         .join(' · ');
-    const warnings = state.selected
-      .filter((name) => !ctx.installed[name])
-      .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`);
+    const warnings = [
+      ...watched
+        .filter((row) => !row.exists)
+        .map(
+          (row) =>
+            `${paint(YELLOW, '!')} ${row.fullName} has no clone at ${tildify(row.localPath)}, so its reviews fail`,
+        ),
+      ...state.selected
+        .filter((name) => !ctx.installed[name])
+        .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`),
+    ];
     const rows = [
       ...repoRows,
       `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,

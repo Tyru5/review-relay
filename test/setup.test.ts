@@ -169,15 +169,21 @@ describe('repos step', () => {
       ['acme/app', true, false],
     ]);
     const state = initialState(ctx);
-    expect(state.repos.map((row) => row.on)).toEqual([true, false, false]);
-    expect(nextRepos(state)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib', trigger: 'github' }]);
-    expect(hasChanges(state, ctx)).toBe(true);
+    // A configured repo stays selected even with no clone at its path, so the defaults never drop it.
+    expect(state.repos.map((row) => row.on)).toEqual([true, true, false]);
+    expect(nextRepos(state)).toEqual([
+      { fullName: 'acme/lib', localPath: '/home/u/lib', trigger: 'github' },
+      { fullName: 'acme/gone', localPath: '/home/u/gone' },
+    ]);
+    expect(hasChanges(state, ctx)).toBe(false);
+    const save = press(ctx, ['enter', ...walk(ctx)], state);
+    expect(render(save, ctx)).toContain('! acme/gone has no clone at /home/u/gone, so its reviews fail');
     const text = render(state, ctx);
     expect(text).toContain('● Repos ── ○ Reviewers ── ○ Models ── ○ Save');
     expect(text).toContain('Which repos should review-relay watch?');
     expect(text).toContain('Found 2 GitHub clones under ~.');
     expect(text).toMatch(/› ■ acme\/lib\s+\/home\/u\/lib\s+github\n/);
-    expect(text).toMatch(/ {2}□ acme\/gone\s+\/home\/u\/gone\s+auto\s+no clone at this path\n/);
+    expect(text).toMatch(/ {2}■ acme\/gone\s+\/home\/u\/gone\s+auto\s+no clone at this path\n/);
     expect(text).toMatch(/ {2}□ acme\/app\s+\/home\/u\/app\s+auto\n/);
     expect(text).toContain('other…');
     expect(text).toContain('↑↓ move · space select · enter next · q quit');
@@ -244,12 +250,12 @@ describe('repos step', () => {
       ['acme/lib', '/home/u/old-lib', false, 2],
       ['acme/app', '/home/u/app', true, undefined],
     ]);
-    expect(initialState(ctx).repos[0]!.on).toBe(false);
+    expect(initialState(ctx).repos.map((row) => row.on)).toEqual([true, false]);
     expect(render(initialState(ctx), ctx)).toContain('no clone at this path; 2 found, type one under other');
     // Typing one of them moves the row there.
-    const picked = press(ctx, ['down', 'enter', ...'/home/u/lib2', 'enter'], initialState(ctx));
+    const picked = press(ctx, ['up', 'enter', ...'/home/u/lib2', 'enter'], initialState(ctx));
     expect(picked.repos[0]).toMatchObject({ localPath: '/home/u/lib2', exists: true, on: true, candidates: 2 });
-    expect(nextRepos(picked)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib2' }, APP]);
+    expect(nextRepos(picked)).toEqual([{ fullName: 'acme/lib', localPath: '/home/u/lib2' }]);
     // Running setup from one of the clones settles it.
     const fromTwin = ctxFor(file, undefined, { ...disk, here: twin });
     expect(fromTwin.repos[0]).toMatchObject({ localPath: '/home/u/lib2', exists: true });
@@ -258,13 +264,13 @@ describe('repos step', () => {
 
   test('typing the path of a listed repo moves it there and selects it', () => {
     const ctx = ctxFor({ repos: [{ fullName: 'acme/tool', localPath: '/home/u/stale', postToPr: false }] });
-    expect(ctx.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/home/u/stale', exists: false });
-    const state = press(ctx, ['down', 'down', 'enter', ...'/opt/tool', 'enter'], initialState(ctx));
+    expect(ctx.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/home/u/stale', exists: false, on: false });
+    expect(initialState(ctx).repos.map((row) => row.on)).toEqual([true, false, false]);
+    const state = press(ctx, ['up', 'enter', ...'/opt/tool', 'enter'], initialState(ctx));
     expect(state.typing).toBeUndefined();
     expect(state.repos).toHaveLength(3);
     expect(state.repos[0]).toMatchObject({ fullName: 'acme/tool', localPath: '/opt/tool', exists: true, on: true });
-    // `app` was preselected as the clone setup runs from, since the file's only repo had no clone.
-    expect(nextRepos(state)).toEqual([{ fullName: 'acme/tool', localPath: '/opt/tool', postToPr: false }, APP]);
+    expect(nextRepos(state)).toEqual([{ fullName: 'acme/tool', localPath: '/opt/tool', postToPr: false }]);
     // Typing the path it already has toggles it instead.
     expect(press(ctx, ['enter', ...'/opt/tool', 'enter'], state).repos[0]!.on).toBe(false);
   });
@@ -324,7 +330,7 @@ describe('repos step', () => {
 
   test('save step lists the repos with new and removed ones marked', () => {
     const ctx = ctxFor({ repos: [APP, { fullName: 'acme/old', localPath: '/home/u/old' }] });
-    const state = press(ctx, ['down', 'down', 'space', 'enter', ...walk(ctx)], initialState(ctx));
+    const state = press(ctx, ['down', 'space', 'down', 'space', 'enter', ...walk(ctx)], initialState(ctx));
     const text = render(state, ctx);
     expect(text).toContain('Save these changes?');
     expect(text).toContain('repos      acme/app  /home/u/app · auto\n');
