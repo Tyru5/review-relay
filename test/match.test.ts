@@ -99,8 +99,31 @@ describe('issue_comment mention', () => {
     const result = classify('issue_comment', comment('please @Review-Relay take a look'), github);
     expect(result).toEqual({
       kind: 'mention',
-      job: { repo: 'Tyru5/Agendex', pr: 223, source: 'mention', reason: '@review-relay from Tyru5' },
+      // Any word after the mention is passed on; routing decides whether it names a route.
+      job: {
+        repo: 'Tyru5/Agendex',
+        pr: 223,
+        source: 'mention',
+        reason: '@review-relay from Tyru5',
+        route: 'take',
+        requestedBy: 'Tyru5',
+      },
     });
+  });
+
+  test('the word right after the mention may name a route', () => {
+    const route = (body: string, mention = '@review-relay') => {
+      const result = classify('issue_comment', comment(body), { ...github, mention });
+      return result.kind === 'mention' ? result.job.route : 'ignored';
+    };
+    expect(route('@review-relay Risky')).toBe('risky');
+    expect(route('looks done.\n\n@review-relay  deep-dive please')).toBe('deep-dive');
+    expect(route('@review-relay')).toBeUndefined();
+    expect(route('@review-relay, thanks')).toBeUndefined();
+    // The mention text is matched literally, even with characters that mean something in a regex.
+    expect(route('(relay) deep', '(relay)')).toBe('deep');
+    expect(route('@relay+ deep', '@relay+')).toBe('deep');
+    expect(route('@relayyy deep', '@relay+')).toBe('ignored');
   });
 
   test('the recorded @greptileai comment is not a relay mention', () => {

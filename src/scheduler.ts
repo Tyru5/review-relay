@@ -1,5 +1,6 @@
 import type { RepoConfig } from './config.ts';
 import type { Classified } from './match.ts';
+import type { ReviewOutcome } from './runner.ts';
 import type { StateStore } from './state.ts';
 import { jobKey, type ResolvedJob, type ReviewJob } from './types.ts';
 
@@ -8,7 +9,7 @@ export interface SchedulerDeps {
   graceMs: number;
   /** Fills in head SHA / base ref for comment and manual triggers. */
   resolve: (job: ReviewJob) => Promise<ResolvedJob>;
-  run: (job: ResolvedJob, repo: RepoConfig) => Promise<{ reportDir?: string }>;
+  run: (job: ResolvedJob, repo: RepoConfig) => Promise<ReviewOutcome>;
   log?: (message: string) => void;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
@@ -122,9 +123,14 @@ export class Scheduler {
       source: resolved.source,
     });
     try {
-      const { reportDir } = await this.deps.run(resolved, repo);
-      this.deps.state.finish(key, { status: 'done', reportDir });
-      this.log(`[${repo.fullName}] PR #${resolved.pr}: done${reportDir ? ` -> ${reportDir}` : ''}`);
+      const { reportDir, route, skipped } = await this.deps.run(resolved, repo);
+      const via = route ? `route ${route.name} (${route.reason}), ` : '';
+      if (skipped) {
+        this.deps.state.finish(key, { status: 'skipped', route: route?.name });
+        return this.log(`[${repo.fullName}] PR #${resolved.pr}: ${via}skipped`);
+      }
+      this.deps.state.finish(key, { status: 'done', reportDir, route: route?.name });
+      this.log(`[${repo.fullName}] PR #${resolved.pr}: ${via}done${reportDir ? ` -> ${reportDir}` : ''}`);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       this.deps.state.finish(key, { status: 'failed', error });

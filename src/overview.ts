@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { Config } from './config.ts';
 import type { DaemonState } from './daemon.ts';
 import { HARNESSES } from './reviewers/index.ts';
-import type { ReviewerName } from './types.ts';
+import type { ReviewerId } from './types.ts';
 import { fmtDuration, padVisible, row, section, tildify, type Styles } from './ui.ts';
 
 export interface OverviewOptions {
@@ -85,7 +85,7 @@ export function renderDaemon(
 
 export interface InfoOptions extends OverviewOptions {
   /** Executable found for each configured reviewer, or null when it is not on PATH. */
-  bins: Partial<Record<ReviewerName, string | null>>;
+  bins: Partial<Record<ReviewerId, string | null>>;
   /** Mtime of the config file, to flag edits newer than the daemon. */
   configMtimeMs: number | null;
   daemon: DaemonState;
@@ -113,17 +113,33 @@ export function renderInfo(config: Config, opts: InfoOptions, st: Styles): strin
 
   const nameW = Math.max(...config.reviewers.map((n) => n.length));
   for (const name of config.reviewers) {
-    const m = config.models[name];
+    const m = config.models[name]!;
     const bin = opts.bins[name];
     const picks = [
       m.model ?? 'default model',
       m.effort ? `effort ${m.effort}` : null,
       m.provider ? `via ${m.provider}` : null,
+      m.harness !== name ? `on ${m.harness}` : null,
     ]
       .filter(Boolean)
       .join('  ');
-    const where = bin ? st.muted(tildify(bin)) : st.badge('danger', `${HARNESSES[name].bins.join(' or ')} not on PATH`);
-    lines.push(`  ${st.dot(bin ? 'success' : 'danger')} ${name.padEnd(nameW)}  ${picks.padEnd(32)}${where}`);
+    const where = bin
+      ? st.muted(tildify(bin))
+      : st.badge('danger', `${HARNESSES[m.harness].bins.join(' or ')} not on PATH`);
+    lines.push(`  ${st.dot(bin ? 'success' : 'danger')} ${name.padEnd(nameW)}  ${picks.padEnd(32)}  ${where}`);
+  }
+
+  if (config.routes.length > 0) {
+    lines.push('', `${st.section('Routes')}  ${st.muted('first match wins; no match runs the reviewers above')}`);
+    const runs = config.routes.map((route) => (route.skip ? 'skip' : route.reviewers!.join(', ')));
+    const routeW = Math.max(...config.routes.map((route) => route.name.length));
+    const runsW = Math.max(...runs.map((r) => r.length));
+    config.routes.forEach((route, i) => {
+      const when = Object.entries(route.when)
+        .map(([key, value]) => `${key} ${Array.isArray(value) ? value.join(',') : String(value)}`)
+        .join('  ');
+      lines.push(`  ${st.dot('success')} ${route.name.padEnd(routeW)}  ${runs[i]!.padEnd(runsW)}  ${st.muted(when)}`);
+    });
   }
 
   lines.push(...section(st, 'Repos'));

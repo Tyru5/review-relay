@@ -2,8 +2,8 @@ import { execOrThrow } from './exec.ts';
 import { COMMENT_MARKER } from './report.ts';
 import type { ResolvedJob, ReviewJob } from './types.ts';
 
-/** Fills in head SHA and refs from GitHub for triggers whose payload lacks them. */
-export async function resolveJob(job: ReviewJob): Promise<ResolvedJob> {
+/** Fills in head SHA and refs from GitHub for triggers whose payload lacks them. `open: false` takes a closed PR too. */
+export async function resolveJob(job: ReviewJob, { open = true } = {}): Promise<ResolvedJob> {
   const out = await execOrThrow([
     'gh',
     'pr',
@@ -15,7 +15,7 @@ export async function resolveJob(job: ReviewJob): Promise<ResolvedJob> {
     'headRefOid,headRefName,baseRefName,state',
   ]);
   const pr = JSON.parse(out) as { headRefOid: string; headRefName: string; baseRefName: string; state: string };
-  if (pr.state !== 'OPEN') throw new Error(`PR #${job.pr} is ${pr.state.toLowerCase()}`);
+  if (open && pr.state !== 'OPEN') throw new Error(`PR #${job.pr} is ${pr.state.toLowerCase()}`);
   return { ...job, headSha: pr.headRefOid, headRef: pr.headRefName, baseRef: pr.baseRefName };
 }
 

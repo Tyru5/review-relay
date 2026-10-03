@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
 import type { JobRecord } from './state.ts';
-import type { ReviewerName } from './types.ts';
+import type { ReviewerId } from './types.ts';
 import { fmtDuration } from './ui.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
 
 export { fmtDuration };
 
 interface ReviewerMeta {
-  name: ReviewerName;
+  name: ReviewerId;
   ok: boolean;
   score?: number;
   error?: string;
@@ -63,18 +63,19 @@ const DIM = '2';
 const RED = '31';
 const GREEN = '32';
 const YELLOW = '33';
-const STATUS_COLORS: Record<string, string> = { done: GREEN, failed: RED, running: YELLOW };
+const CYAN = '36';
+const STATUS_COLORS: Record<string, string> = { done: GREEN, failed: RED, running: YELLOW, skipped: CYAN };
 const scoreColor = (n: number) => (n >= 4 ? GREEN : n === 3 ? YELLOW : RED);
 const countCell = (n: number, color: string): Cell => (n > 0 ? { text: String(n), color } : { text: '0', color: DIM });
 
 export interface StatusOptions {
   dataDir: string;
-  reviewers: ReviewerName[];
+  reviewers: ReviewerId[];
   color: boolean;
   now?: number;
 }
 
-/** Recent jobs as an aligned table with a header row; NOTE (errors) is dropped when no job has one. */
+/** Recent jobs as an aligned table with a header row; ROUTE and NOTE (errors) are dropped when no job has one. */
 export function renderStatus(records: JobRecord[], opts: StatusOptions): string[] {
   if (records.length === 0) return ['no review jobs yet'];
   const now = opts.now ?? Date.now();
@@ -93,6 +94,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
     'PR',
     'COMMIT',
     'SOURCE',
+    'ROUTE',
     'SCORE',
     ...reviewers.map((n) => n.toUpperCase()),
     'CRIT',
@@ -120,6 +122,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
       { text: `#${r.pr}` },
       { text: r.headSha.slice(0, 8) },
       { text: r.source, color: DIM },
+      r.route ? { text: r.route } : none,
       rep?.score ? { text: `${rep.score}/5`, color: scoreColor(rep.score) } : none,
       ...reviewerCells,
       ...(rep
@@ -136,6 +139,11 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
   if (rows.every((row) => !row.at(-1)!.text)) {
     header.pop();
     for (const row of rows) row.pop();
+  }
+  if (records.every((r) => !r.route)) {
+    const route = header.indexOf('ROUTE');
+    header.splice(route, 1);
+    for (const row of rows) row.splice(route, 1);
   }
   const widths = header.map((h, c) => Math.max(h.length, ...rows.map((row) => row[c]!.text.length)));
   const paint = ({ text, color }: Cell) => (opts.color && color && text ? `\x1b[${color}m${text}\x1b[0m` : text);
