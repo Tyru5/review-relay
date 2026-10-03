@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Manage the review-relay daemon: start | stop | restart | status | logs
+# Manage the review-relay daemon: setup | start | stop | restart | status | info | logs
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${REVIEW_RELAY_CONFIG:-$HOME/.review-relay/config.json}"
+
+# setup creates or edits the config, so it runs before the checks below that need one.
+[[ "${1:-}" == setup ]] && exec bun "$ROOT/src/cli.ts" setup --config "$CONFIG"
 
 if [[ -t 1 ]]; then
   B=$'\e[1m'; D=$'\e[2m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
@@ -156,9 +159,12 @@ cmd_info() {
   }
 
   echo; echo "${B}Reviewers${N}"
-  jq -r '.reviewers[] as $r | [$r, .models[$r].model, .models[$r].effort] | @tsv' <<<"$json" |
+  # Harnesses without a configured model or effort use the CLI's own default.
+  jq -r '.reviewers[] as $r | [$r, .models[$r].model // "default model", .models[$r].effort // ""] | @tsv' <<<"$json" |
   while IFS=$'\t' read -r name model effort; do
-    printf '  %s●%s %-8s %-20s %seffort%s %s\n' "$G" "$N" "$name" "$model" "$D" "$N" "$effort"
+    printf '  %s●%s %-10s %-20s' "$G" "$N" "$name" "$model"
+    [[ -n "$effort" ]] && printf ' %seffort%s %s' "$D" "$N" "$effort"
+    echo
   done
 
   echo; echo "${B}Repos${N}"
@@ -177,6 +183,7 @@ usage() {
   cat <<USAGE
 ${B}usage:${N} scripts/relay <command>
 
+  setup       pick reviewers interactively; creates the config if missing
   start       start daemon in background
   stop        stop daemon, remove its temporary webhooks
   restart     stop then start

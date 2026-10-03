@@ -2,7 +2,15 @@ import { describe, expect, test } from 'bun:test';
 import { parseNumstat } from '../src/diffstats.ts';
 import { combinedScore, commentBody } from '../src/report.ts';
 import type { ResolvedJob, ReviewerResult } from '../src/types.ts';
-import { DIMENSIONS, finalScore, mergeFindings, parseVerdict, type Finding, type Verdict } from '../src/verdict.ts';
+import {
+  DIMENSIONS,
+  finalScore,
+  findVerdictJson,
+  mergeFindings,
+  parseVerdict,
+  type Finding,
+  type Verdict,
+} from '../src/verdict.ts';
 
 const verdict = (score: number, findings: Finding[] = [], dim = 5): Verdict => ({
   summary: 'Adds a thing.',
@@ -33,6 +41,27 @@ describe('parseVerdict', () => {
 
   test('rejects output missing dimensions', () => {
     expect(() => parseVerdict({ summary: 's', score: 4, findings: [] })).toThrow('dimensions');
+  });
+});
+
+describe('findVerdictJson', () => {
+  test('takes the last verdict out of prose, a draft, and a code fence', () => {
+    const final = verdict(4);
+    const text = `Draft: ${JSON.stringify(verdict(2))}\n\nFinal:\n\`\`\`json\n${JSON.stringify(final, null, 2)}\n\`\`\`\nDone {ok}.`;
+    expect(findVerdictJson(text)).toEqual(final);
+  });
+
+  test('ignores braces inside strings', () => {
+    const tricky = { ...verdict(3), summary: 'Escapes "}" and a stray { in text' };
+    expect(findVerdictJson(`Here: ${JSON.stringify(tricky)}`)).toEqual(tricky);
+  });
+
+  test('falls back to the last object that parses, so parseVerdict can name the gap', () => {
+    expect(findVerdictJson('{"a": 1} then {"summary": "s", "nested": {"b": 2}}')).toEqual({
+      summary: 's',
+      nested: { b: 2 },
+    });
+    expect(() => findVerdictJson('no json { here')).toThrow('no JSON object');
   });
 });
 
