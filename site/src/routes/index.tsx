@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
+import { GitHubMark } from '../components/GitHubMark';
 import { JudgesDesk, ResultBoard } from '../components/JudgesPanel';
 import { Logo } from '../components/Logo';
 import { CheckIcon, LowerThird } from '../components/LowerThird';
@@ -56,6 +57,7 @@ const AGENTS: { name: string; product: string }[] = [
 ];
 
 const CONTAINER = 'mx-auto w-full max-w-[84rem] px-5 sm:px-8';
+const REPO = 'https://github.com/Tyru5/review-relay';
 
 function Home() {
   const version = Route.useLoaderData();
@@ -71,7 +73,17 @@ function Home() {
             <Logo className="size-7" cue="var(--color-haze)" check="var(--color-gold)" />
             review-relay
           </a>
-          {version && <span className="bg-board px-3 py-2 font-mono text-xs text-haze">v{version}</span>}
+          <div className="flex items-center gap-2">
+            {version && <span className="bg-board px-3 py-2 font-mono text-xs text-haze">v{version}</span>}
+            <a
+              href={REPO}
+              className="flex items-center gap-2 bg-board px-3 py-2 text-xs font-bold text-haze transition-colors hover:text-chalk"
+              aria-label="review-relay on GitHub"
+            >
+              <GitHubMark className="size-5" />
+              <span className="hidden sm:inline">GitHub</span>
+            </a>
+          </div>
         </header>
 
         <main
@@ -179,7 +191,7 @@ function Home() {
               and effort. It writes <Code tone="paper">~/.review-relay/config.json</Code>, and{' '}
               <Code tone="paper">start</Code> keeps watching:
             </p>
-            <Terminal lines={['review-relay setup', 'review-relay start', 'review-relay status']} />
+            <Terminal lines={['review-relay setup', 'review-relay start -d', 'review-relay status']} />
             <p className="mt-8 border-t border-paper-rule pt-5 text-sm leading-relaxed text-slate">
               Reviews run from your machine, and your code goes to whichever providers your chosen agents and models
               use.
@@ -206,7 +218,15 @@ function Home() {
             <Logo className="size-5" cue="var(--color-haze)" check="var(--color-gold)" />
             review-relay
           </span>
-          <nav aria-label="Downloads" className="flex flex-wrap gap-x-6 gap-y-2">
+          <nav aria-label="Project links" className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <a
+              href={REPO}
+              className="flex items-center gap-2 text-chalk transition-colors hover:text-gold"
+              aria-label="review-relay source on GitHub"
+            >
+              <GitHubMark className="size-5" />
+              <span className="font-bold">GitHub</span>
+            </a>
             <FooterLink href={`${DOWNLOADS}/install.sh`}>install.sh</FooterLink>
             <FooterLink href={`${DOWNLOADS}/install.ps1`}>install.ps1</FooterLink>
             {version && <FooterLink href={`${DOWNLOADS}/v${version}/SHA256SUMS`}>Checksums for v{version}</FooterLink>}
