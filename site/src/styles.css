@@ -1,9 +1,25 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/schibsted-grotesk';
+@import '@fontsource-variable/archivo/wdth.css';
+@import '@fontsource-variable/doto';
 @import '@fontsource-variable/jetbrains-mono';
 
-/* The Night Shift: quiet tonal surfaces; light appears only when something lands. See DESIGN.md. */
+/* The Judges' Panel: an arena-blue broadcast where every agent raises a card and the lowest one counts. */
 @theme {
+  --color-arena: #1d2b8f;
+  --color-arena-deep: #131d6b;
+  --color-board: #0a1040;
+  --color-rule: #3d4ca3;
+  --color-chalk: #ffffff;
+  --color-haze: #b8c2f2;
+  --color-paper: #f6f5f0;
+  --color-paper-rule: #d9d8e6;
+  --color-navy: #0e1440;
+  --color-slate: #4a5180;
+  --color-gold: #f2b705;
+  --color-gold-deep: #a87a00;
+  --color-red: #c42020;
+
+  /* Used only by /system, which still documents the previous design. */
   --color-night: #0d0f1c;
   --color-surface: #14172b;
   --color-raised: #1b1f38;
@@ -14,7 +30,8 @@
   --color-relay: #38d3f6;
   --color-flag: #b3a6f7;
 
-  --font-sans: 'Schibsted Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Archivo Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-led: 'Doto Variable', ui-monospace, monospace;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -23,69 +40,83 @@
 @layer base {
   html {
     color-scheme: dark;
-    background-color: var(--color-night);
-    scrollbar-color: var(--color-line) var(--color-night);
+    background-color: var(--color-arena);
+    scrollbar-color: var(--color-rule) var(--color-arena-deep);
   }
   body {
-    @apply bg-night font-sans text-ink antialiased;
-    caret-color: var(--color-relay);
+    @apply bg-arena font-sans text-chalk antialiased;
+    caret-color: var(--color-gold);
+    --focus: var(--color-gold);
   }
   ::selection {
-    background-color: color-mix(in srgb, var(--color-relay) 30%, transparent);
+    background-color: var(--color-gold);
+    color: var(--color-navy);
   }
   :focus-visible {
-    outline: 2px solid var(--color-relay);
+    outline: 2px solid var(--focus);
     outline-offset: 3px;
-    border-radius: 6px;
+    border-radius: 4px;
   }
 }
 
-/* The dot grid from the social preview, kept to the canvas the sample review sits on and faded at its edges. */
-@utility dot-canvas {
-  background-image: radial-gradient(
-    color-mix(in srgb, var(--color-line) 70%, var(--color-muted)) 1.2px,
-    transparent 1.2px
-  );
-  background-size: 24px 24px;
-  mask-image: radial-gradient(ellipse 75% 70% at 50% 45%, black 40%, transparent 100%);
+/* Paper regions (score cards, scoresheet, entry requirements) take navy focus rings. */
+@utility on-paper {
+  --focus: var(--color-navy);
+  caret-color: var(--color-navy);
 }
 
-/* The one orchestrated moment: a review starts, the relay fires, the scored comment lands. */
-@keyframes rise {
+/* The broadcast voice: condensed, heavy, tight. */
+@utility type-broadcast {
+  font-stretch: 66%;
+  font-weight: 850;
+  letter-spacing: -0.01em;
+  line-height: 0.92;
+}
+@utility type-label {
+  font-stretch: 80%;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+@utility type-led {
+  font-family: var(--font-led);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* The one orchestrated moment: the judges raise their cards, the lowest is ringed, the board lights. */
+@keyframes raise {
   from {
-    opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(105%);
   }
 }
-@keyframes draw {
+@keyframes ring {
   from {
-    transform: scaleY(0);
+    stroke-dashoffset: 1;
   }
 }
-@keyframes fill {
-  from {
-    background-color: var(--color-line);
+@keyframes light {
+  0%,
+  40% {
+    opacity: 0.15;
   }
-}
-@keyframes wait {
-  50% {
-    opacity: 0.3;
+  20%,
+  100% {
+    opacity: 1;
   }
 }
 
-@utility relay-rise {
-  animation: rise 700ms var(--ease-out-expo) both;
+@utility judge-raise {
+  animation: raise 900ms var(--ease-out-expo) both;
 }
-@utility relay-draw {
-  transform-origin: top;
-  animation: draw 700ms var(--ease-out-expo) both;
+@utility judge-ring {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: ring 700ms var(--ease-out-expo) both;
 }
-@utility relay-fill {
-  animation: fill 400ms var(--ease-out-expo) both;
-}
-/* Blinks while the review is in flight and settles once the comment lands. */
-@utility relay-wait {
-  animation: wait 500ms ease-in-out 2;
+@utility board-light {
+  animation: light 600ms steps(3, end) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -93,5 +124,6 @@
   *::before,
   *::after {
     animation: none !important;
+    transition: none !important;
   }
 }
