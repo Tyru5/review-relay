@@ -2,6 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { version } from '../package.json';
 import { findRepo, loadConfig, type Config } from './config.ts';
 import { Forwarder } from './forwarder.ts';
 import { resolveJob } from './github.ts';
@@ -24,7 +25,8 @@ Commands:
   config                        Print the resolved config (defaults applied) as JSON
 
 Options:
-  --config <path>               Config file (default ~/.review-relay/config.json or $REVIEW_RELAY_CONFIG)`;
+  --config <path>               Config file (default ~/.review-relay/config.json or $REVIEW_RELAY_CONFIG)
+  --version                     Print the version`;
 
 const log = (message: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${message}`);
 
@@ -126,9 +128,11 @@ async function main() {
       grace: { type: 'string' },
       limit: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
+      version: { type: 'boolean', short: 'v', default: false },
     },
   });
   const [command, arg] = positionals;
+  if (values.version) return console.log(version);
   if (!command || values.help) return console.log(USAGE);
 
   const config = await loadConfig(values.config);
