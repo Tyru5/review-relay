@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-  Install the review-relay binary on Windows.
+  Install the review-relay binary on Windows from the GitHub Releases of Tyru5/review-relay.
 
 .DESCRIPTION
-    irm https://downloads.reviewrelay.dev/install.ps1 | iex
+    irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1 | iex
 
   With options:
-    & ([scriptblock]::Create((irm https://downloads.reviewrelay.dev/install.ps1))) -Version 0.2.0 -NoModifyPath
+    & ([scriptblock]::Create((irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1))) -Version 0.2.0 -NoModifyPath
 
-  Env equivalents: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,URL,NO_MODIFY_PATH}, REVIEW_RELAY_CONFIG
+  Env equivalents: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO,NO_MODIFY_PATH}, REVIEW_RELAY_CONFIG
 #>
 [CmdletBinding()]
 param(
@@ -29,7 +29,8 @@ function Get-Setting([string]$Value, [string]$EnvName, [string]$Default) {
     return $Default
 }
 
-$BaseUrl = Get-Setting '' 'REVIEW_RELAY_INSTALL_URL' 'https://downloads.reviewrelay.dev'
+$Repo = Get-Setting '' 'REVIEW_RELAY_INSTALL_REPO' 'Tyru5/review-relay'
+$BaseUrl = "https://github.com/$Repo/releases"
 $Version = Get-Setting $Version 'REVIEW_RELAY_INSTALL_VERSION' 'latest'
 $BinDir = Get-Setting $BinDir 'REVIEW_RELAY_INSTALL_BIN_DIR' (Join-Path $env:LOCALAPPDATA 'review-relay\bin')
 $Config = Get-Setting '' 'REVIEW_RELAY_CONFIG' (Join-Path $HOME '.review-relay\config.json')
@@ -57,18 +58,31 @@ function Invoke-Probe {
     & $exe $rest 2>$null
 }
 
+# GitHub answers /releases/latest with a redirect to /releases/tag/<tag>; the tag is the version.
+function Get-LatestVersion {
+    try {
+        $request = [Net.WebRequest]::CreateHttp("$BaseUrl/latest")
+        $request.Method = 'HEAD'
+        $request.AllowAutoRedirect = $false
+        $response = $request.GetResponse()
+        try { $location = [string]$response.Headers['Location'] } finally { $response.Close() }
+    } catch {
+        Fail "could not reach $BaseUrl ($($_.Exception.Message))"
+    }
+    if ($location -notmatch '/releases/tag/([^/?#]+)') { Fail "could not find the latest release at $BaseUrl" }
+    return $Matches[1]
+}
+
 function Resolve-Version {
     $v = $Version
-    if ($v -eq 'latest') {
-        try { $v = [string](Invoke-RestMethod -UseBasicParsing -Uri "$BaseUrl/latest.txt") } catch { Fail "could not reach $BaseUrl" }
-    }
+    if ($v -eq 'latest') { $v = Get-LatestVersion }
     $v = $v.Trim() -replace '^v', ''
     if ($v -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { Fail "invalid version: $v" }
     return $v
 }
 
 function Install-Binary([string]$Ver) {
-    $url = "$BaseUrl/v$Ver"
+    $url = "$BaseUrl/download/v$Ver"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $exe = Join-Path $BinDir 'review-relay.exe'
     $staged = "$exe.download"
@@ -98,7 +112,7 @@ function Install-Binary([string]$Ver) {
 function Initialize-Config([string]$Ver) {
     if (Test-Path $Config) { Write-Ok "keeping existing config $Config"; return }
     New-Item -ItemType Directory -Force -Path (Split-Path $Config -Parent) | Out-Null
-    Save-Url "$BaseUrl/v$Ver/config.example.json" $Config
+    Save-Url "$BaseUrl/download/v$Ver/config.example.json" $Config
     Write-Ok "wrote example config to $Config (edit repos before starting)"
 }
 
@@ -134,7 +148,7 @@ function Show-RuntimeDeps {
 
 function Install-ReviewRelay {
     if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
-        Fail "this installer is for Windows; on macOS/Linux run: curl -fsSL $BaseUrl/install.sh | bash"
+        Fail "this installer is for Windows; on macOS/Linux run: curl -fsSL $BaseUrl/latest/download/install.sh | bash"
     }
     if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { Write-Info 'ARM64 Windows: installing the x64 build (runs under emulation)' }
 
