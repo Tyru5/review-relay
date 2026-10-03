@@ -6,6 +6,8 @@ export const droid: Harness = {
   product: 'Factory Droid',
   bins: ['droid'],
   defaults: {},
+  // `droid exec --help` lists its models; every one takes low, medium, and high, and some off, none, minimal, or xhigh.
+  choices: { model: [], effort: ['low', 'medium', 'high', 'xhigh'] },
   schema: 'prompt',
   // Read-only exec aborts the whole run when the model tries a command outside its allow rules, so no shell.
   shell: 'none',

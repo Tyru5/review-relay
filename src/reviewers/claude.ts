@@ -15,6 +15,10 @@ export const claude: Harness = {
   product: 'Claude Code',
   bins: ['claude'],
   defaults: { model: 'claude-opus-5-5', effort: 'max' },
+  choices: {
+    model: ['claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5', 'claude-haiku-4-5'],
+    effort: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
   schema: 'native',
   // A `git diff:*` allow rule also matches `git diff --output=<file>`, which writes anywhere, and `git grep -O<cmd>`
   // runs a program, so Bash stays off and the diff goes in the prompt.

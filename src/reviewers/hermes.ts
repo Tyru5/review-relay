@@ -8,6 +8,7 @@ export const hermes: Harness = {
   product: 'Hermes Agent',
   bins: ['hermes'],
   defaults: {},
+  choices: { model: [], effort: [] },
   schema: 'prompt',
   // Its only command tool is an unrestricted shell, and one-shot mode approves every call.
   shell: 'none',
