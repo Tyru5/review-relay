@@ -32,6 +32,10 @@ export interface ReviewJob {
   headSha?: string;
   headRef?: string;
   baseRef?: string;
+  /** A route the request named: the word after a mention, or `run --route`. Routing decides if it is one. */
+  route?: string;
+  /** Who asked for the review, for mentions. */
+  requestedBy?: string;
 }
 
 export interface ResolvedJob extends ReviewJob {

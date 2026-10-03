@@ -166,3 +166,34 @@ test('a failed run can be retried by the next trigger', async () => {
   expect(calls).toBe(2);
   expect(state.list()[0]?.status).toBe('done');
 });
+
+test('a skip route records the commit as skipped and handled, with its route', async () => {
+  const state = new StateStore(null);
+  const logs: string[] = [];
+  let calls = 0;
+  const route = { name: 'docs', reason: 'onlyPaths: 2 files', forced: false };
+  const scheduler = new Scheduler({
+    state,
+    graceMs: 0,
+    resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    run: async () => {
+      calls += 1;
+      return calls === 1 ? { route, skipped: true } : { reportDir: '/tmp/r', route };
+    },
+    log: (message) => logs.push(message),
+  });
+  const repo = repoWith('auto');
+  scheduler.handle(repo, greptileStart());
+  await scheduler.idle();
+  expect(state.list()[0]).toMatchObject({ status: 'skipped', route: 'docs' });
+  expect(logs.at(-1)).toBe('[Tyru5/Agendex] PR #223: route docs (onlyPaths: 2 files), skipped');
+  // The same commit isn't routed again, but a mention reviews it.
+  scheduler.handle(repo, greptileStart());
+  await scheduler.idle();
+  expect(calls).toBe(1);
+  scheduler.handle(repo, mention);
+  await scheduler.idle();
+  expect(calls).toBe(2);
+  expect(state.list()[0]).toMatchObject({ status: 'done', route: 'docs', reportDir: '/tmp/r' });
+  expect(logs.at(-1)).toBe('[Tyru5/Agendex] PR #223: route docs (onlyPaths: 2 files), done -> /tmp/r');
+});

@@ -16,6 +16,8 @@ const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
 const ignore = (reason: string): Classified => ({ kind: 'ignore', reason });
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export function classify(event: string, payload: any, github: GithubTriggerConfig): Classified {
   const repo: string | undefined = payload?.repository?.full_name;
   if (!repo) return ignore(`${event}: no repository`);
@@ -97,13 +99,18 @@ function classifyComment(repo: string, payload: any, github: GithubTriggerConfig
   if (!TRUSTED_ASSOCIATIONS.has(comment?.author_association)) {
     return ignore(`mention from untrusted ${comment?.author_association ?? 'unknown'} user`);
   }
+  // The word after the mention may name a route, as in "@review-relay risky"; routing decides whether it does.
+  const word = new RegExp(`${escapeRegExp(github.mention.toLowerCase())}\\s+([a-z0-9][a-z0-9-]*)`).exec(body)?.[1];
+  const login: string | undefined = comment.user?.login;
   return {
     kind: 'mention',
     job: {
       repo,
       pr: payload.issue.number,
       source: 'mention',
-      reason: `${github.mention} from ${comment.user?.login ?? 'unknown'}`,
+      reason: `${github.mention} from ${login ?? 'unknown'}`,
+      ...(word ? { route: word } : {}),
+      ...(login ? { requestedBy: login } : {}),
     },
   };
 }

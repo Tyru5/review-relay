@@ -2,7 +2,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { JobSource } from './types.ts';
 
-export type JobStatus = 'running' | 'done' | 'failed';
+/** `skipped`: a skip route matched, so nothing ran. */
+export type JobStatus = 'running' | 'done' | 'failed' | 'skipped';
 
 export interface JobRecord {
   key: string;
@@ -14,6 +15,8 @@ export interface JobRecord {
   startedAt: string;
   finishedAt?: string;
   reportDir?: string;
+  /** The route that decided the review, when one matched. */
+  route?: string;
   error?: string;
 }
 
@@ -35,10 +38,10 @@ export class StateStore {
     }
   }
 
-  /** True when this commit was already reviewed or is being reviewed. Failed runs may retry. */
+  /** True when this commit was reviewed, skipped by a route, or is being reviewed. Failed runs may retry. */
   isHandled(key: string): boolean {
     const status = this.records.get(key)?.status;
-    return status === 'running' || status === 'done';
+    return status === 'running' || status === 'done' || status === 'skipped';
   }
 
   isRunning(key: string): boolean {
