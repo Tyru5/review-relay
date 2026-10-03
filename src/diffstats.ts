@@ -33,6 +33,22 @@ export async function diffStats(dir: string, baseRef: string): Promise<DiffStats
   return parseNumstat(await execOrThrow(['git', '-C', dir, 'diff', '--numstat', `${baseRef}...HEAD`]));
 }
 
+/** Linux caps one argv string at 128 KiB and some harnesses take the prompt as an argument, so stay well under. */
+const PROMPT_DIFF_LIMIT = 60_000;
+
+/** Commits and diff written into the prompt, for harnesses that run without a shell. */
+export async function promptDiff(dir: string, baseRef: string, limit = PROMPT_DIFF_LIMIT): Promise<string> {
+  const [log, diff] = await Promise.all([
+    execOrThrow(['git', '-C', dir, 'log', '--format=%h %s', `${baseRef}..HEAD`]),
+    execOrThrow(['git', '-C', dir, 'diff', `${baseRef}...HEAD`]),
+  ]);
+  const shown =
+    diff.length > limit
+      ? `${diff.slice(0, limit)}\n[diff cut at ${limit} of ${diff.length} characters; read the changed files for the rest]`
+      : diff;
+  return `Commits (git log ${baseRef}..HEAD):\n${log.trim()}\n\nDiff (git diff ${baseRef}...HEAD):\n${shown.trimEnd()}`;
+}
+
 export function describeStats(s: DiffStats): string {
   const parts = [`${s.files} files, +${s.additions} -${s.deletions}`, `${s.testFiles} test files changed`];
   if (s.sensitiveFiles.length) {
