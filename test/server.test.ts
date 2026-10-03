@@ -22,10 +22,9 @@ test('parseConfig applies defaults and validates trigger modes', () => {
     github: { onPush: false, mention: '@review-relay' },
   });
   expect(config.graceMs).toBe(120_000);
-  expect(config.models).toEqual({
-    claude: { model: 'claude-opus-5-5', effort: 'max' },
-    codex: { model: 'gpt-6-astra', effort: 'high' },
-  });
+  expect(config.reviewers).toEqual(['codex', 'claude']);
+  expect(config.models.claude).toEqual({ model: 'claude-opus-5-5', effort: 'max' });
+  expect(config.models.codex).toEqual({ model: 'gpt-6-astra', effort: 'high' });
   const tuned = parseConfig({
     repos: [{ fullName: 'Tyru5/Agendex', localPath: '/tmp/x' }],
     models: { codex: { effort: 'xhigh' } },

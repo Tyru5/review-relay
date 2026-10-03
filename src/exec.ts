@@ -9,12 +9,15 @@ export interface ExecOptions {
   cwd?: string;
   stdin?: string;
   timeoutMs?: number;
+  /** Added to the inherited environment. */
+  env?: Record<string, string>;
 }
 
 /** Runs a binary directly (no shell, so user aliases and functions never apply). */
 export async function exec(cmd: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   const proc = Bun.spawn(cmd, {
     cwd: opts.cwd,
+    env: opts.env ? { ...process.env, ...opts.env } : undefined,
     stdin: opts.stdin === undefined ? 'ignore' : new TextEncoder().encode(opts.stdin),
     stdout: 'pipe',
     stderr: 'pipe',
