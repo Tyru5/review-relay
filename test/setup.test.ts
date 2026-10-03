@@ -562,13 +562,14 @@ describe('renderSetup', () => {
     expect(top.join('\n')).toMatch(/codex\s+model gpt-6-astra/);
     expect(top.join('\n')).toMatch(/↓ \d+ more/);
     expect(top.join('\n')).toContain('enter exit · ↑↓ scroll · ← back · q quit');
-    // The warnings scroll with the rows, so they never push the hint off a short terminal.
-    expect(top.join('\n')).not.toContain('! vibe is not on PATH');
+    // The warnings lead the rows, so they show before anything scrolls, and scroll with them, so they never push the
+    // key help off a short terminal.
+    expect(top.join('\n')).toContain('! qwen is not on PATH');
+    expect(top.join('\n')).toContain('! vibe is not on PATH');
     const bottom = render(press(ctx, ['up'], save), ctx, 24);
     expect(bottom).toMatch(/↑ \d+ more/);
     expect(bottom).toMatch(/vibe\s+model vibe's default/);
-    expect(bottom).toContain('! qwen is not on PATH');
-    expect(bottom).toContain('! vibe is not on PATH');
+    expect(bottom).not.toContain('! vibe is not on PATH');
     expect(bottom).toContain('enter exit · ↑↓ scroll · ← back · q quit');
   });
 
