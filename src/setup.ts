@@ -510,69 +510,69 @@ const REVIEWERS_STEP: Step = {
   validate: (state) => (state.selected.length > 0 ? undefined : 'select at least one reviewer'),
 };
 
+/** The save step's lines: the repos, the reviewers and their settings, then the warnings; all scroll together. */
+function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] {
+  const reviewersChanged =
+    ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
+  const after = state.selected.join(', ');
+  const value = reviewersChanged ? `${ctx.current.join(', ') || 'none'} ${paint(DIM, '→')} ${after}` : after;
+  const width = Math.max('reviewers'.length, ...state.selected.map((name) => name.length));
+  const watched = state.repos.filter((row) => row.on);
+  const dropped = ctx.repos.filter((row) => row.entry && !watched.some((w) => sameRepo(w.fullName, row.fullName)));
+  const nameW = Math.max(0, ...[...watched, ...dropped].map((row) => row.fullName.length));
+  const repoRows = [
+    ...watched.map((row) =>
+      [
+        row.fullName.padEnd(nameW),
+        `${moved(row) ? `${tildify(entryPath(row.entry!))} ${paint(DIM, '→')} ` : ''}${tildify(row.localPath)} · ${triggerOf(row)}`,
+        !row.entry && paint(GREEN, 'new'),
+      ]
+        .filter(Boolean)
+        .join('  '),
+    ),
+    ...dropped.map((row) => `${row.fullName.padEnd(nameW)}  ${paint(YELLOW, 'removed')}`),
+  ].map((text, i) => `  ${paint(DIM, (i === 0 ? 'repos' : '').padEnd(width))}  ${text}`);
+  const settings = (name: ReviewerName) =>
+    modelKeys(name)
+      .map((key) => {
+        const show = (v: string | undefined) => v ?? `${HARNESSES[name].bins[0]}'s default`;
+        const [was, now] = [ctx.models[name][key], state.models[name][key]];
+        return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
+      })
+      .join(' · ');
+  const warnings = [
+    ...watched
+      .filter((row) => !row.exists)
+      .map(
+        (row) => `${paint(YELLOW, '!')} ${row.fullName} has no clone at ${tildify(row.localPath)}, so its reviews fail`,
+      ),
+    ...state.selected
+      .filter((name) => !ctx.installed[name])
+      .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`),
+  ];
+  return [
+    ...repoRows,
+    `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
+    ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
+    ...(warnings.length > 0 ? ['', ...warnings] : []),
+  ];
+}
+
 const SAVE_STEP: Step = {
   group: 'Save',
-  body: (state, ctx, paint, height) => {
-    const changed = hasChanges(state, ctx);
-    const reviewersChanged =
-      ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
-    const after = state.selected.join(', ');
-    const value = reviewersChanged ? `${ctx.current.join(', ') || 'none'} ${paint(DIM, '→')} ${after}` : after;
-    const width = Math.max('reviewers'.length, ...state.selected.map((name) => name.length));
-    const watched = state.repos.filter((row) => row.on);
-    const dropped = ctx.repos.filter((row) => row.entry && !watched.some((w) => sameRepo(w.fullName, row.fullName)));
-    const nameW = Math.max(0, ...[...watched, ...dropped].map((row) => row.fullName.length));
-    const repoRows = [
-      ...watched.map((row) =>
-        [
-          row.fullName.padEnd(nameW),
-          `${moved(row) ? `${tildify(entryPath(row.entry!))} ${paint(DIM, '→')} ` : ''}${tildify(row.localPath)} · ${triggerOf(row)}`,
-          !row.entry && paint(GREEN, 'new'),
-        ]
-          .filter(Boolean)
-          .join('  '),
-      ),
-      ...dropped.map((row) => `${row.fullName.padEnd(nameW)}  ${paint(YELLOW, 'removed')}`),
-    ].map((text, i) => `  ${paint(DIM, (i === 0 ? 'repos' : '').padEnd(width))}  ${text}`);
-    const settings = (name: ReviewerName) =>
-      modelKeys(name)
-        .map((key) => {
-          const show = (v: string | undefined) => v ?? `${HARNESSES[name].bins[0]}'s default`;
-          const [was, now] = [ctx.models[name][key], state.models[name][key]];
-          return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
-        })
-        .join(' · ');
-    const warnings = [
-      ...watched
-        .filter((row) => !row.exists)
-        .map(
-          (row) =>
-            `${paint(YELLOW, '!')} ${row.fullName} has no clone at ${tildify(row.localPath)}, so its reviews fail`,
-        ),
-      ...state.selected
-        .filter((name) => !ctx.installed[name])
-        .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`),
-    ];
-    const rows = [
-      ...repoRows,
-      `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
-      ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
-    ];
-    const footer = warnings.length > 0 ? ['', ...warnings] : [];
-    return [
-      !ctx.raw ? 'Create the config file with these settings?' : changed ? 'Save these changes?' : 'Nothing changed.',
-      '',
-      ...windowed(rows, state.cursor, height - 2 - footer.length, paint),
-      ...footer,
-    ];
-  },
+  body: (state, ctx, paint, height) => [
+    !ctx.raw
+      ? 'Create the config file with these settings?'
+      : hasChanges(state, ctx)
+        ? 'Save these changes?'
+        : 'Nothing changed.',
+    '',
+    ...windowed(saveRows(state, ctx, paint), state.cursor, height - 2, paint),
+  ],
   hint: (state, ctx) =>
     [`enter ${hasChanges(state, ctx) ? 'save' : 'exit'}`, '↑↓ scroll', '← back', 'q quit'].join(' · '),
   // The rows scroll like a list, around a cursor that isn't drawn.
-  onKey: (state, key, ctx) => {
-    const dropped = ctx.repos.filter((row) => row.entry && !state.repos.some((r) => r.on && r.entry === row.entry));
-    return move(state, key, state.repos.filter((row) => row.on).length + dropped.length + 1 + state.selected.length);
-  },
+  onKey: (state, key, ctx) => move(state, key, saveRows(state, ctx, (_, text) => text).length),
 };
 
 /** The repos and reviewers steps, a model and (where the CLI takes one) an effort step per selected reviewer, then save. */
