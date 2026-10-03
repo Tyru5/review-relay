@@ -1,6 +1,6 @@
 {
   "name": "review-relay",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Run local Codex and Claude PR reviews when Greptile starts a review, falling back to GitHub PR events.",
   "bin": {
@@ -25,6 +25,11 @@
     "relay:status": "scripts/relay status",
     "relay:info": "scripts/relay info",
     "relay:logs": "scripts/relay logs",
+    "relay:help": "scripts/relay help",
+    "relay:config": "scripts/relay config",
+    "relay:run": "scripts/relay run",
+    "relay:route": "scripts/relay route",
+    "relay:replay": "scripts/relay replay",
     "lint": "oxlint --fix",
     "lint:check": "oxlint",
     "fmt": "oxfmt",

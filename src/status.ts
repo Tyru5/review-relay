@@ -3,7 +3,10 @@ import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
 import type { JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
+import { fmtDuration } from './ui.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
+
+export { fmtDuration };
 
 interface ReviewerMeta {
   name: ReviewerId;
@@ -41,13 +44,6 @@ export function readReport(dir: string): ReportSummary | null {
   const findings = { critical: 0, major: 0, minor: 0 };
   for (const f of mergeFindings(byReviewer)) findings[f.severity]++;
   return { score: meta.score ?? null, reviewers, findings };
-}
-
-export function fmtDuration(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
-  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
 }
 
 const fmtStarted = (iso: string) => {
