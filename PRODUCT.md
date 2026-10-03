@@ -21,14 +21,14 @@ The website at reviewrelay.dev exists so people can understand the tool and inst
 
 ## Positioning
 
-- Bring any agent: users select any agentic harness or LLM, and as many reviewers as they want. No vendor is built in or required.
+- Bring your agents: users seat any of the 13 supported agent CLIs (Claude Code, Codex, Augment Auggie, GitHub Copilot CLI, Factory Droid, Gemini CLI, Grok Build, Hermes Agent, Kilo Code CLI, opencode, pi, Qwen Code, Mistral Vibe), as many as they want, each on the model and effort they choose. Claude Code and Codex are the defaults; no vendor is required. CLIs whose lockdown a PR could escape are not supported (see README).
 - Reviews run on the user's machine through their own agent logins and API keys, against a temporary worktree of their own clone. No hosted reviewer, no public URL: GitHub events arrive through `gh webhook forward`.
 - It rides existing triggers: Greptile's check run starting, GitHub PR events, or an `@review-relay` mention.
 - Every reviewer scores the same six dimensions (correctness, security, code quality, standards, blast radius, testing). The headline is the lowest score among reviewers, with caps tied to findings (a critical finding limits a reviewer to 2/5, a major one to 3/5).
 
 ## Operating Context
 
-GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` extension, local clones of watched repos, a long-running local daemon (`review-relay start`), and a config file at `~/.review-relay/config.json`. Reports also land locally under `~/.review-relay/reports/`.
+GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` extension, local clones of watched repos, a long-running local daemon (`review-relay start`), an interactive `review-relay setup` that picks reviewers and their model and effort, and a config file at `~/.review-relay/config.json`. Reports also land locally under `~/.review-relay/reports/`.
 
 ## Capabilities and Constraints
 
