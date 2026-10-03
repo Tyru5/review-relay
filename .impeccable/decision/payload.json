@@ -1,0 +1,154 @@
+{
+  "title": "Choose the visual world for reviewrelay.dev",
+  "question": "The roll assigned Crash Test Rating Sheet. Keep it, take an alternate, or re-roll.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Crash Test Rating Sheet",
+      "kicker": "THE ROLL",
+      "lineage": "Euro NCAP / IIHS rating sheets and crash-hall test photography",
+      "thesis": "Every pull request goes through the test hall before it merges; the rating sheet is the verdict.",
+      "palette": ["#f2c200", "#121212", "#eeece6", "#1f9d55", "#e03a1e"],
+      "materials": [
+        "black-and-yellow quadrant test markers",
+        "high-speed film frames with ms timecodes",
+        "printed rating-sheet bars"
+      ],
+      "viewport": "The page is the rating sheet: the PR as test specimen, a monumental overall score with six category bars, a timecoded frame strip from review started to comment landed, and the install command as the test-bay start line.",
+      "risk": "Car-safety borrowing can read as costume, and 'crash' implies failure, so ratings must read as verdicts, not wrecks.",
+      "raised": [
+        {
+          "from": "challenger-city-fold",
+          "raise": "Each configured agent keeps one persistent lane mark across the sheet, so independent reviewers read as independent test runs."
+        },
+        {
+          "from": "challenger-brick",
+          "raise": "Step numerals at monumental scale, and every element snaps to one module grid."
+        },
+        {
+          "from": "challenger-darkroom",
+          "raise": "Each stage of a run is stamped with its elapsed time and marked as irreversible past the line."
+        },
+        {
+          "from": "challenger-shader",
+          "raise": "The high-speed frame strip is built as real scroll-driven motion, not a static picture of film."
+        },
+        {
+          "from": "challenger-lowbrow",
+          "raise": "Test yellow and hall white own whole regions; no neutral template ground anywhere."
+        }
+      ],
+      "comp": ".impeccable/mocks/decision/assigned.png"
+    },
+    {
+      "id": "model-pick",
+      "label": "Judges' Panel",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "diving and gymnastics judging boards, broadcast score graphics",
+      "thesis": "Several judges score the same routine; the board shows every card and circles the one that counts.",
+      "palette": ["#1d2b8f", "#ffffff", "#f2b705", "#d62828"],
+      "materials": ["raised score cards", "broadcast lower-thirds", "LED dot numerals"],
+      "viewport": "A row of judges' cards raised over the PR, the lowest circled as the headline, the install command riding the lower-third bar.",
+      "risk": "The most familiar metaphor for 'several scores'; sports broadcast styling can tip into gimmick.",
+      "comp": ".impeccable/mocks/decision/model-pick.png"
+    },
+    {
+      "id": "challenger-airport",
+      "label": "Terminal Yellow Wayfinding",
+      "verdict": "competitive",
+      "lineage": "international airport sign systems",
+      "thesis": "The page is a concourse of decision points: a trigger fires, agents run, the comment arrives at its gate.",
+      "palette": ["#ffcc00", "#111111", "#ffffff", "#2b2b2b"],
+      "materials": ["overhead sign bands", "pictogram insets", "split-flap updates"],
+      "viewport": "One overhead yellow band reading PR #482 to review, three agents, with the install command signed as the next decision.",
+      "case": "Fuses well: trigger modes map to junctions. Loses on clarity because scoring has no native home in wayfinding.",
+      "risk": "Yellow-band signage is a widely borrowed look, and the score could feel bolted on.",
+      "comp": ".impeccable/mocks/decision/challenger-airport.png",
+      "hero": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-terminal-yellow-wayfinding-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-terminal-yellow-wayfinding.webp"
+    },
+    {
+      "id": "challenger-brick",
+      "label": "Brick Build Instructions",
+      "verdict": "declined",
+      "lineage": "toy brick instruction booklets",
+      "thesis": "Setup as numbered exploded steps on sky-blue pages.",
+      "palette": ["#7fb2e5", "#111111", "#d01012", "#f6c90e"],
+      "materials": ["keyline ink", "stud grid"],
+      "viewport": "Numbered install spreads with 1:1 command call-outs.",
+      "case": "Setup fuses well, but the scored review has no native form, and it reads too playful for this audience.",
+      "kept": "Monumental step numerals on one module grid.",
+      "risk": "Toy register undercuts a precision tool.",
+      "hero": "https://impeccable.style/worlds/cards/games-toys-physics-play-brick-build-instructions-hero.webp"
+    },
+    {
+      "id": "challenger-darkroom",
+      "label": "Darkroom Safelight",
+      "verdict": "declined",
+      "lineage": "photographic printing darkrooms",
+      "thesis": "The review develops like a print in timed baths.",
+      "palette": ["#b3561c", "#2a2a2a", "#c8c8c8", "#f4f1ea"],
+      "materials": ["amber safelight", "wet silver prints"],
+      "viewport": "A tray where the scored comment emerges.",
+      "case": "Its amber-on-dark ground lands near the dark-glow look you ruled out, and development fits waiting, not scoring.",
+      "kept": "Timestamped stations, irreversible past a marked line.",
+      "risk": "Moody dark ground.",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-darkroom-safelight-bay-hero.webp"
+    },
+    {
+      "id": "challenger-city-fold",
+      "label": "Sleeping City Fold",
+      "verdict": "declined",
+      "lineage": "surreal dream cartography",
+      "thesis": "Repos as districts dreaming under one night.",
+      "palette": ["#101a3a", "#f3c96b", "#eae6dc"],
+      "materials": ["quilted map", "window-light stars"],
+      "viewport": "A folded night city of watched repos.",
+      "case": "A dreamlike metaphor obscures a precise tool; terminal users do not identify with it.",
+      "kept": "Each independent district keeps its own persistent identity.",
+      "risk": "Whimsy over clarity.",
+      "hero": "https://impeccable.style/worlds/cards/dream-surreal-impossible-worlds-sleeping-city-fold-hero.webp"
+    },
+    {
+      "id": "challenger-shader",
+      "label": "WebGL Shader Portal",
+      "verdict": "declined",
+      "lineage": "experiential studio sites",
+      "thesis": "A living shader field with thin type floating over it.",
+      "palette": ["#120a2e", "#ff5a1f", "#e9e6ff"],
+      "materials": ["fragment shader", "film grain"],
+      "viewport": "A full-bleed shader with one hero word.",
+      "case": "A dark ground with one incandescent accent is exactly the look the brief excluded.",
+      "kept": "Build the named technique for real.",
+      "risk": "Style over substance.",
+      "hero": "https://impeccable.style/worlds/cards/webgl-shader-portal-hero.webp"
+    },
+    {
+      "id": "challenger-lowbrow",
+      "label": "Lowbrow Gallery Panel",
+      "verdict": "declined",
+      "lineage": "hot-rod and tiki lowbrow art",
+      "thesis": "Agents as lacquered monsters crowding one panel.",
+      "palette": ["#e4312b", "#111111", "#f7d117", "#2bb3c0"],
+      "materials": ["candy lacquer", "heavy black outline"],
+      "viewport": "A packed airbrushed tableau with a lettered title.",
+      "case": "Too playful and illustrated for terminal users, as the brief warned.",
+      "kept": "No unpainted area: total material coverage.",
+      "risk": "Cartoon register.",
+      "hero": "https://impeccable.style/worlds/cards/pop-culture-shelf-lowbrow-gallery-panel-hero.webp"
+    }
+  ],
+  "reroll": { "registers": ["safer", "bolder"] },
+  "buildPath": { "value": "code", "toggle": true },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "The dev-tool landing page, executed impeccably.",
+    "palette": ["#0a0a0a", "#fafafa", "#3b82f6"],
+    "materials": ["terminal mockup", "feature grid"],
+    "viewport": "Centered headline, install command, a terminal screenshot, then a three-feature grid.",
+    "risk": "Indistinguishable from the competition by design.",
+    "comp": ".impeccable/mocks/decision/canon.png"
+  },
+  "steer": true
+}
