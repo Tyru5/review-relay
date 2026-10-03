@@ -6,6 +6,7 @@ export const copilot: Harness = {
   product: 'GitHub Copilot CLI',
   bins: ['copilot'],
   defaults: {},
+  choices: { model: [], effort: [] },
   schema: 'prompt',
   shell: 'none',
   // Repo hooks and MCP servers load only in trusted folders, and prompt runs never auto-trust, but these go anyway.

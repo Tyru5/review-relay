@@ -25,6 +25,7 @@ export const auggie: Harness = {
   product: 'Augment Auggie',
   bins: ['auggie'],
   defaults: {},
+  choices: { model: [], effort: [] },
   schema: 'prompt',
   shell: 'none',
   // Hooks and MCP servers in a PR's .augment/ run on startup.

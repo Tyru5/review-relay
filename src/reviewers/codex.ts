@@ -7,6 +7,10 @@ export const codex: Harness = {
   product: 'Codex CLI',
   bins: ['codex'],
   defaults: { model: 'gpt-6-astra', effort: 'high' },
+  choices: {
+    model: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6-pro'],
+    effort: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  },
   schema: 'native',
   // The read-only sandbox blocks writes at the OS level, so any shell command is safe to allow.
   shell: 'git',

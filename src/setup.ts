@@ -3,6 +3,9 @@ import { DEFAULT_MODELS, DEFAULT_REVIEWERS, REVIEWERS, type ModelConfig } from '
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import type { ReviewerName } from './types.ts';
 
+/** The `models` keys setup configures, in the order their steps run. */
+export type ModelKey = 'model' | 'effort';
+
 export interface SetupContext {
   path: string;
   /** The parsed config file, or undefined when saving creates it. */
@@ -15,15 +18,20 @@ export interface SetupContext {
   installed: Partial<Record<ReviewerName, string>>;
   /** Supported harnesses that are neither installed nor configured, named under the list. */
   notFound: ReviewerName[];
+  /** Each reviewer's model and effort as reviews would use them: the file's values over the harness defaults. */
   models: Record<ReviewerName, ModelConfig>;
 }
 
 export interface SetupState {
-  /** Index into STEPS. */
+  /** Index into `steps`. */
   step: number;
-  /** Highlighted row on the reviewers step. */
+  /** Highlighted row on list steps. */
   cursor: number;
   selected: ReviewerName[];
+  /** Like `SetupContext.models`, with the user's picks applied. */
+  models: Record<ReviewerName, ModelConfig>;
+  /** The text typed on a model step after picking "other"; undefined while its list is shown. */
+  typing?: string;
   /** Why the current step can't be left yet. */
   error?: string;
   done?: 'save' | 'cancel';
@@ -31,16 +39,24 @@ export interface SetupState {
 
 type Paint = (code: string, text: string) => string;
 
+/** Items on the progress line; every model step belongs to the one `Models` item. */
+type Group = 'Reviewers' | 'Models' | 'Save';
+const GROUPS: Group[] = ['Reviewers', 'Models', 'Save'];
+
 interface Step {
-  title: string;
+  group: Group;
   /** `height` is how many lines the body may use before the terminal would scroll. */
   body(state: SetupState, ctx: SetupContext, paint: Paint, height: number): string[];
   /** Key help shown at the bottom. */
   hint(state: SetupState, ctx: SetupContext): string;
-  /** Step-specific keys; returns `state` itself when the key does nothing here. */
+  /** Row to highlight when the step is entered; the top one by default. */
+  cursor?(state: SetupState, ctx: SetupContext): number;
+  /** Step-specific keys, tried before the common ones; returns `state` itself when the key does nothing here. */
   onKey?(state: SetupState, key: string, ctx: SetupContext): SetupState;
   /** Message that keeps the user on this step, or undefined to let them continue. */
   validate?(state: SetupState): string | undefined;
+  /** Applies the step's result as the user continues past it. */
+  leave?(state: SetupState, ctx: SetupContext): SetupState;
 }
 
 const BOLD = '1';
@@ -50,6 +66,13 @@ const YELLOW = '33';
 const CYAN = '36';
 
 const isReviewer = (name: unknown): name is ReviewerName => REVIEWERS.includes(name as ReviewerName);
+
+/** `value` when it is a plain object, else an empty one, so a malformed config section reads as unset. */
+const plain = (value: unknown): Record<string, any> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {};
+
+/** A config value as text; empty and null count as unset. */
+const asText = (value: unknown) => (value === undefined || value === null || value === '' ? undefined : String(value));
 
 /** The rows that fit in `room` lines, kept around the cursor, with markers for what scrolled out of view. */
 function windowed(rows: string[], cursor: number, room: number, paint: Paint): string[] {
@@ -81,8 +104,10 @@ export function setupContext(
   const options = [...new Set([...current.filter(isReviewer), ...REVIEWERS.filter((name) => installed[name])])];
   const models = Object.fromEntries(
     REVIEWERS.map((name) => {
-      const { model, effort } = { ...DEFAULT_MODELS[name], ...raw?.models?.[name] };
-      return [name, { model: String(model ?? '') || undefined, effort: String(effort ?? '') || undefined }];
+      const file = plain(plain(raw?.models)[name]);
+      const model = asText(file.model) ?? DEFAULT_MODELS[name].model;
+      const effort = asText(file.effort) ?? DEFAULT_MODELS[name].effort;
+      return [name, { model, effort }];
     }),
   ) as Record<ReviewerName, ModelConfig>;
   return {
@@ -100,110 +125,282 @@ export function setupContext(
 export function initialState(ctx: SetupContext): SetupState {
   const usable = ctx.options.filter((name) => ctx.current.includes(name) && ctx.installed[name]);
   const first = ctx.options.find((name) => ctx.installed[name]);
-  return { step: 0, cursor: 0, selected: usable.length > 0 ? usable : first ? [first] : [] };
+  const models = Object.fromEntries(REVIEWERS.map((name) => [name, { ...ctx.models[name] }])) as SetupState['models'];
+  return { step: 0, cursor: 0, selected: usable.length > 0 ? usable : first ? [first] : [], models };
 }
 
-/** Compares against the file's own value, so saving also repairs a malformed `reviewers`. */
-export const hasChanges = (state: SetupState, ctx: SetupContext) =>
-  !ctx.raw || JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
+/** The keys a reviewer's model steps set: `effort` only when its CLI takes one. */
+export const modelKeys = (name: ReviewerName): ModelKey[] =>
+  HARNESSES[name].choices.effort ? ['model', 'effort'] : ['model'];
 
-const STEPS: Step[] = [
-  {
-    title: 'Reviewers',
+/**
+ * The file's `models` with the picks applied. Unselected reviewers and keys the steps don't set (`provider`) stay as
+ * they were, and a pick equal to the harness default clears the key rather than pinning it.
+ */
+export function nextModels(state: SetupState, ctx: SetupContext): Record<string, any> {
+  const file = plain(ctx.raw?.models);
+  const next = { ...file };
+  for (const name of state.selected) {
+    const entry = { ...plain(file[name]) };
+    for (const key of modelKeys(name)) {
+      const value = state.models[name][key];
+      // Strict equality keeps a value the file pins, and still rewrites a malformed one (a number) as text.
+      if (value === entry[key]) continue;
+      if (value === undefined || value === DEFAULT_MODELS[name][key]) delete entry[key];
+      else entry[key] = value;
+    }
+    if (Object.keys(entry).length > 0 || JSON.stringify(entry) === JSON.stringify(file[name])) next[name] = entry;
+    else delete next[name];
+  }
+  return next;
+}
+
+/** Compares against the file's own values, so saving also repairs a malformed `reviewers` or `models`. */
+export const hasChanges = (state: SetupState, ctx: SetupContext) =>
+  !ctx.raw ||
+  JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS) ||
+  JSON.stringify(nextModels(state, ctx)) !== JSON.stringify(plain(ctx.raw.models));
+
+interface Row {
+  /** The setting this row stands for; undefined leaves it to the CLI. Absent on the "other" row. */
+  value?: string;
+  label: string;
+  note?: string;
+  /** The row that opens the text input. */
+  other?: boolean;
+}
+
+/** The current pick and the file's value lead when they aren't listed, so they stay visible and selectable. */
+export function modelRows(name: ReviewerName, field: ModelKey, state: SetupState, ctx: SetupContext): Row[] {
+  const fallback = DEFAULT_MODELS[name][field];
+  const listed = HARNESSES[name].choices[field] ?? [];
+  const extra = [state.models[name][field], ctx.models[name][field]].filter(
+    (value): value is string => !!value && !listed.includes(value),
+  );
+  return [
+    ...[...new Set(extra)].map((value) => ({ value, label: value })),
+    ...(fallback ? [] : [{ label: `${HARNESSES[name].bins[0]}'s default` }]),
+    ...listed.map((value) => ({ value, label: value, note: value === fallback ? 'default' : undefined })),
+    { label: 'other…', other: true },
+  ];
+}
+
+const setModel = (state: SetupState, name: ReviewerName, field: ModelKey, value: string | undefined): SetupState => ({
+  ...state,
+  models: { ...state.models, [name]: { ...state.models[name], [field]: value } },
+  typing: undefined,
+});
+
+/** The step that picks one reviewer's model or effort: a list of values, with "other" opening a text input. */
+function modelStep(name: ReviewerName, field: ModelKey): Step {
+  const { product, choices } = HARNESSES[name];
+  const rows = (state: SetupState, ctx: SetupContext) => modelRows(name, field, state, ctx);
+  return {
+    group: 'Models',
     body: (state, ctx, paint, height) => {
-      const found = REVIEWERS.filter((name) => ctx.installed[name]).length;
-      const modelText = (name: ReviewerName) => {
-        const { model, effort } = ctx.models[name];
-        return [model ?? 'default model', effort && `effort ${effort}`].filter(Boolean).join(' · ');
-      };
-      const width = (text: (name: ReviewerName) => string) => Math.max(...ctx.options.map((n) => text(n).length));
-      const [nameW, productW, modelW] = [width((n) => n), width((n) => HARNESSES[n].product), width(modelText)];
-      const rows = ctx.options.map((name, i) => {
+      const list = rows(state, ctx);
+      const width = Math.max(...list.map((row) => row.label.length));
+      const lines = list.map((row, i) => {
         const active = i === state.cursor;
-        const row = [
+        const label = row.other && state.typing !== undefined ? `${state.typing}▏` : row.label;
+        return [
           active ? paint(CYAN, '›') : ' ',
-          state.selected.includes(name) ? paint(GREEN, '■') : paint(DIM, '□'),
-          paint(active ? BOLD : '', name.padEnd(nameW)),
-          ` ${HARNESSES[name].product.padEnd(productW)}`,
-          ` ${modelText(name).padEnd(modelW)}`,
-          ctx.installed[name] ? '' : ` ${paint(YELLOW, 'not found on PATH')}`,
-        ];
-        return row.join(' ').trimEnd();
+          paint(active ? BOLD : '', label.padEnd(width)),
+          row.note ? paint(DIM, row.note) : '',
+        ]
+          .join(' ')
+          .trimEnd();
       });
+      const question =
+        field === 'model'
+          ? `Which model should ${name} (${product}) use?`
+          : `How much reasoning effort should ${name} (${product}) use?`;
       const intro =
-        found > 0
-          ? paint(
-              DIM,
-              `Found ${found} of ${REVIEWERS.length} supported agent CLIs. Each one selected reviews every PR.`,
-            )
-          : `${paint(YELLOW, '!')} No supported agent CLI is on PATH. Install one, then run setup again.`;
-      const footer = ctx.notFound.length > 0 ? ['', paint(DIM, `Not installed: ${ctx.notFound.join(', ')}`)] : [];
-      return [
-        'Which agents should review pull requests?',
-        intro,
-        '',
-        ...windowed(rows, state.cursor, height - 3 - footer.length, paint),
-        ...footer,
-      ];
+        (choices[field] ?? []).length === 0
+          ? `Setup has no list for ${product}, so pick other to type a value, or keep its default.`
+          : field === 'model'
+            ? `Common models for ${product}; pick other to type any model id.`
+            : `Effort levels ${product} takes, lowest first; pick other to type another.`;
+      return [question, paint(DIM, intro), '', ...windowed(lines, state.cursor, height - 3, paint)];
     },
-    hint: () => '↑↓ move · space select · enter next · q quit',
+    hint: (state, ctx) => {
+      if (state.typing !== undefined) return 'type a value · enter use it · esc back to the list';
+      return `↑↓ move · enter ${rows(state, ctx)[state.cursor]?.other ? 'type a value' : 'pick'} · ← back · q quit`;
+    },
+    cursor: (state, ctx) =>
+      Math.max(
+        0,
+        rows(state, ctx).findIndex((row) => !row.other && row.value === state.models[name][field]),
+      ),
     onKey: (state, key, ctx) => {
-      const n = ctx.options.length;
+      if (state.typing !== undefined) {
+        if (key === 'escape') return { ...state, typing: undefined };
+        if (key === 'backspace') return { ...state, typing: state.typing.slice(0, -1) };
+        if (key === 'ctrl-u') return { ...state, typing: '' };
+        if (key === 'enter') {
+          // An empty input is a change of mind, back to the list.
+          if (!state.typing) return { ...state, typing: undefined };
+          return goTo(setModel(state, name, field, state.typing), state.step + 1, ctx);
+        }
+        // Printable characters only; named keys, escape sequences, and control characters do nothing.
+        return key.length === 1 && key > ' ' ? { ...state, typing: state.typing + key } : state;
+      }
+      const list = rows(state, ctx);
+      const n = list.length;
       if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
       if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
-      if (key !== 'space') return state;
-      const name = ctx.options[state.cursor]!;
-      const on = state.selected.includes(name);
-      return { ...state, selected: ctx.options.filter((o) => (o === name ? !on : state.selected.includes(o))) };
+      if ((key === 'enter' || key === 'right') && list[state.cursor]?.other) return { ...state, typing: '' };
+      return state;
     },
-    validate: (state) => (state.selected.length > 0 ? undefined : 'select at least one reviewer'),
-  },
-  {
-    title: 'Save',
-    body: (state, ctx, paint) => {
-      const changed = hasChanges(state, ctx);
-      const after = state.selected.join(', ');
-      const value = ctx.raw && changed ? `${ctx.current.join(', ') || 'none'} ${paint(DIM, '→')} ${after}` : after;
-      const warnings = state.selected
-        .filter((name) => !ctx.installed[name])
-        .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`);
-      return [
-        !ctx.raw ? 'Create the config file with these settings?' : changed ? 'Save these changes?' : 'Nothing changed.',
-        '',
-        `  ${paint(DIM, 'reviewers')}  ${value}`,
-        ...(warnings.length > 0 ? ['', ...warnings] : []),
+    leave: (state, ctx) => {
+      const row = rows(state, ctx)[state.cursor];
+      return !row || row.other ? state : setModel(state, name, field, row.value);
+    },
+  };
+}
+
+const REVIEWERS_STEP: Step = {
+  group: 'Reviewers',
+  body: (state, ctx, paint, height) => {
+    const found = REVIEWERS.filter((name) => ctx.installed[name]).length;
+    const modelText = (name: ReviewerName) => {
+      const { model, effort } = state.models[name];
+      return [model ?? 'default model', effort && `effort ${effort}`].filter(Boolean).join(' · ');
+    };
+    const width = (text: (name: ReviewerName) => string) => Math.max(...ctx.options.map((n) => text(n).length));
+    const [nameW, productW, modelW] = [width((n) => n), width((n) => HARNESSES[n].product), width(modelText)];
+    const rows = ctx.options.map((name, i) => {
+      const active = i === state.cursor;
+      const row = [
+        active ? paint(CYAN, '›') : ' ',
+        state.selected.includes(name) ? paint(GREEN, '■') : paint(DIM, '□'),
+        paint(active ? BOLD : '', name.padEnd(nameW)),
+        ` ${HARNESSES[name].product.padEnd(productW)}`,
+        ` ${modelText(name).padEnd(modelW)}`,
+        ctx.installed[name] ? '' : ` ${paint(YELLOW, 'not found on PATH')}`,
       ];
-    },
-    hint: (state, ctx) => `enter ${hasChanges(state, ctx) ? 'save' : 'exit'} · ← back · q quit`,
+      return row.join(' ').trimEnd();
+    });
+    const intro =
+      found > 0
+        ? paint(DIM, `Found ${found} of ${REVIEWERS.length} supported agent CLIs. Each one selected reviews every PR.`)
+        : `${paint(YELLOW, '!')} No supported agent CLI is on PATH. Install one, then run setup again.`;
+    const footer = ctx.notFound.length > 0 ? ['', paint(DIM, `Not installed: ${ctx.notFound.join(', ')}`)] : [];
+    return [
+      'Which agents should review pull requests?',
+      intro,
+      '',
+      ...windowed(rows, state.cursor, height - 3 - footer.length, paint),
+      ...footer,
+    ];
   },
+  hint: () => '↑↓ move · space select · enter next · q quit',
+  onKey: (state, key, ctx) => {
+    const n = ctx.options.length;
+    if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
+    if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
+    if (key !== 'space') return state;
+    const name = ctx.options[state.cursor]!;
+    const on = state.selected.includes(name);
+    return { ...state, selected: ctx.options.filter((o) => (o === name ? !on : state.selected.includes(o))) };
+  },
+  validate: (state) => (state.selected.length > 0 ? undefined : 'select at least one reviewer'),
+};
+
+const SAVE_STEP: Step = {
+  group: 'Save',
+  body: (state, ctx, paint, height) => {
+    const changed = hasChanges(state, ctx);
+    const reviewersChanged =
+      ctx.raw && JSON.stringify(state.selected) !== JSON.stringify(ctx.raw.reviewers ?? DEFAULT_REVIEWERS);
+    const after = state.selected.join(', ');
+    const value = reviewersChanged ? `${ctx.current.join(', ') || 'none'} ${paint(DIM, '→')} ${after}` : after;
+    const width = Math.max('reviewers'.length, ...state.selected.map((name) => name.length));
+    const settings = (name: ReviewerName) =>
+      modelKeys(name)
+        .map((key) => {
+          const show = (v: string | undefined) => v ?? `${HARNESSES[name].bins[0]}'s default`;
+          const [was, now] = [ctx.models[name][key], state.models[name][key]];
+          return `${key} ${was === now ? show(now) : `${show(was)} ${paint(DIM, '→')} ${show(now)}`}`;
+        })
+        .join(' · ');
+    const warnings = state.selected
+      .filter((name) => !ctx.installed[name])
+      .map((name) => `${paint(YELLOW, '!')} ${name} is not on PATH, so its reviews fail until it is installed`);
+    const rows = state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`);
+    const footer = warnings.length > 0 ? ['', ...warnings] : [];
+    return [
+      !ctx.raw ? 'Create the config file with these settings?' : changed ? 'Save these changes?' : 'Nothing changed.',
+      '',
+      `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
+      ...windowed(rows, state.cursor, height - 3 - footer.length, paint),
+      ...footer,
+    ];
+  },
+  hint: (state, ctx) =>
+    [`enter ${hasChanges(state, ctx) ? 'save' : 'exit'}`, state.selected.length > 1 && '↑↓ scroll', '← back', 'q quit']
+      .filter(Boolean)
+      .join(' · '),
+  // The rows scroll like a list, around a cursor that isn't drawn.
+  onKey: (state, key) => {
+    const n = state.selected.length;
+    if (key === 'up' || key === 'k') return { ...state, cursor: (state.cursor + n - 1) % n };
+    if (key === 'down' || key === 'j') return { ...state, cursor: (state.cursor + 1) % n };
+    return state;
+  },
+};
+
+/** The reviewers step, a model and (where the CLI takes one) an effort step per selected reviewer, then save. */
+const steps = (state: SetupState): Step[] => [
+  REVIEWERS_STEP,
+  ...state.selected.flatMap((name) => modelKeys(name).map((field) => modelStep(name, field))),
+  SAVE_STEP,
 ];
+
+/** Moves to step `index` with the row that step starts on highlighted. */
+function goTo(state: SetupState, index: number, ctx: SetupContext): SetupState {
+  const next: SetupState = { ...state, step: index, error: undefined, typing: undefined };
+  return { ...next, cursor: steps(next)[index]!.cursor?.(next, ctx) ?? 0 };
+}
 
 /** Applies one key from `parseKeys`. Sets `done` when the user saves or quits. */
 export function reduce(state: SetupState, key: string, ctx: SetupContext): SetupState {
-  if (key === 'q' || key === 'escape' || key === 'ctrl-c') return { ...state, done: 'cancel' };
-  const step = STEPS[state.step]!;
-  const last = state.step === STEPS.length - 1;
+  if (key === 'ctrl-c') return { ...state, done: 'cancel' };
+  const list = steps(state);
+  const step = list[state.step]!;
+  const own = step.onKey?.(state, key, ctx) ?? state;
+  if (own !== state) return { ...own, error: undefined };
+  // A text input takes every other key as well, so q and the arrows can't act on the setup while typing.
+  if (state.typing !== undefined) return state;
+  if (key === 'q' || key === 'escape') return { ...state, done: 'cancel' };
+  const last = state.step === list.length - 1;
   if (key === 'enter' || (key === 'right' && !last)) {
     const error = step.validate?.(state);
     if (error) return { ...state, error };
-    return last ? { ...state, done: 'save' } : { ...state, step: state.step + 1 };
+    const left = step.leave?.(state, ctx) ?? state;
+    return last ? { ...left, done: 'save' } : goTo(left, state.step + 1, ctx);
   }
-  if (key === 'left' || key === 'backspace') return { ...state, step: Math.max(0, state.step - 1), error: undefined };
-  const next = step.onKey?.(state, key, ctx) ?? state;
-  return next === state ? state : { ...next, error: undefined };
+  if (key === 'left' || key === 'backspace') {
+    return state.step === 0 ? { ...state, error: undefined } : goTo(state, state.step - 1, ctx);
+  }
+  return state;
 }
 
-/** `height` is the terminal's row count; the reviewer list scrolls when the frame would not fit. */
+/** `height` is the terminal's row count; the lists scroll when the frame would not fit. */
 export function renderSetup(state: SetupState, ctx: SetupContext, color: boolean, height = Infinity): string[] {
   const paint: Paint = (code, text) => (color && code && text ? `\x1b[${code}m${text}\x1b[0m` : text);
-  const step = STEPS[state.step]!;
-  const progress = STEPS.map((s, i) =>
-    i < state.step
-      ? paint(GREEN, `✔ ${s.title}`)
-      : i === state.step
-        ? paint(CYAN, `● ${s.title}`)
-        : paint(DIM, `○ ${s.title}`),
-  ).join(paint(DIM, ' ── '));
+  const list = steps(state);
+  const step = list[state.step]!;
+  const pages = list.filter((s) => s.group === 'Models');
+  const active = GROUPS.indexOf(step.group);
+  const progress = GROUPS.map((group, i) => {
+    const label = group === 'Models' && i === active ? `Models ${pages.indexOf(step) + 1}/${pages.length}` : group;
+    return i < active
+      ? paint(GREEN, `✔ ${label}`)
+      : i === active
+        ? paint(CYAN, `● ${label}`)
+        : paint(DIM, `○ ${label}`);
+  }).join(paint(DIM, ' ── '));
   const file = tildify(ctx.path) + (ctx.raw ? '' : ' (new file)');
   const head = ['', `${paint(BOLD, 'review-relay setup')}  ${paint(DIM, file)}`, '', progress, ''];
   const foot = [
@@ -230,6 +427,7 @@ const KEY_NAMES: Record<string, string> = {
   ' ': 'space',
   '\x1b': 'escape',
   '\x03': 'ctrl-c',
+  '\x15': 'ctrl-u',
   '\x7f': 'backspace',
   '\b': 'backspace',
 };
@@ -322,7 +520,7 @@ function interact(ctx: SetupContext): Promise<SetupState> {
   });
 }
 
-/** Interactive setup: pick reviewers, then write them into the config file (created when missing). */
+/** Interactive setup: pick reviewers and their models, then write them into the config file (created when missing). */
 export async function setup(path: string) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('setup needs an interactive terminal');
   const raw = await readRawConfig(path);
@@ -331,9 +529,12 @@ export async function setup(path: string) {
   if (result.done === 'cancel') return console.log('setup cancelled, nothing saved');
   if (!hasChanges(result, ctx)) return console.log(`nothing changed in ${tildify(path)}`);
 
+  const models = nextModels(result, ctx);
   const next: Record<string, any> = { ...raw, reviewers: result.selected };
+  // A file that never had `models` gains it only when a pick put something there.
+  if (raw?.models !== undefined || Object.keys(models).length > 0) next.models = models;
   await Bun.write(path, `${formatJson(next)}\n`);
-  console.log(`\x1b[32m✔\x1b[0m saved reviewers (${result.selected.join(', ')}) to ${tildify(path)}`);
+  console.log(`\x1b[32m✔\x1b[0m saved reviewers (${result.selected.join(', ')}) and their models to ${tildify(path)}`);
   console.log(
     Array.isArray(next.repos) && next.repos.length > 0
       ? '  if the daemon is running, apply with: scripts/relay restart'
