@@ -38,7 +38,10 @@ const dimensionField = {
   additionalProperties: false,
 };
 
-/** Shared by `claude --json-schema` and `codex exec --output-schema` (strict mode: every field required). */
+/**
+ * Shared by `claude --json-schema` and `codex exec --output-schema` (strict mode: every field required).
+ * Harnesses without a schema flag get it in the prompt instead.
+ */
 export const VERDICT_SCHEMA = {
   type: 'object',
   properties: {
@@ -101,6 +104,48 @@ export function parseVerdict(raw: unknown): Verdict {
     dimensions,
     findings,
   };
+}
+
+/** Index just past the `}` that closes the object opening at `start`, or -1. Skips braces inside strings. */
+function objectEnd(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * The verdict object in a free-text reply, for harnesses that can't enforce the schema. Models wrap JSON in
+ * prose or code fences and sometimes print a draft first, so this takes the last top-level object that has
+ * `summary` and `dimensions`, falling back to the last one that parses so `parseVerdict` can say what is missing.
+ */
+export function findVerdictJson(text: string): unknown {
+  let verdict: unknown;
+  let fallback: unknown;
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    const end = objectEnd(text, start);
+    if (end === -1) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(text.slice(start, end));
+    } catch {
+      continue;
+    }
+    if (value && typeof value === 'object' && 'summary' in value && 'dimensions' in value) verdict = value;
+    else fallback = value;
+    // Objects nested in this one are part of it, not separate answers.
+    start = end - 1;
+  }
+  if (verdict === undefined && fallback === undefined) throw new Error('no JSON object in the reply');
+  return verdict ?? fallback;
 }
 
 /**

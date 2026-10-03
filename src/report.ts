@@ -1,13 +1,14 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describeStats, type DiffStats } from './diffstats.ts';
+import { HARNESSES } from './reviewers/index.ts';
 import type { ResolvedJob, ReviewerName, ReviewerResult } from './types.ts';
 import { DIMENSION_LABELS, DIMENSIONS, mergeFindings, type MergedFinding, type Severity } from './verdict.ts';
 
 export const COMMENT_MARKER = '<!-- review-relay -->';
 const GITHUB_COMMENT_LIMIT = 65_000;
 
-const LABELS: Record<ReviewerName, string> = { codex: 'Codex', claude: 'Claude' };
+const reviewerLabel = (name: ReviewerName) => HARNESSES[name].label;
 const SEVERITY_LABELS: Record<Severity, string> = { critical: 'Critical', major: 'Major', minor: 'Minor' };
 
 /** Lowest score across reviewers that succeeded; merge confidence is only as high as the most skeptical reviewer. */
@@ -31,15 +32,19 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   const lines: string[] = [COMMENT_MARKER];
 
   lines.push(`## review-relay: Confidence ${overall ?? '?'}/5`);
-  const perReviewer = results.map((r) => `${LABELS[r.name]} ${r.ok ? `${r.score}/5` : 'failed'}`).join(', ');
+  const perReviewer = results.map((r) => `${reviewerLabel(r.name)} ${r.ok ? `${r.score}/5` : 'failed'}`).join(', ');
   lines.push(
     `<sub>Commit \`${job.headSha.slice(0, 8)}\` · ${job.reason} · ${describeStats(stats)} · lowest of: ${perReviewer}</sub>`,
     '',
   );
 
-  for (const r of ok) lines.push(`**${LABELS[r.name]}:** ${r.verdict!.summary} _${r.verdict!.scoreRationale}_`, '');
+  for (const r of ok)
+    lines.push(`**${reviewerLabel(r.name)}:** ${r.verdict!.summary} _${r.verdict!.scoreRationale}_`, '');
 
-  lines.push(`| | ${results.map((r) => LABELS[r.name]).join(' | ')} |`, `|---|${results.map(() => ':-:').join('|')}|`);
+  lines.push(
+    `| | ${results.map((r) => reviewerLabel(r.name)).join(' | ')} |`,
+    `|---|${results.map(() => ':-:').join('|')}|`,
+  );
   lines.push(`| **Overall** | ${results.map((r) => (r.ok ? `**${r.score}/5**` : 'failed')).join(' | ')} |`);
   for (const d of DIMENSIONS) {
     lines.push(
@@ -48,7 +53,7 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   }
   lines.push('');
 
-  const findings = mergeFindings(ok.map((r) => ({ reviewer: LABELS[r.name], findings: r.verdict!.findings })));
+  const findings = mergeFindings(ok.map((r) => ({ reviewer: reviewerLabel(r.name), findings: r.verdict!.findings })));
   lines.push(`### Findings (${findings.length})`, '');
   if (findings.length === 0) lines.push('No issues found.', '');
   for (const f of findings) {
@@ -67,7 +72,7 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
 
   lines.push('<details><summary>Dimension notes</summary>', '');
   for (const r of ok) {
-    lines.push(`**${LABELS[r.name]}**`, '');
+    lines.push(`**${reviewerLabel(r.name)}**`, '');
     for (const d of DIMENSIONS)
       lines.push(`- ${DIMENSION_LABELS[d]} (${r.verdict!.dimensions[d].score}/5): ${r.verdict!.dimensions[d].note}`);
     lines.push('');
@@ -75,7 +80,7 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   lines.push('</details>', '');
 
   for (const res of results.filter((f) => !f.ok))
-    lines.push(`> ${LABELS[res.name]} review failed: ${escapeCell((res.error ?? '').slice(0, 300))}`, '');
+    lines.push(`> ${reviewerLabel(res.name)} review failed: ${escapeCell((res.error ?? '').slice(0, 300))}`, '');
 
   lines.push(
     '<sub>Scores are 1-5 merge confidence. Caps: a critical finding limits a reviewer to 2/5, a major finding to 3/5, and no overall score exceeds the weakest dimension by more than 1.</sub>',

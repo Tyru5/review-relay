@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { HARNESSES, REVIEWER_NAMES } from './reviewers/index.ts';
 import type { ReviewerName, TriggerMode } from './types.ts';
 
 export interface GithubTriggerConfig {
@@ -18,9 +19,12 @@ export interface RepoConfig {
 }
 
 export interface ModelConfig {
-  model: string;
-  /** Reasoning effort passed to the CLI (claude: low..max, codex: low..ultra). */
-  effort: string;
+  /** Unset uses the CLI's own default model. */
+  model?: string;
+  /** Reasoning effort, for CLIs that take one (claude: low..max, codex: low..ultra). */
+  effort?: string;
+  /** Model provider, for CLIs that take it apart from the model (hermes). */
+  provider?: string;
 }
 
 export interface Config {
@@ -39,20 +43,23 @@ export const DEFAULT_DATA_DIR = join(homedir(), '.review-relay');
 
 export const defaultConfigPath = () => process.env.REVIEW_RELAY_CONFIG ?? join(DEFAULT_DATA_DIR, 'config.json');
 
-export const DEFAULT_MODELS: Record<ReviewerName, ModelConfig> = {
-  claude: { model: 'claude-opus-5-5', effort: 'max' },
-  codex: { model: 'gpt-6-astra', effort: 'high' },
-};
+export const REVIEWERS = REVIEWER_NAMES;
+
+/** Reviewers when the config lists none. */
+export const DEFAULT_REVIEWERS: ReviewerName[] = ['codex', 'claude'];
+
+export const DEFAULT_MODELS = Object.fromEntries(
+  REVIEWERS.map((name) => [name, { ...HARNESSES[name].defaults }]),
+) as Record<ReviewerName, ModelConfig>;
 
 const TRIGGERS: TriggerMode[] = ['auto', 'greptile', 'github'];
-const REVIEWERS: ReviewerName[] = ['codex', 'claude'];
 
 export function parseConfig(raw: unknown): Config {
   if (!raw || typeof raw !== 'object') throw new Error('config must be a JSON object');
   const c = raw as Record<string, any>;
   if (!Array.isArray(c.repos) || c.repos.length === 0) throw new Error('config.repos must list at least one repo');
 
-  const reviewers: ReviewerName[] = c.reviewers ?? REVIEWERS;
+  const reviewers: ReviewerName[] = c.reviewers ?? DEFAULT_REVIEWERS;
   for (const r of reviewers) {
     if (!REVIEWERS.includes(r)) throw new Error(`unknown reviewer "${r}" (expected ${REVIEWERS.join(', ')})`);
   }
@@ -61,7 +68,7 @@ export function parseConfig(raw: unknown): Config {
   for (const name of REVIEWERS) {
     const m = c.models?.[name];
     if (m === undefined) continue;
-    for (const key of ['model', 'effort'] as const) {
+    for (const key of ['model', 'effort', 'provider'] as const) {
       if (m[key] !== undefined && (typeof m[key] !== 'string' || !m[key])) {
         throw new Error(`models.${name}.${key} must be a non-empty string`);
       }

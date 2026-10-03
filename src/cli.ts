@@ -3,12 +3,14 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
-import { findRepo, loadConfig, type Config } from './config.ts';
+import { defaultConfigPath, findRepo, loadConfig, type Config } from './config.ts';
 import { Forwarder } from './forwarder.ts';
 import { resolveJob } from './github.ts';
+import { findBin, HARNESSES } from './reviewers/index.ts';
 import { runReview } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
+import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
 import { renderStatus } from './status.ts';
 
@@ -23,6 +25,7 @@ Commands:
   status                        Show recent review jobs with scores, timings, and finding counts
       --limit <n>               Number of jobs to show (default 20)
   config                        Print the resolved config (defaults applied) as JSON
+  setup                         Pick reviewers in an interactive terminal UI and save them to the config
 
 Options:
   --config <path>               Config file (default ~/.review-relay/config.json or $REVIEW_RELAY_CONFIG)
@@ -47,6 +50,9 @@ async function start(config: Config) {
   const secret = randomBytes(24).toString('hex');
   const server = startServer(config, scheduler, secret);
   log(`listening on http://127.0.0.1:${server.port}/hook (reviewers: ${config.reviewers.join(', ')})`);
+  for (const name of config.reviewers) {
+    if (!findBin(name)) log(`warning: ${HARNESSES[name].bins.join(' or ')} not on PATH, so ${name} reviews will fail`);
+  }
 
   const forwarders = config.repos.map(
     (repo) => new Forwarder(repo, `http://127.0.0.1:${server.port}/hook`, secret, log),
@@ -134,6 +140,8 @@ async function main() {
   const [command, arg] = positionals;
   if (values.version) return console.log(version);
   if (!command || values.help) return console.log(USAGE);
+  // setup writes the config, so it must not require a valid one first.
+  if (command === 'setup') return setup(values.config ?? defaultConfigPath());
 
   const config = await loadConfig(values.config);
   switch (command) {

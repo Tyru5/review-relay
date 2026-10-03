@@ -4,7 +4,20 @@ export type TriggerMode = 'auto' | 'greptile' | 'github';
 
 export type JobSource = 'greptile' | 'github' | 'mention' | 'manual';
 
-export type ReviewerName = 'codex' | 'claude';
+export type ReviewerName =
+  | 'claude'
+  | 'codex'
+  | 'auggie'
+  | 'copilot'
+  | 'droid'
+  | 'gemini'
+  | 'grok'
+  | 'hermes'
+  | 'kilo'
+  | 'opencode'
+  | 'pi'
+  | 'qwen'
+  | 'vibe';
 
 /** A review request. `headSha`/`baseRef` are absent for comment triggers until resolved via `gh`. */
 export interface ReviewJob {

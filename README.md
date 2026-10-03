@@ -1,6 +1,6 @@
 # review-relay
 
-Runs local Codex and Claude reviews on a pull request as soon as a review starts on GitHub, then posts their findings and a 1-5 merge confidence score to the PR.
+Runs local AI agent reviews (Claude Code, Codex, or any of 11 other agent CLIs) on a pull request as soon as a review starts on GitHub, then posts their findings and a 1-5 merge confidence score to the PR.
 
 - Repos with Greptile: triggers on Greptile's `Greptile Review` check run starting (`check_run` `created`, `in_progress`).
 - Repos without an AI reviewer bot: triggers on GitHub `pull_request` events, the same ones Greptile reacts to.
@@ -12,7 +12,7 @@ Events reach your machine through `gh webhook forward`, so no public URL is need
 
 - `git`
 - `gh` signed in with access to the watched repos, plus the webhook extension: `gh extension install cli/gh-webhook`
-- `codex` and `claude` CLIs signed in
+- At least one [supported agent CLI](#supported-agents), signed in (Claude Code and Codex by default)
 - A local clone of each watched repo
 - [Bun](https://bun.sh), only when running from source
 
@@ -40,19 +40,23 @@ Then edit `~/.review-relay/config.json` and run `review-relay start`.
 bun install
 mkdir -p ~/.review-relay
 cp config.example.json ~/.review-relay/config.json   # then edit repos
+bun src/cli.ts setup                                 # optional: pick reviewers in a terminal UI
 bun src/cli.ts start
 ```
 
 ## Config
+
+`bun src/cli.ts setup` (or `scripts/relay setup`) walks through the config step by step in the terminal. The first step lists the supported agent CLIs it finds on PATH, plus any the config already names, and picks which ones review PRs (↑/↓ to move, space to toggle, enter to continue). Claude Code and Codex start selected when installed. The last step shows what changed and saves it to the config file, creating the file if it doesn't exist. Fields the steps don't cover are kept.
 
 | Field | Default | Meaning |
 | - | - | - |
 | `port` | `9988` | Local port for forwarded webhooks |
 | `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
-| `reviewers` | `["codex", "claude"]` | Which reviewers to run |
-| `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | Model and effort for the Claude reviewer (`--model`, `--effort`) |
-| `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | Model and reasoning effort for the Codex reviewer (`--model`, `model_reasoning_effort`) |
+| `reviewers` | `["codex", "claude"]` | Which reviewers to run, by the names under [Supported agents](#supported-agents) |
+| `models.<reviewer>` | see below | `model` and `effort` for that reviewer's CLI, passed with the flags listed under Supported agents. Unset means the CLI's own default. `provider` is also read for `hermes`. |
+| `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | |
+| `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | |
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
 | `repos[].fullName` | required | `owner/name` |
 | `repos[].localPath` | required | Local clone used to create worktrees |
@@ -69,6 +73,44 @@ bun src/cli.ts start
 
 Each commit is reviewed once. Mentions and `run` always review again. Drafts are skipped until marked ready.
 
+## Supported agents
+
+PR content can carry prompt injection, so every reviewer runs headless and locked down by the CLI itself, not by asking nicely in the prompt: no file writes, no web access, and no shell. Codex is the exception: its commands run inside its read-only OS sandbox. Vibe's plan agent may also run `git diff` and `git log` because it refuses the git flags that write files or run programs. Every other reviewer gets the commit list and diff (up to 60,000 characters) in the prompt instead. CLIs without a schema flag get the verdict schema in the prompt, and review-relay parses the JSON out of their reply.
+
+Several CLIs run code from config files in the repo they're reviewing (hooks, plugins, MCP servers). Before any reviewer starts, review-relay deletes those paths from the review worktree for the selected CLIs. The PR's changes to them still show in the diff.
+
+| Reviewer | CLI | Locked down with | `models` flags |
+| - | - | - | - |
+| `claude` | Claude Code | `--restricted --strict-mcp-config --permission-mode dontAsk`, tools `Read,Grep,Glob`; ignores user, project, and local settings | `--model`, `--effort` |
+| `codex` | Codex CLI | `exec --sandbox read-only --ignore-user-config --ignore-rules` | `--model`, `model_reasoning_effort` |
+| `auggie` | Augment Auggie | lists its tools each run and removes all but read and search; fresh cache dir with the login passed in `AUGMENT_SESSION_AUTH`; deletes `.augment/` | `-m`, `--reasoning-effort` |
+| `copilot` | GitHub Copilot CLI | `--available-tools view,read,grep,glob`, `--deny-tool write`, `--deny-tool shell`, `--no-custom-instructions`, `--disable-builtin-mcps`; deletes `.github/hooks/`, `.github/copilot/`, `.mcp.json`, `.vscode/mcp.json` | `--model`, `--reasoning-effort` |
+| `droid` | Factory Droid | `exec` (read-only unless `--auto`) with `--only-tools Read,Grep,Glob,LS`; deletes `.factory/` | `-m`, `-r` |
+| `gemini` | Gemini CLI | `--approval-mode plan`, `-e none`, no MCP servers; deletes `.gemini/`, `.env` | `-m` |
+| `grok` | Grok Build | tools `read_file,grep,list_dir`; no web search, subagents, memory, MCP, or Claude Code and Cursor imports; deletes `.grok/`, `.envrc` | `-m`, `--reasoning-effort` |
+| `hermes` | Hermes Agent | `-z --safe-mode` with the `file` toolset and writes confined to an empty scratch directory; deletes `.hermes/` | `-m`, `--provider`, `--reasoning` |
+| `kilo` | Kilo Code CLI | `run --pure` with an inline read-only agent, project config off, never through a daemon; deletes `.kilo/`, `.kilocode/`, `kilo.json`, `opencode.json` | `-m`, `--variant` |
+| `opencode` | opencode | `run --pure` with an inline read-only agent and project config off; deletes `.opencode/`, `opencode.json` | `-m`, `--variant` |
+| `pi` | pi | `-p --tools read,grep,find,ls` with no extensions, skills, or context files, ignoring project-local files; deletes `.pi/` | `--model`, `--thinking` |
+| `qwen` | Qwen Code | `--approval-mode plan --safe-mode`; deletes `.qwen/` | `-m` |
+| `vibe` | Mistral Vibe | `-p --agent plan`, which denies anything that needs approval; deletes `.vibe/`, `.agents/` | model alias via `VIBE_ACTIVE_MODEL` |
+
+Each lockdown was checked on macOS by asking the agent to write a file, run `touch`, and fetch a URL. Copilot, Gemini, and Qwen were set up from their docs and source but not run, because they weren't installed. Droid's login failed on the test machine, so only its offline tool listing was checked. Kilo was probed, but its review run needs account credits.
+
+Not supported, because a PR could get around the lockdown:
+
+- Amp: its permission rules don't block its web tools, and it reads files only through a shell whose allow patterns let `git log; touch x` through.
+- Cursor CLI: runs commands from a PR's `.cursor/hooks.json` under every flag combination.
+- Devin CLI: runs hooks and MCP servers from a PR's `.devin/` before tool limits apply.
+- Cline: runs a PR's `.cline/hooks/` and plugins, with no way to turn that off.
+- Goose: runs hooks from a PR's `.agents/plugins/`, and recipes render the prompt as a template.
+- Crush: `crush run` approves every tool, and a PR's `crush.json` runs shell at load.
+- Aider: edits files by design, with no tool sandbox.
+- Kiro CLI: auto-allows `git diff` and `git log`, which can write files with `--output`; it's closed source, so how it handles those flags couldn't be checked.
+- OpenHands: headless mode approves every action.
+
+Not evaluated yet: Continue (`cn`), Kimi Code, Letta Code, Qoder, CodeBuddy, Docker Agent, iFlow, JetBrains Junie, Qodo Command.
+
 ## Commands
 
 ```sh
@@ -77,6 +119,7 @@ bun src/cli.ts run --repo owner/name --pr 123       # review an open PR now
 bun src/cli.ts replay events.jsonl --dry-run        # test trigger logic with recorded deliveries
 bun src/cli.ts status [--limit N]                   # recent jobs: scores, per-reviewer timings, finding counts
 bun src/cli.ts config                               # resolved config as JSON
+bun src/cli.ts setup                                # interactive config: pick reviewers, then save
 ```
 
 ## Development
@@ -113,6 +156,7 @@ git tag v0.2.0 && git push origin v0.2.0
 ## Daemon control
 
 ```sh
+scripts/relay setup      # interactive config; works before a config exists
 scripts/relay start      # background daemon; pid + log in dataDir (daemon.pid, daemon.log)
 scripts/relay stop       # SIGTERM so temporary repo webhooks get deleted; forces after 20s
 scripts/relay restart
@@ -123,17 +167,16 @@ scripts/relay logs [N|-f]
 
 Also available as `bun run relay:<command>` (e.g. `bun run relay:logs -f`). Needs `jq`.
 
-Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, `codex.json`, `claude.json`, and `meta.json`.
+Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<reviewer>.json` per reviewer, and `meta.json`.
 
 ## How a review runs
 
 1. Fetch `refs/pull/<n>/head` and the base branch into the local clone.
 2. Create a detached worktree at the PR head commit.
 3. Compute diff stats (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
-4. Run both reviewers in parallel with the same rubric prompt and a JSON schema for the answer, both read-only:
-   - `codex exec --sandbox read-only --output-schema ...`
-   - `claude -p --json-schema ...` with only `Read`, `Grep`, `Glob`, and `git diff/log/show/grep` allowed
-5. Write reports, post or update the PR comment, remove the worktree.
+4. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
+5. Run the selected reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any configured reviewer whose CLI isn't on PATH.
+6. Write reports, post or update the PR comment, remove the worktree.
 
 Reviewers are spawned directly, not through your shell, so shell aliases (for example a `codex` alias that bypasses the sandbox) do not apply.
 
@@ -152,9 +195,11 @@ Each reviewer reads the repo's own standards (AGENTS.md, CLAUDE.md, CONTRIBUTING
 
 The reviewer also gives an overall merge confidence (5 = merge as is, 4 = minor issues, 3 = fix before merging, 2 = critical issue or wide blast radius with weak tests, 1 = should not merge). Code then applies caps so the number matches the findings: a critical finding limits it to 2, a major finding to 3, and it can be at most one above the weakest dimension.
 
-The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, `codex.json`, `claude.json`, and `meta.json`.
+The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, one `<reviewer>.json` per reviewer, and `meta.json`.
 
 ## Limits
 
 - `gh webhook forward` is GitHub's development tool: one forwarder per repo at a time, and the machine must be online. Stop the daemon with Ctrl+C so it removes the temporary repo webhooks.
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
+- Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
+- Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
