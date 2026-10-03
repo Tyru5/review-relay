@@ -163,7 +163,8 @@ describe('routing', () => {
     const t = setup(fields, { files: ['1\t1\tpackage.json', '3\t0\tsrc/a.ts'] });
     const outcome = await runReview(job, t.repo, t.config, t.deps);
     expect(outcome.route).toEqual({ name: 'risky', reason: 'wide-impact: package.json', forced: false });
-    expect(t.calls.map((call) => [t.scratch(call), call.timeoutMs])).toEqual([
+    // Reviewers start in parallel, so their calls can land in either order.
+    expect(t.calls.map((call) => [t.scratch(call), call.timeoutMs]).toSorted()).toEqual([
       ['claude', 3_600_000],
       ['codex', 3_600_000],
     ]);
