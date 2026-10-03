@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
-import { resolve as resolvePath, sep } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 import { DEFAULT_MODELS, DEFAULT_REVIEWERS, REVIEWERS, type ModelConfig } from './config.ts';
-import { cloneAt, discoverClones, type Clone } from './repos.ts';
+import { cloneAround, cloneAt, discoverClones, type Clone } from './repos.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import type { ReviewerName } from './types.ts';
 
@@ -14,13 +14,13 @@ export interface Disk {
   found: Clone[];
   /** The clone at a folder the user names, or undefined when there is none. */
   at: (dir: string) => Clone | undefined;
-  /** Where setup was run from: a clone there is preselected when the file lists no repos. */
-  cwd?: string;
+  /** The clone setup was run from, listed even when the scan missed it and preselected when the file lists no repos. */
+  here?: Clone;
 }
 
 /** A row on the repos step. */
 export interface RepoOption extends Clone {
-  /** The file's entry for this repo, kept as is (trigger and the rest) when saving. */
+  /** The file's entry for this repo, kept as is (trigger and the rest) when saving, except for a changed `localPath`. */
   entry?: Record<string, any>;
   /** False for a configured repo with no clone at its path. */
   exists: boolean;
@@ -127,18 +127,32 @@ const listRepos = (raw: Record<string, any> | undefined): Record<string, any>[] 
 
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
-/** Rows on the repos step: the file's repos (first entry per name), then the clones found that aren't among them. */
+/** The path an entry sets, as the row compares it. */
+const entryPath = (entry: Record<string, any>) => untildify(asText(entry.localPath) ?? '');
+
+/**
+ * Adds `clone` to `rows`, or when a row already names its repo, moves that row to the clone's path if the row's own
+ * path has no clone (the clone moved since the file was written).
+ */
+function placeClone(rows: RepoOption[], clone: Clone) {
+  const known = rows.find((row) => sameRepo(row.fullName, clone.fullName));
+  if (!known) return rows.push({ ...clone, exists: true, on: false });
+  if (known.exists || known.localPath === clone.localPath) return;
+  rows.splice(rows.indexOf(known), 1, { ...known, localPath: clone.localPath, exists: true });
+}
+
+/**
+ * Rows on the repos step: the file's repos (first entry per name), then the clones found and the clone setup runs
+ * from when they aren't among them.
+ */
 function repoOptions(current: Record<string, any>[], disk: Disk): RepoOption[] {
   const rows: RepoOption[] = [];
   for (const entry of current) {
     if (rows.some((row) => sameRepo(row.fullName, entry.fullName))) continue;
-    const localPath = untildify(asText(entry.localPath) ?? '');
+    const localPath = entryPath(entry);
     rows.push({ fullName: entry.fullName, localPath, entry, exists: !!disk.at(localPath), on: false });
   }
-  for (const clone of disk.found) {
-    if (rows.some((row) => sameRepo(row.fullName, clone.fullName))) continue;
-    rows.push({ ...clone, exists: true, on: false });
-  }
+  for (const clone of [...disk.found, ...(disk.here ? [disk.here] : [])]) placeClone(rows, clone);
   return rows;
 }
 
@@ -183,22 +197,14 @@ export function setupContext(
   };
 }
 
-/** The found clone that holds `cwd`, if any: the one setup was run from. */
-function cloneAround(repos: RepoOption[], cwd: string | undefined): RepoOption | undefined {
-  if (!cwd) return undefined;
-  const inside = (row: RepoOption) => cwd === row.localPath || cwd.startsWith(row.localPath + sep);
-  return repos
-    .filter((row) => row.exists && inside(row))
-    .toSorted((a, b) => b.localPath.length - a.localPath.length)[0];
-}
-
 /**
  * Preselects the configured repos that have a clone, else the clone setup was run from; and the configured (or
  * default) reviewers that are installed, else the first installed harness.
  */
 export function initialState(ctx: SetupContext): SetupState {
   const configured = ctx.repos.filter((row) => row.entry && row.exists);
-  const start = configured.length > 0 ? configured : [cloneAround(ctx.repos, ctx.disk.cwd)].filter(Boolean);
+  const here = ctx.disk.here && ctx.repos.find((row) => sameRepo(row.fullName, ctx.disk.here!.fullName));
+  const start = configured.length > 0 ? configured : here ? [here] : [];
   const repos = ctx.repos.map((row) => ({ ...row, on: start.includes(row) }));
   const usable = ctx.options.filter((name) => ctx.current.includes(name) && ctx.installed[name]);
   const first = ctx.options.find((name) => ctx.installed[name]);
@@ -207,11 +213,23 @@ export function initialState(ctx: SetupContext): SetupState {
   return { ...state, cursor: REPOS_STEP.cursor!(state, ctx) };
 }
 
-/** The file's `repos` after the toggles: configured entries as they were, and a new clone as a minimal entry. */
+/** True for a configured row whose path setup changed, by finding its clone elsewhere or being told where it is. */
+const moved = (row: RepoOption) => !!row.entry && entryPath(row.entry) !== row.localPath;
+
+/**
+ * The file's `repos` after the toggles: configured entries as they were (with the new path when the row moved), and
+ * a new clone as a minimal entry.
+ */
 export const nextRepos = (state: SetupState): Record<string, any>[] =>
   state.repos
     .filter((row) => row.on)
-    .map((row) => row.entry ?? { fullName: row.fullName, localPath: tildify(row.localPath) });
+    .map((row) =>
+      !row.entry
+        ? { fullName: row.fullName, localPath: tildify(row.localPath) }
+        : moved(row)
+          ? { ...row.entry, localPath: tildify(row.localPath) }
+          : row.entry,
+    );
 
 /** The trigger mode a repo's entry sets, or the default. */
 const triggerOf = (row: RepoOption) => asText(row.entry?.trigger) ?? 'auto';
@@ -345,8 +363,8 @@ function modelStep(name: ReviewerName, field: ModelKey): Step {
         return typed(state, key, (text) => goTo(setModel(state, name, field, text), state.step + 1, ctx));
       }
       const list = rows(state, ctx);
-      const moved = move(state, key, list.length);
-      if (moved !== state) return moved;
+      const stepped = move(state, key, list.length);
+      if (stepped !== state) return stepped;
       if ((key === 'enter' || key === 'right') && list[state.cursor]?.other) return { ...state, typing: '' };
       return state;
     },
@@ -357,11 +375,18 @@ function modelStep(name: ReviewerName, field: ModelKey): Step {
   };
 }
 
-/** Toggles the row that names `clone`'s repo, or adds `clone` as a selected row above "other" when no row names it. */
+/**
+ * Selects `clone`: toggles the row at its path, moves the row that names its repo to the typed path and selects it,
+ * or adds a selected row above "other" when no row names it.
+ */
 function selectRepo(state: SetupState, clone: Clone): SetupState {
   const known = state.repos.find((row) => sameRepo(row.fullName, clone.fullName));
   if (known) {
-    const repos = state.repos.map((row) => (row === known ? { ...row, on: !row.on } : row));
+    const next =
+      known.localPath === clone.localPath
+        ? { ...known, on: !known.on }
+        : { ...known, ...clone, exists: true, on: true };
+    const repos = state.repos.map((row) => (row === known ? next : row));
     return { ...state, repos, typing: undefined };
   }
   const repos = [...state.repos, { ...clone, exists: true, on: true }];
@@ -383,7 +408,7 @@ const REPOS_STEP: Step = {
         paint(active ? BOLD : '', row.fullName.padEnd(nameW)),
         ` ${tildify(row.localPath).padEnd(pathW)}`,
         ` ${paint(DIM, triggerOf(row))}`,
-        row.exists ? '' : ` ${paint(YELLOW, 'no clone at this path')}`,
+        moved(row) ? ` ${paint(GREEN, 'moved')}` : row.exists ? '' : ` ${paint(YELLOW, 'no clone at this path')}`,
       ]
         .join(' ')
         .trimEnd();
@@ -416,8 +441,8 @@ const REPOS_STEP: Step = {
         return clone ? selectRepo(state, clone) : { ...state, error: `no GitHub clone at ${tildify(dir)}` };
       });
     }
-    const moved = move(state, key, state.repos.length + 1);
-    if (moved !== state) return moved;
+    const stepped = move(state, key, state.repos.length + 1);
+    if (stepped !== state) return stepped;
     const row = state.repos[state.cursor];
     if (!row) return key === 'enter' || key === 'right' ? { ...state, typing: '' } : state;
     return key === 'space' ? selectRepo(state, row) : state;
@@ -462,8 +487,8 @@ const REVIEWERS_STEP: Step = {
   },
   hint: () => '↑↓ move · space select · enter next · q quit',
   onKey: (state, key, ctx) => {
-    const moved = move(state, key, ctx.options.length);
-    if (moved !== state) return moved;
+    const stepped = move(state, key, ctx.options.length);
+    if (stepped !== state) return stepped;
     if (key !== 'space') return state;
     const name = ctx.options[state.cursor]!;
     const on = state.selected.includes(name);
@@ -488,7 +513,7 @@ const SAVE_STEP: Step = {
       ...watched.map((row) =>
         [
           row.fullName.padEnd(nameW),
-          `${tildify(row.localPath)} · ${triggerOf(row)}`,
+          `${moved(row) ? `${tildify(entryPath(row.entry!))} ${paint(DIM, '→')} ` : ''}${tildify(row.localPath)} · ${triggerOf(row)}`,
           !row.entry && paint(GREEN, 'new'),
           !row.exists && paint(YELLOW, 'no clone at this path'),
         ]
@@ -710,7 +735,7 @@ function interact(ctx: SetupContext): Promise<SetupState> {
 export async function setup(path: string) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('setup needs an interactive terminal');
   const raw = await readRawConfig(path);
-  const disk: Disk = { found: discoverClones(), at: cloneAt, cwd: process.cwd() };
+  const disk: Disk = { found: discoverClones(), at: cloneAt, here: cloneAround(process.cwd()) };
   const ctx = setupContext(path, raw, (bin) => Bun.which(bin), disk);
   const result = await interact(ctx);
   if (result.done === 'cancel') return console.log('setup cancelled, nothing saved');

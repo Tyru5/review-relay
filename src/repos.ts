@@ -1,6 +1,6 @@
 import { type Dirent, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 /** A local clone of a GitHub repo: what a `repos[]` config entry needs. */
 export interface Clone {
@@ -50,6 +50,15 @@ export function cloneAt(dir: string): Clone | undefined {
   const url = originUrl(dir);
   const fullName = url && parseGithubRemote(url);
   return fullName ? { fullName, localPath: dir } : undefined;
+}
+
+/** The clone that holds `dir`: the nearest folder at or above it that is a GitHub clone, so a nested clone wins over its parent. */
+export function cloneAround(dir: string): Clone | undefined {
+  for (let at = resolve(dir); ; at = dirname(at)) {
+    const clone = cloneAt(at);
+    if (clone) return clone;
+    if (dirname(at) === at) return undefined;
+  }
 }
 
 /**
