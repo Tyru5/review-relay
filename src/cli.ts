@@ -17,18 +17,22 @@ import {
   writeDaemonInfo,
   type DaemonState,
 } from './daemon.ts';
+import { diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
 import { resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
+import { explainRoutes, SOURCES } from './routes.ts';
 import { runReview } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
 import { renderStatus } from './status.ts';
+import type { JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
+import { baseRemoteRef, fetchPr } from './worktree.ts';
 
 const st = styles();
 const err = styles(process.stderr.isTTY && st.color);
@@ -66,6 +70,8 @@ interface Options {
   dryRun: boolean;
   grace?: string;
   limit?: string;
+  route?: string;
+  source?: string;
   detach: boolean;
   follow: boolean;
   json: boolean;
@@ -102,11 +108,13 @@ async function serve(config: Config, configPath: string) {
         })
         .join(', '),
     ),
+    ...(config.routes.length > 0 ? [row(st, 'routes', config.routes.map((route) => route.name).join(', '))] : []),
     row(st, 'repos', config.repos.map((r) => `${r.fullName} ${st.muted(`(${r.trigger})`)}`).join(', ')),
     row(st, 'config', tildify(configPath)),
     '',
   ]);
-  for (const [harness, ids] of Map.groupBy(config.reviewers, (id) => config.models[id]!.harness)) {
+  const used = new Set([...config.reviewers, ...config.routes.flatMap((route) => route.reviewers ?? [])]);
+  for (const [harness, ids] of Map.groupBy(used, (id) => config.models[id]!.harness)) {
     if (findBin(harness)) continue;
     warn(`${HARNESSES[harness].bins.join(' or ')} not on PATH, so ${ids.join(' and ')} reviews will fail`);
   }
@@ -248,13 +256,39 @@ async function logs(config: Config, count: string | undefined, follow: boolean) 
   }
 }
 
-async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined) {
+async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined, route?: string) {
   const repo = findRepo(config, repoName);
   if (!repo || !pr) fail('run needs --repo <configured owner/name> and --pr <number>');
+  if (route !== undefined) {
+    const named = config.routes.find((r) => r.name === route);
+    const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
+    if (!named) return fail(`no route named "${route}" (routes: ${names})`);
+    if (named.skip) return fail(`route "${route}" skips the review, so run can't use it`);
+  }
   const state = new StateStore(join(config.dataDir, 'state.json'));
   const scheduler = makeScheduler(config, state);
-  scheduler.runNow(repo!, { repo: repo!.fullName, pr: Number(pr), source: 'manual', reason: 'manual run' });
+  scheduler.runNow(repo!, {
+    repo: repo!.fullName,
+    pr: Number(pr),
+    source: 'manual',
+    reason: 'manual run',
+    ...(route ? { route } : {}),
+  });
   await scheduler.idle();
+}
+
+/** Fetches the PR and prints how every route judges it, without running a reviewer or touching job state. */
+async function explain(config: Config, repoName: string | undefined, pr: string | undefined, source = 'github') {
+  const repo = findRepo(config, repoName);
+  if (!repo || !pr) return fail('route needs --repo <configured owner/name> and --pr <number>');
+  if (!SOURCES.includes(source as JobSource)) return fail(`--source must be one of ${SOURCES.join(', ')}`);
+  const job = await resolveJob(
+    { repo: repo.fullName, pr: Number(pr), source: source as JobSource, reason: 'route' },
+    { open: false },
+  );
+  await fetchPr(repo, job);
+  const stats = await diffStats(repo.localPath, baseRemoteRef(job), job.headSha);
+  print(explainRoutes(config, job, stats));
 }
 
 async function replay(config: Config, file: string | undefined, dryRun: boolean, grace: string | undefined) {
@@ -297,6 +331,8 @@ export function parse(argv: string[]) {
       'dry-run': { type: 'boolean', default: false },
       grace: { type: 'string' },
       limit: { type: 'string' },
+      route: { type: 'string' },
+      source: { type: 'string' },
       detach: { type: 'boolean', short: 'd', default: false },
       follow: { type: 'boolean', short: 'f', default: false },
       json: { type: 'boolean', default: false },
@@ -311,6 +347,8 @@ export function parse(argv: string[]) {
     dryRun: values['dry-run'],
     grace: values.grace,
     limit: values.limit,
+    route: values.route,
+    source: values.source,
     detach: values.detach,
     follow: values.follow,
     json: values.json,
@@ -318,7 +356,20 @@ export function parse(argv: string[]) {
   return { opts, positionals, help: values.help, version: values.version };
 }
 
-const COMMANDS = ['start', 'stop', 'restart', 'status', 'logs', 'run', 'replay', 'setup', 'info', 'config', 'help'];
+const COMMANDS = [
+  'start',
+  'stop',
+  'restart',
+  'status',
+  'logs',
+  'run',
+  'route',
+  'replay',
+  'setup',
+  'info',
+  'config',
+  'help',
+];
 
 async function main() {
   const { opts, positionals, help, version: showVersion } = parse(process.argv.slice(2));
@@ -359,7 +410,9 @@ async function main() {
     case 'logs':
       return logs(config, arg, opts.follow);
     case 'run':
-      return runOnce(config, opts.repo, opts.pr);
+      return runOnce(config, opts.repo, opts.pr, opts.route);
+    case 'route':
+      return explain(config, opts.repo, opts.pr, opts.source);
     case 'replay':
       return replay(config, arg, opts.dryRun, opts.grace);
     case 'info':

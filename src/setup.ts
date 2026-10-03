@@ -594,11 +594,18 @@ function saveRows(state: SetupState, ctx: SetupContext, paint: Paint): string[] 
         return `${paint(YELLOW, '!')} ${what} not on PATH, so its reviews fail until it is installed`;
       }),
   ];
+  // Routes are edited in the file only, so they are listed as they are, and saving keeps them.
+  const routeRows = (Array.isArray(ctx.raw?.routes) ? ctx.raw.routes : []).map((entry: unknown, i: number) => {
+    const route = plain(entry);
+    const runs = route.skip === true ? 'skip' : [route.reviewers].flat().filter(Boolean).join(', ') || '?';
+    return `  ${paint(DIM, (i === 0 ? 'routes' : '').padEnd(width))}  ${asText(route.name) ?? '?'} ${paint(DIM, '→')} ${runs}`;
+  });
   return [
     ...(warnings.length > 0 ? [...warnings, ''] : []),
     ...repoRows,
     `  ${paint(DIM, 'reviewers'.padEnd(width))}  ${value}`,
     ...state.selected.map((name) => `  ${paint(DIM, name.padEnd(width))}  ${settings(name)}`),
+    ...routeRows,
   ];
 }
 

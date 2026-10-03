@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
+import { parseRoutes, type Route } from './routes.ts';
 import type { HarnessName, ReviewerId, TriggerMode } from './types.ts';
 
 export interface GithubTriggerConfig {
@@ -43,6 +44,8 @@ export interface Config {
   reviewers: ReviewerId[];
   /** Every reviewer by id: each CLI under its own name, plus the file's custom entries. */
   models: Record<ReviewerId, ReviewerEntry>;
+  /** Checked from the top; the first that matches a PR decides its review, else `reviewers` runs. */
+  routes: Route[];
   dataDir: string;
   repos: RepoConfig[];
 }
@@ -138,7 +141,7 @@ function parseModels(raw: unknown, warn: (message: string) => void): Record<Revi
   return entries;
 }
 
-/** The reviewers every PR gets: ids with an entry, each once, with labels that tell them apart in the comment. */
+/** The reviewers a PR gets when no route matches: ids with an entry, each once. */
 function parseReviewers(
   raw: unknown,
   models: Record<ReviewerId, ReviewerEntry>,
@@ -164,15 +167,19 @@ function parseReviewers(
     }
     ids.push(id);
   }
+  return ids;
+}
+
+/** Reviewers that can run, in `reviewers` or a route, need labels that tell them apart in the PR comment. */
+function checkLabels(ids: ReviewerId[], models: Record<ReviewerId, ReviewerEntry>) {
   const byLabel = new Map<string, ReviewerId>();
-  for (const id of ids) {
+  for (const id of new Set(ids)) {
     const { label } = models[id]!;
     const other = byLabel.get(label.toLowerCase());
     if (other)
       throw new Error(`reviewers "${other}" and "${id}" share the label "${label}"; set a different label on one`);
     byLabel.set(label.toLowerCase(), id);
   }
-  return ids;
 }
 
 /** Validates and fills in defaults. Problems the file has always been allowed to have go to `warn` instead. */
@@ -200,12 +207,19 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     };
   });
 
+  const routes = parseRoutes(c.routes, {
+    reviewers: Object.keys(models),
+    repos: repos.map((repo: RepoConfig) => repo.fullName),
+  });
+  checkLabels([...reviewers, ...routes.flatMap((route) => route.reviewers ?? [])], models);
+
   return {
     port: c.port ?? 9988,
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,
     reviewers,
     models,
+    routes,
     dataDir: c.dataDir ? resolve(String(c.dataDir).replace(/^~(?=\/|$)/, homedir())) : DEFAULT_DATA_DIR,
     repos,
   };

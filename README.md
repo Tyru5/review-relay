@@ -59,6 +59,7 @@ bun src/cli.ts start
 | `models.<id>.label` | the CLI's name, or the custom id | The reviewer's name in the PR comment |
 | `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | |
 | `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | |
+| `routes` | none | Rules that pick the reviewers for each PR; see [Routing](#routing) |
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
 | `repos[].fullName` | required | `owner/name` |
 | `repos[].localPath` | required | Local clone used to create worktrees |
@@ -84,6 +85,62 @@ A key in `models` that isn't a CLI name defines a custom reviewer. Its `harness`
 - `setup` lists custom reviewers next to the CLIs and edits their model and effort. Adding or removing one happens in the file.
 
 A mistake in a custom entry stops the config from loading: an unknown setting, a `harness` that isn't a supported CLI, an `effort` for a CLI without one, or a `provider` for anything but hermes. In an entry named after a CLI, an unknown setting, a stray `effort`, or a stray `provider` only prints a warning and is ignored, as before, so configs that loaded still load.
+
+### Routing
+
+Without `routes`, every PR gets the same `reviewers`. Routes pick the reviewers for each PR from what git and GitHub report about it: the repo, the base branch, the trigger, which files changed, and how much. They are optional; a config without them works as it always has.
+
+```json
+"reviewers": ["codex", "claude"],
+"models": { "haiku": { "harness": "claude", "model": "claude-haiku-4-5", "label": "Haiku" } },
+"routes": [
+  { "name": "docs", "when": { "onlyPaths": ["docs/**"] }, "skip": true },
+  { "name": "risky", "when": { "wideImpact": true }, "reviewers": ["claude", "codex"], "timeoutMs": 3600000 },
+  { "name": "tiny", "when": { "maxLines": 30, "wideImpact": false }, "reviewers": ["haiku"] },
+  { "name": "side", "when": { "repos": ["Tyru5/side-*"] }, "reviewers": ["haiku"] }
+]
+```
+
+review-relay checks routes from the top. The first route whose `when` matches decides the review, and `reviewers` runs when none match. Order is precedence: here a risky change in a side project still gets Claude and Codex.
+
+| Field | Meaning |
+| - | - |
+| `name` | Required and unique: lowercase letters, digits, and dashes. Shown in the PR comment, `status`, and logs. |
+| `when` | At least one condition. Every condition must hold; a condition that takes a list matches when any item does. |
+| `reviewers` | Reviewer ids to run, CLI names or [custom reviewers](#custom-reviewers) |
+| `skip` | `true` skips the review. A route sets exactly one of `reviewers` and `skip`. |
+| `timeoutMs` | Per-reviewer timeout for this route, in place of the global `timeoutMs` |
+
+| Condition | Matches when |
+| - | - |
+| `repos` | The repo's `owner/name` matches one of these globs, ignoring case. Each must match a configured repo. |
+| `baseBranches` | The base branch matches one of these globs, such as `release/*` |
+| `sources` | The trigger is one of `greptile`, `github`, `mention`, `manual` (`run`) |
+| `paths` | Any changed file matches one of these globs |
+| `onlyPaths` | At least one file changed, and every changed file matches one of these globs |
+| `minLines`, `maxLines` | Lines added plus deleted, lockfiles left out, are at least or at most this many |
+| `minFiles`, `maxFiles` | Changed files, lockfiles left out, are at least or at most this many |
+| `wideImpact` | `true`: a wide-impact file changed, such as a manifest, lockfile, CI file, migration, or schema. `false`: none did. |
+
+Globs work like GitHub Actions `paths:` filters: `*.md` matches only root files, `**/*.md` matches at any depth, and paths are case-sensitive. A renamed file matches on its old and new paths, and `onlyPaths` needs both, so moving `src/x.ts` to `docs/x.md` is not a docs-only change. Lockfiles (`bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `go.sum`, and the like) don't count toward size, so a dependency bump with 20 lines of code counts as 20 lines. They still count as wide-impact.
+
+A skip route reviews nothing and posts nothing; `status` shows the commit as `skipped`. Skip routes are guarded:
+
+- They may only use `onlyPaths`, `repos`, `baseBranches`, and `sources`. A skip on `paths` would skip code that changed next to docs, and a skip on size would let a small change through unreviewed, so the config won't load. Send small PRs to a cheap route instead.
+- A mention or `run` never skips: they go on to the next route that matches, or to `reviewers`.
+- A PR that changes an agent file is never skipped: AGENTS.md, CLAUDE.md, or GEMINI.md at any depth, `.github/copilot-instructions.md`, `.cursorrules`, `.claude/`, `.cursor/`, and every path listed under [Supported agents](#supported-agents) as deleted for a CLI. These files steer coding agents, and review-relay's own reviewers read them as the repo's standards.
+
+A mention can name a route: `@review-relay risky` runs the `risky` route whatever its `when` says. Any other word after the mention gets normal routing. `run --route risky` does the same from the command line.
+
+When the config has routes, the PR comment gets a second line under the headline with the route and why it matched, then each reviewer's model and effort:
+
+```
+Route `risky` (wide-impact: bun.lock, .github/workflows/ci.yml) · Claude: claude-opus-5-5, max · Codex: gpt-6-astra, high
+```
+
+`review-relay route --repo owner/name --pr 123` shows which route a PR matches and why, without reviewing it. It fetches the PR, checks every route, and prints the first condition each failed. It works on closed and merged PRs too, so you can try rules on past PRs. `--source mention` shows what a mention would get.
+
+A config error in a route names it, such as `routes[1] "tiny": skip can't use maxLines`. `config` prints the routes as parsed, and `info` lists them.
 
 ### Trigger modes
 
@@ -143,6 +200,8 @@ review-relay restart                                # stop, then start -d
 review-relay status [--limit N]                     # daemon (pid, uptime, endpoint, health), forwarders, recent jobs; exit 3 if stopped
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
+review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
+review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
 review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
 review-relay config                                 # resolved config as JSON (info --json)
@@ -193,11 +252,12 @@ Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comm
 ## How a review runs
 
 1. Fetch `refs/pull/<n>/head` and the base branch into the local clone.
-2. Create a detached worktree at the PR head commit.
-3. Compute diff stats (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
-4. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
-5. Run the selected reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any configured reviewer whose CLI isn't on PATH.
-6. Write reports, post or update the PR comment, remove the worktree.
+2. Compute diff stats in the clone (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
+3. Pick the route (see [Routing](#routing)). A skip route stops here, before any worktree exists.
+4. Create a detached worktree at the PR head commit.
+5. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
+6. Run the route's reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any reviewer, in `reviewers` or a route, whose CLI isn't on PATH.
+7. Write reports, post or update the PR comment, remove the worktree.
 
 Reviewers are spawned directly, not through your shell, so shell aliases (for example a `codex` alias that bypasses the sandbox) do not apply.
 
@@ -224,3 +284,4 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
+- Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.

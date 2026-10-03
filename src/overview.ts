@@ -129,6 +129,19 @@ export function renderInfo(config: Config, opts: InfoOptions, st: Styles): strin
     lines.push(`  ${st.dot(bin ? 'success' : 'danger')} ${name.padEnd(nameW)}  ${picks.padEnd(32)}  ${where}`);
   }
 
+  if (config.routes.length > 0) {
+    lines.push('', `${st.section('Routes')}  ${st.muted('first match wins; no match runs the reviewers above')}`);
+    const runs = config.routes.map((route) => (route.skip ? 'skip' : route.reviewers!.join(', ')));
+    const routeW = Math.max(...config.routes.map((route) => route.name.length));
+    const runsW = Math.max(...runs.map((r) => r.length));
+    config.routes.forEach((route, i) => {
+      const when = Object.entries(route.when)
+        .map(([key, value]) => `${key} ${Array.isArray(value) ? value.join(',') : String(value)}`)
+        .join('  ');
+      lines.push(`  ${st.dot('success')} ${route.name.padEnd(routeW)}  ${runs[i]!.padEnd(runsW)}  ${st.muted(when)}`);
+    });
+  }
+
   lines.push(...section(st, 'Repos'));
   for (const repo of config.repos) {
     const exists = existsSync(join(repo.localPath, '.git'));

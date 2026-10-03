@@ -79,14 +79,41 @@ export const HELP_GROUPS: Group[] = [
     commands: [
       {
         name: 'run',
-        args: '--repo <owner/name> --pr <N>',
+        args: '--repo <owner/name> --pr <N> [--route <name>]',
         summary: 'Review one open PR now',
-        detail: ['Skips the dedupe check, so a commit that was already reviewed runs again.'],
+        detail: [
+          'Skips the dedupe check, so a commit that was already reviewed runs again.',
+          'Never skipped by a skip route. With --route, the named route reviews the PR even when another route matches first.',
+        ],
         options: [
           { flag: '--repo <owner/name>', description: 'A repo from the config' },
           { flag: '--pr <n>', description: 'Pull request number' },
+          { flag: '--route <name>', description: 'Use this route instead of the one the PR matches' },
         ],
-        examples: ['review-relay run --repo Tyru5/Agendex --pr 42'],
+        examples: [
+          'review-relay run --repo Tyru5/Agendex --pr 42',
+          'review-relay run --repo Tyru5/Agendex --pr 42 --route risky',
+        ],
+      },
+      {
+        name: 'route',
+        args: '--repo <owner/name> --pr <N> [--source <source>]',
+        summary: 'Show which route a PR matches and why, without reviewing it',
+        detail: [
+          'Fetches the PR, open or closed, checks every route in order, and prints the first condition each one failed and the reviewers the PR would get. Posts nothing and leaves job state alone.',
+        ],
+        options: [
+          { flag: '--repo <owner/name>', description: 'A repo from the config' },
+          { flag: '--pr <n>', description: 'Pull request number' },
+          {
+            flag: '--source <source>',
+            description: 'Trigger to check as: github (default), greptile, mention, manual',
+          },
+        ],
+        examples: [
+          'review-relay route --repo Tyru5/Agendex --pr 42',
+          'review-relay route --repo Tyru5/Agendex --pr 42 --source mention',
+        ],
       },
       {
         name: 'replay',

@@ -115,6 +115,25 @@ describe('renderInfo', () => {
     expect(text).toContain('no clone here');
   });
 
+  test('lists routes in order with what each runs and when, only for configs that route', () => {
+    const routed = parseConfig({
+      repos: config.repos,
+      models: { haiku: { harness: 'claude' } },
+      routes: [
+        { name: 'docs', when: { onlyPaths: ['docs/**', '**/*.md'] }, skip: true },
+        { name: 'tiny', when: { maxLines: 30, wideImpact: false }, reviewers: ['haiku'] },
+      ],
+    });
+    const text = renderInfo(routed, { ...opts, bins: {}, configMtimeMs: null, daemon: stopped }, plain).join('\n');
+    expect(text).toContain('Routes  first match wins; no match runs the reviewers above');
+    expect(text).toContain('● docs  skip   onlyPaths docs/**,**/*.md');
+    expect(text).toContain('● tiny  haiku  maxLines 30  wideImpact false');
+    expect(text.indexOf('Routes')).toBeLessThan(text.indexOf('Repos'));
+
+    const plainText = renderInfo(config, { ...opts, bins: {}, configMtimeMs: null, daemon: stopped }, plain).join('\n');
+    expect(plainText).not.toContain('Routes');
+  });
+
   test('flags a config edited after the daemon started', () => {
     const text = renderInfo(
       config,

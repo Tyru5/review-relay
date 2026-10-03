@@ -1,4 +1,13 @@
+import { basename } from 'node:path';
 import { execOrThrow } from './exec.ts';
+
+/** One changed file. A deleted file has its old path as `path`; a renamed one also has `oldPath`. */
+export interface ChangedFile {
+  path: string;
+  oldPath?: string;
+  additions: number;
+  deletions: number;
+}
 
 export interface DiffStats {
   files: number;
@@ -7,30 +16,95 @@ export interface DiffStats {
   testFiles: number;
   /** Changed files that tend to have wide impact: dependencies, CI, migrations, schemas, config. */
   sensitiveFiles: string[];
+  /** Every changed file, which route conditions match against. */
+  changed: ChangedFile[];
+  /** The totals without lockfiles, which route size conditions use. */
+  counted: { files: number; additions: number; deletions: number };
 }
 
 const TEST_FILE = /(^|\/)(__tests__|tests?|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py)$|(^|\/)test_[^/]+\.py$/;
 const SENSITIVE_FILE =
   /(^|\/)(package\.json|bun\.lockb?|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.(toml|lock)|go\.(mod|sum)|requirements[^/]*\.txt|pyproject\.toml|Dockerfile|docker-compose[^/]*\.ya?ml|tsconfig[^/]*\.json)$|^\.github\/|(^|\/)migrations?\/|(^|\/)schema\.[a-z]+$|\.sql$|\.env/;
 
+/** Lockfiles by name. Route size conditions leave them out, so a dependency bump counts as the code it changes. */
+export const LOCKFILES = new Set([
+  'bun.lock',
+  'bun.lockb',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'deno.lock',
+  'Cargo.lock',
+  'go.sum',
+  'poetry.lock',
+  'uv.lock',
+  'Pipfile.lock',
+  'Gemfile.lock',
+  'composer.lock',
+  'flake.lock',
+  'Package.resolved',
+  'pubspec.lock',
+  'mix.lock',
+]);
+
+/** A changed file's paths: the old one too when it was renamed. */
+export const pathsOf = (file: ChangedFile): string[] => (file.oldPath ? [file.oldPath, file.path] : [file.path]);
+
+/**
+ * Parses `git diff --numstat -z`: `added\tdeleted\tpath` per file, or for a rename `added\tdeleted\t` followed by the old
+ * and new paths as fields of their own. Binary files report `-` for both counts.
+ */
 export function parseNumstat(numstat: string): DiffStats {
-  const stats: DiffStats = { files: 0, additions: 0, deletions: 0, testFiles: 0, sensitiveFiles: [] };
-  for (const line of numstat.split('\n')) {
-    const [add, del, ...rest] = line.split('\t');
-    const file = rest.join('\t');
-    if (!file) continue;
+  const changed: ChangedFile[] = [];
+  const fields = numstat.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    if (!fields[i]) continue;
+    const [added = '', deleted = '', ...rest] = fields[i]!.split('\t');
+    let path = rest.join('\t');
+    let oldPath: string | undefined;
+    if (!path) {
+      oldPath = fields[++i];
+      path = fields[++i] ?? '';
+    }
+    if (!path) continue;
+    changed.push({
+      path,
+      ...(oldPath ? { oldPath } : {}),
+      additions: Number(added) || 0,
+      deletions: Number(deleted) || 0,
+    });
+  }
+  const stats: DiffStats = {
+    files: 0,
+    additions: 0,
+    deletions: 0,
+    testFiles: 0,
+    sensitiveFiles: [],
+    changed,
+    counted: { files: 0, additions: 0, deletions: 0 },
+  };
+  for (const file of changed) {
+    const paths = pathsOf(file);
     stats.files += 1;
-    // Binary files report "-" for both counts.
-    stats.additions += Number(add) || 0;
-    stats.deletions += Number(del) || 0;
-    if (TEST_FILE.test(file)) stats.testFiles += 1;
-    if (SENSITIVE_FILE.test(file)) stats.sensitiveFiles.push(file);
+    stats.additions += file.additions;
+    stats.deletions += file.deletions;
+    if (paths.some((path) => TEST_FILE.test(path))) stats.testFiles += 1;
+    if (paths.some((path) => SENSITIVE_FILE.test(path))) stats.sensitiveFiles.push(file.path);
+    if (LOCKFILES.has(basename(file.path))) continue;
+    stats.counted.files += 1;
+    stats.counted.additions += file.additions;
+    stats.counted.deletions += file.deletions;
   }
   return stats;
 }
 
-export async function diffStats(dir: string, baseRef: string): Promise<DiffStats> {
-  return parseNumstat(await execOrThrow(['git', '-C', dir, 'diff', '--numstat', `${baseRef}...HEAD`]));
+/** Stats for `base...head`, read in any checkout of the repo, the local clone included. */
+export async function diffStats(dir: string, base: string, head = 'HEAD'): Promise<DiffStats> {
+  // --find-renames makes renames show the same way whatever the user's diff.renames setting.
+  return parseNumstat(
+    await execOrThrow(['git', '-C', dir, 'diff', '--numstat', '-z', '--find-renames', `${base}...${head}`]),
+  );
 }
 
 /** Linux caps one argv string at 128 KiB and some harnesses take the prompt as an argument, so stay well under. */
