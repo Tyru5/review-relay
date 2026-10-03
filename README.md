@@ -89,6 +89,8 @@ bun run ci:local       # run the CI workflow locally with act (cached image)
 bun run ci:local:pull  # same, pulling the latest runner image first
 ```
 
+The landing page at [reviewrelay.dev](https://reviewrelay.dev) lives in `site/` (TanStack Start, deployed by Vercel on push; brand assets come from `assets/`). From the repo root: `bun run site:dev` (http://127.0.0.1:3000), `bun run site:build`, `bun run site:preview`, and `bun run site:tunnel` to share the dev server through a temporary Cloudflare quick tunnel.
+
 ## Releasing
 
 Releases are standalone binaries built with `bun build --compile` and served from the `review-relay-downloads` R2 bucket at `https://downloads.reviewrelay.dev`:

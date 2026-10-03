@@ -1,6 +1,62 @@
+# Dependencies
 node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+
+# Build output
 dist/
-*.log
+build/
+out/
+*.tsbuildinfo
 
+# Site (TanStack Start / Nitro / Vercel)
+site/.output/
+site/.tanstack/
+site/.nitro/
+site/src/routeTree.gen.ts
+.vercel/
 
+# Tests and coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# Caches
+.cache/
+.eslintcache
+.stylelintcache
+.turbo/
+.vite/
+.parcel-cache/
 .codegraph/
+
+# Environment (commit examples only)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Local tool state
+.impeccable/config.local.json

@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-02T23:58:00Z",
+  "title": "Design System: review-relay",
+  "extensions": {
+    "colorMeta": {
+      "go": {
+        "role": "primary",
+        "displayName": "Landing Green",
+        "canonical": "oklch(83.3% 0.190 154.5)",
+        "tonalRamp": [
+          "oklch(15% 0.190 154.5)",
+          "oklch(26% 0.190 154.5)",
+          "oklch(37% 0.190 154.5)",
+          "oklch(48% 0.190 154.5)",
+          "oklch(59% 0.190 154.5)",
+          "oklch(70% 0.190 154.5)",
+          "oklch(82% 0.190 154.5)",
+          "oklch(95% 0.190 154.5)"
+        ]
+      },
+      "relay": {
+        "role": "secondary",
+        "displayName": "Relay Cyan",
+        "canonical": "oklch(80.4% 0.132 217.1)",
+        "tonalRamp": [
+          "oklch(15% 0.132 217.1)",
+          "oklch(26% 0.132 217.1)",
+          "oklch(37% 0.132 217.1)",
+          "oklch(48% 0.132 217.1)",
+          "oklch(59% 0.132 217.1)",
+          "oklch(70% 0.132 217.1)",
+          "oklch(82% 0.132 217.1)",
+          "oklch(95% 0.132 217.1)"
+        ]
+      },
+      "flag": {
+        "role": "tertiary",
+        "displayName": "Finding Lavender",
+        "canonical": "oklch(76.7% 0.115 290.8)",
+        "tonalRamp": [
+          "oklch(15% 0.115 290.8)",
+          "oklch(26% 0.115 290.8)",
+          "oklch(37% 0.115 290.8)",
+          "oklch(48% 0.115 290.8)",
+          "oklch(59% 0.115 290.8)",
+          "oklch(70% 0.115 290.8)",
+          "oklch(82% 0.115 290.8)",
+          "oklch(95% 0.115 290.8)"
+        ]
+      },
+      "night": {
+        "role": "neutral",
+        "displayName": "Night",
+        "canonical": "oklch(17.4% 0.027 276.5)",
+        "tonalRamp": [
+          "oklch(15% 0.027 276.5)",
+          "oklch(26% 0.027 276.5)",
+          "oklch(37% 0.027 276.5)",
+          "oklch(48% 0.027 276.5)",
+          "oklch(59% 0.027 276.5)",
+          "oklch(70% 0.027 276.5)",
+          "oklch(82% 0.027 276.5)",
+          "oklch(95% 0.027 276.5)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "canonical": "oklch(21.3% 0.040 276.0)",
+        "tonalRamp": [
+          "oklch(15% 0.040 276.0)",
+          "oklch(26% 0.040 276.0)",
+          "oklch(37% 0.040 276.0)",
+          "oklch(48% 0.040 276.0)",
+          "oklch(59% 0.040 276.0)",
+          "oklch(70% 0.040 276.0)",
+          "oklch(82% 0.040 276.0)",
+          "oklch(95% 0.040 276.0)"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "oklch(24.9% 0.048 275.5)",
+        "tonalRamp": [
+          "oklch(15% 0.048 275.5)",
+          "oklch(26% 0.048 275.5)",
+          "oklch(37% 0.048 275.5)",
+          "oklch(48% 0.048 275.5)",
+          "oklch(59% 0.048 275.5)",
+          "oklch(70% 0.048 275.5)",
+          "oklch(82% 0.048 275.5)",
+          "oklch(95% 0.048 275.5)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "oklch(30.0% 0.056 275.5)",
+        "tonalRamp": [
+          "oklch(15% 0.056 275.5)",
+          "oklch(26% 0.056 275.5)",
+          "oklch(37% 0.056 275.5)",
+          "oklch(48% 0.056 275.5)",
+          "oklch(59% 0.056 275.5)",
+          "oklch(70% 0.056 275.5)",
+          "oklch(82% 0.056 275.5)",
+          "oklch(95% 0.056 275.5)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(95.0% 0.014 277.1)",
+        "tonalRamp": [
+          "oklch(15% 0.014 277.1)",
+          "oklch(26% 0.014 277.1)",
+          "oklch(37% 0.014 277.1)",
+          "oklch(48% 0.014 277.1)",
+          "oklch(59% 0.014 277.1)",
+          "oklch(70% 0.014 277.1)",
+          "oklch(82% 0.014 277.1)",
+          "oklch(95% 0.014 277.1)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "oklch(68.7% 0.050 278.4)",
+        "tonalRamp": [
+          "oklch(15% 0.050 278.4)",
+          "oklch(26% 0.050 278.4)",
+          "oklch(37% 0.050 278.4)",
+          "oklch(48% 0.050 278.4)",
+          "oklch(59% 0.050 278.4)",
+          "oklch(70% 0.050 278.4)",
+          "oklch(82% 0.050 278.4)",
+          "oklch(95% 0.050 278.4)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The one hero headline." },
+      "headline": { "displayName": "Headline", "purpose": "Section titles in the ledger column." },
+      "title": { "displayName": "Title", "purpose": "Step names, card labels, component headings." },
+      "lede": { "displayName": "Lede", "purpose": "Hero supporting paragraph and section ledes, in Muted Ink." },
+      "body": { "displayName": "Body", "purpose": "Step descriptions and prose, capped near 60ch." },
+      "small": { "displayName": "Small", "purpose": "Install note and secondary copy." },
+      "caption": { "displayName": "Caption", "purpose": "Table headers, example captions, chip labels." },
+      "mono": { "displayName": "Mono", "purpose": "Commands, paths, identifiers, versions, and score numbers only." }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Every entrance in the load sequence and state settles."
+      },
+      {
+        "name": "rise",
+        "value": "700ms ease-out-expo, translateY(10px) and opacity from 0",
+        "purpose": "Timeline events arriving: the started row at 0ms, the comment at 900ms."
+      },
+      {
+        "name": "draw",
+        "value": "700ms ease-out-expo, scaleY from 0, origin top",
+        "purpose": "The relay rail drawing downward at 250ms."
+      },
+      {
+        "name": "fill",
+        "value": "400ms ease-out-expo, from Hairline to Landing Green",
+        "purpose": "Score pips filling one by one after the comment lands."
+      },
+      {
+        "name": "wait",
+        "value": "500ms ease-in-out, 2 iterations, opacity to 0.3",
+        "purpose": "The started dot blinking while the review is in flight, then settling."
+      },
+      {
+        "name": "copy-confirm",
+        "value": "300ms color transition, 2000ms hold",
+        "purpose": "Copy button turning Landing Green after a successful copy."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Copy Button",
+      "kind": "button",
+      "refersTo": "button-copy",
+      "description": "Copies the install command; turns Landing Green when the copy lands.",
+      "html": "<button class=\"ds-btn-copy\" type=\"button\">Copy</button> <button class=\"ds-btn-copy ds-btn-copy--copied\" type=\"button\">Copied</button>",
+      "css": ".ds-btn-copy { width: 5.25rem; background: transparent; color: var(--color-ink, #eceef8); border: 1px solid var(--color-line, #262b4a); border-radius: 6px; padding: 6px 12px; font: 500 14px/20px 'Schibsted Grotesk Variable', system-ui, sans-serif; transition: color 300ms, background-color 300ms, border-color 300ms; cursor: pointer; } .ds-btn-copy:hover { background: var(--color-raised, #1b1f38); border-color: var(--color-muted, #9398ba); } .ds-btn-copy:focus-visible { outline: 2px solid var(--color-relay, #38d3f6); outline-offset: 3px; } .ds-btn-copy--copied, .ds-btn-copy--copied:hover { color: var(--color-go, #3deb8e); border-color: color-mix(in srgb, var(--color-go, #3deb8e) 50%, transparent); background: transparent; }"
+    },
+    {
+      "name": "OS Tabs",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Platform switch in the install panel header.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\"><button class=\"ds-tab\" role=\"tab\" aria-selected=\"true\">macOS / Linux</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Windows</button></div>",
+      "css": ".ds-tabs { display: flex; gap: 4px; padding: 6px; border-bottom: 1px solid var(--color-line, #262b4a); } .ds-tab { background: transparent; color: var(--color-muted, #9398ba); border: 0; border-radius: 6px; padding: 6px 12px; font: 500 14px/20px 'Schibsted Grotesk Variable', system-ui, sans-serif; cursor: pointer; transition: color 150ms; } .ds-tab:hover { color: var(--color-ink, #eceef8); } .ds-tab[aria-selected=\"true\"] { background: var(--color-raised, #1b1f38); color: var(--color-ink, #eceef8); } .ds-tab:focus-visible { outline: 2px solid var(--color-relay, #38d3f6); outline-offset: 3px; }"
+    },
+    {
+      "name": "Install Panel",
+      "kind": "custom",
+      "refersTo": "install-panel",
+      "description": "The primary action: OS tabs over one copyable command row.",
+      "html": "<div class=\"ds-install\"><div class=\"ds-install__row\"><code class=\"ds-install__cmd\"><span class=\"ds-install__prompt\">$ </span>curl -fsSL https://downloads.reviewrelay.dev/install.sh | bash</code><button class=\"ds-install__copy\" type=\"button\">Copy</button></div></div>",
+      "css": ".ds-install { background: var(--color-surface, #14172b); border: 1px solid var(--color-line, #262b4a); border-radius: 12px; max-width: 38rem; } .ds-install__row { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; } .ds-install__cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 400 12.5px/1.6 'JetBrains Mono Variable', ui-monospace, monospace; color: var(--color-ink, #eceef8); } .ds-install__prompt { color: var(--color-muted, #9398ba); user-select: none; } .ds-install__copy { width: 5.25rem; background: transparent; color: var(--color-ink, #eceef8); border: 1px solid var(--color-line, #262b4a); border-radius: 6px; padding: 6px 12px; font: 500 14px/20px 'Schibsted Grotesk Variable', system-ui, sans-serif; cursor: pointer; } .ds-install__copy:hover { background: var(--color-raised, #1b1f38); border-color: var(--color-muted, #9398ba); }"
+    },
+    {
+      "name": "Command Block",
+      "kind": "card",
+      "refersTo": "command-block",
+      "description": "Multi-line terminal commands with unselectable prompts.",
+      "html": "<pre class=\"ds-cmd\"><span class=\"ds-cmd__line\"><span class=\"ds-cmd__prompt\">$ </span>review-relay start</span><span class=\"ds-cmd__line\"><span class=\"ds-cmd__prompt\">$ </span>review-relay status</span></pre>",
+      "css": ".ds-cmd { margin: 0; background: var(--color-surface, #14172b); border: 1px solid var(--color-line, #262b4a); border-radius: 12px; padding: 12px 16px; overflow-x: auto; font: 400 13.5px/1.625 'JetBrains Mono Variable', ui-monospace, monospace; color: var(--color-ink, #eceef8); } .ds-cmd__line { display: block; } .ds-cmd__prompt { color: var(--color-muted, #9398ba); user-select: none; }"
+    },
+    {
+      "name": "Finding Chip",
+      "kind": "chip",
+      "refersTo": "chip-finding",
+      "description": "Severity label on a review finding.",
+      "html": "<span class=\"ds-chip-finding\">Minor</span>",
+      "css": ".ds-chip-finding { display: inline-block; border: 1px solid color-mix(in srgb, var(--color-flag, #b3a6f7) 40%, transparent); border-radius: 4px; padding: 0 6px; color: var(--color-flag, #b3a6f7); font: 500 12px/18px 'Schibsted Grotesk Variable', system-ui, sans-serif; }"
+    },
+    {
+      "name": "Comment Card",
+      "kind": "card",
+      "refersTo": "comment-card",
+      "description": "The scored review comment; the only card on a canvas.",
+      "html": "<article class=\"ds-comment\"><header class=\"ds-comment__head\"><strong>review-relay</strong> <span>commented</span></header><div class=\"ds-comment__body\"><p class=\"ds-comment__score\">4<span>/5</span></p><p class=\"ds-comment__label\">Merge confidence</p></div></article>",
+      "css": ".ds-comment { background: var(--color-surface, #14172b); border: 1px solid var(--color-line, #262b4a); border-radius: 12px; color: var(--color-ink, #eceef8); max-width: 27rem; font-family: 'Schibsted Grotesk Variable', system-ui, sans-serif; } .ds-comment__head { padding: 10px 16px; border-bottom: 1px solid var(--color-line, #262b4a); font-size: 14px; } .ds-comment__head span { color: var(--color-muted, #9398ba); } .ds-comment__body { padding: 16px; } .ds-comment__score { margin: 0; font-size: 41.6px; line-height: 1; font-weight: 800; letter-spacing: -0.025em; color: var(--color-go, #3deb8e); font-variant-numeric: tabular-nums; } .ds-comment__score span { font-size: 24px; color: var(--color-muted, #9398ba); } .ds-comment__label { margin: 8px 0 0; font-size: 14px; font-weight: 600; }"
+    },
+    {
+      "name": "Timeline",
+      "kind": "custom",
+      "refersTo": "timeline-dot",
+      "description": "Signature PR-timeline rail: dots carry the signal of their event.",
+      "html": "<div class=\"ds-timeline\"><div class=\"ds-timeline__rail\"></div><p class=\"ds-timeline__event\"><span class=\"ds-timeline__dot\"></span>Greptile Review started</p><p class=\"ds-timeline__event\"><span class=\"ds-timeline__dot ds-timeline__dot--go\"></span>review-relay commented</p></div>",
+      "css": ".ds-timeline { position: relative; padding-left: 28px; font: 500 14px/20px 'Schibsted Grotesk Variable', system-ui, sans-serif; color: var(--color-ink, #eceef8); } .ds-timeline__rail { position: absolute; left: 5px; top: 10px; bottom: 12px; width: 2px; background: color-mix(in srgb, var(--color-relay, #38d3f6) 60%, transparent); } .ds-timeline__event { position: relative; margin: 0 0 20px; } .ds-timeline__dot { position: absolute; left: -28px; top: 4px; width: 12px; height: 12px; border-radius: 9999px; background: var(--color-relay, #38d3f6); } .ds-timeline__dot--go { background: var(--color-go, #3deb8e); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Night Shift",
+    "overview": "review-relay does its work while the author is somewhere else: a review starts on GitHub, the agents they chose read the code, and a verdict appears on the pull request. The system is the calm, dark workspace that work happens in. Surfaces are quiet tonal layers of one deep blue-black, type is set plainly, and nothing glows at rest. Light is an event. A cyan signal means something is in flight; green means something landed; lavender means a finding wants attention. When a page uses color, a reader should be able to say what happened.\n\nDensity is moderate and left-aligned. Content reads like a ledger: a heading and one-line lede on the left, the substance on the right, separated from the next ledger by a single hairline. The signature is the timeline rail borrowed from a PR's own event history, a vertical line with dots, used for the sample review and for the steps of a review.\n\nThe page plays one moment on load: the review starts, the relay line draws, the scored comment lands. Everything else is still.",
+    "keyCharacteristics": [
+      "One dark ground with two tonal steps; depth by tone and hairline, never by shadow, blur, or glow.",
+      "Three signal colors, each with one meaning; no decorative color anywhere.",
+      "A single sans family at every level; monospace only for code, paths, versions, and numbers.",
+      "The PR timeline rail as the recurring structural motif.",
+      "One orchestrated load sequence; motion otherwise only answers a user's action."
+    ],
+    "rules": [
+      {
+        "name": "The Something-Landed Rule",
+        "body": "Green appears only where a verdict exists or an action completed. If nothing landed, nothing is green.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Meaning Rule",
+        "body": "Each signal color has exactly one meaning across the product. A color used for decoration teaches the reader to ignore it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Typed Text Rule",
+        "body": "Monospace marks text a person would type, copy, or read from a terminal. It is never a costume for looking technical.",
+        "section": "typography"
+      },
+      {
+        "name": "The Ledger Rule",
+        "body": "Sections never center a headline over a grid of cards. Heading and lede on the left, content on the right.",
+        "section": "layout"
+      },
+      {
+        "name": "The Lights-Off Rule",
+        "body": "At rest nothing casts light: no shadow, no blur, no glow. Declare elevation once, as tone plus hairline.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Card Rule",
+        "body": "Cards never nest. A figure on the page is a canvas, not a card; only the comment inside it is a card.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use Landing Green (#3deb8e) only for verdicts and completed actions.",
+      "Do separate surfaces with a tonal step and a 1px Hairline (#262b4a).",
+      "Do set code, paths, versions, and score numbers in JetBrains Mono with tabular numbers.",
+      "Do label illustrative content as an example, as the sample review's caption does.",
+      "Do keep the load sequence the only unprompted motion, and respect reduced motion."
+    ],
+    "donts": [
+      "Don't add box shadows, backdrop blur, glows, or gradient text.",
+      "Don't nest cards or turn sections into grids of same-size cards.",
+      "Don't color hovers, bullets, or icons green or cyan for decoration.",
+      "Don't put eyebrow labels or tracked capitals above headings.",
+      "Don't tile the dot grid across the page; it belongs behind the sample review only."
+    ]
+  }
+}
