@@ -21,13 +21,13 @@ Events reach your machine through `gh webhook forward`, so no public URL is need
 macOS / Linux (installs to `~/.local/bin`):
 
 ```sh
-curl -fsSL https://downloads.reviewrelay.dev/install.sh | bash
+curl -fsSL https://github.com/Tyru5/review-relay/releases/latest/download/install.sh | bash
 ```
 
 Windows PowerShell (installs to `%LOCALAPPDATA%\review-relay\bin` and adds it to your user PATH):
 
 ```powershell
-irm https://downloads.reviewrelay.dev/install.ps1 | iex
+irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1 | iex
 ```
 
 The installers download a standalone binary (no Bun needed) for your OS and CPU, verify it against the release's `SHA256SUMS`, and seed `~/.review-relay/config.json` from `config.example.json` if it does not exist. Rerun to update. Pin a version with `bash -s -- --version 0.2.0` (PowerShell: `-Version 0.2.0`, see the script header). Supported: macOS and glibc Linux on x64 and arm64, Windows x64.
@@ -145,14 +145,15 @@ The landing page at [reviewrelay.dev](https://reviewrelay.dev) lives in `site/` 
 
 ## Releasing
 
-Releases are standalone binaries built with `bun build --compile` and served from the `review-relay-downloads` R2 bucket at `https://downloads.reviewrelay.dev`:
+Releases are standalone binaries built with `bun build --compile` and attached to a [GitHub Release](https://github.com/Tyru5/review-relay/releases) per `v<version>` tag:
 
 ```
-install.sh, install.ps1                        installers (no-cache)
-latest.txt                                     latest version, uploaded last
-v<version>/review-relay-<os>-<arch>[.exe]      immutable binaries
-v<version>/SHA256SUMS, config.example.json
+review-relay-<os>-<arch>[.exe]   binaries
+SHA256SUMS, config.example.json  verified and seeded by the installers
+install.sh, install.ps1          installers; releases/latest/download/ always serves the newest
 ```
+
+The installers resolve `latest` from the redirect GitHub serves at `releases/latest`, then download from `releases/download/v<version>/`. A `-rc.1` style version is published as a pre-release, which `releases/latest` skips.
 
 To release, bump `version` in `package.json`, merge, then push a matching tag:
 
@@ -160,7 +161,7 @@ To release, bump `version` in `package.json`, merge, then push a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-`.github/workflows/release.yml` runs the checks, rejects a tag that does not match `package.json`, builds all targets, and uploads with wrangler. It needs the `CLOUDFLARE_API_TOKEN` secret (an account API token with R2 Storage edit access) and the `CLOUDFLARE_ACCOUNT_ID` repo variable. `bun run release:build` stages the same files in `dist/` without uploading; `bun run release` uploads from a clean tree with your local `wrangler login`.
+`.github/workflows/release.yml` runs the checks, rejects a tag that does not match `package.json`, builds all targets, and creates the release with `gh` using the workflow's `GITHUB_TOKEN` (no other secrets). Rerunning it replaces the assets on the existing release. `bun run release:build` stages the same files in `dist/v<version>/` without publishing; `bun run release` publishes from a clean tree with your local `gh auth login`.
 
 ## Daemon control
 

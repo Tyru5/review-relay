@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -27,9 +27,8 @@ jobs:
           bun run check
           command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
           shellcheck scripts/relay scripts/install.sh
-      # Fails when a tag does not match package.json, then publishes to downloads.reviewrelay.dev.
+      # Fails when a tag does not match package.json, then creates the GitHub Release with the binaries attached.
       - name: Build and publish
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
         run: bun scripts/release.ts

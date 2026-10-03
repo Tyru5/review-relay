@@ -34,10 +34,10 @@ GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` 
 
 - Trigger modes per repo: `auto`, `greptile`, `github`. Each commit is reviewed once; mentions and `run` review again. Drafts are skipped.
 - One PR comment, edited in place on later reviews, with findings linked to exact lines.
-- Distributed as standalone binaries from https://downloads.reviewrelay.dev (macOS and glibc Linux on x64/arm64, Windows x64), installed with `curl ... | bash` or `irm ... | iex`. Versions are published by tagging `v*.*.*`.
+- Distributed as standalone binaries attached to GitHub Releases at https://github.com/Tyru5/review-relay/releases (macOS and glibc Linux on x64/arm64, Windows x64), installed with `curl ... | bash` or `irm ... | iex`. Versions are published by tagging `v*.*.*`.
 - Code is sent to whichever providers the user's chosen agents and models use; the site must never claim code stays on the machine.
 - Windows: daemon shutdown may not clean up temporary repo webhooks.
-- Free to use. The source will be open-sourced later; until then the repo is private and the site must not link to GitHub.
+- Free to use and open source; installs and the site both point at the GitHub repo, so it must stay public.
 
 ## Brand Commitments
 
