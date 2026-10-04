@@ -10,7 +10,7 @@
  *
  * Usage: bun scripts/release.ts [--skip-upload]
  * Uploads use `gh`: `gh auth login` locally, the workflow's GITHUB_TOKEN in CI. The `v<version>` tag
- * must already be pushed; rerunning uploads over an existing release's assets.
+ * must already be pushed and point at HEAD; an existing release is never modified.
  */
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -46,6 +46,24 @@ export function sha256sums(files: Record<string, Uint8Array>): string {
 
 /** A `-rc.1` style suffix marks a pre-release, so `releases/latest` keeps pointing at the last stable one. */
 export const isPrerelease = (ver: string) => ver.includes('-');
+
+/**
+ * Binaries are only published from the commit their tag points at, and only to a new release: replacing assets
+ * on a live one deletes each before its upload lands, so installs in between, or after an interrupted run, find
+ * a missing binary or a SHA256SUMS that no longer matches.
+ */
+export function assertPublishable(
+  tag: string,
+  { head, tagCommit, released }: { head: string; tagCommit: string; released: boolean },
+) {
+  if (tagCommit !== head) {
+    throw new Error(
+      `tag ${tag} points at ${tagCommit.slice(0, 7)}, not HEAD ${head.slice(0, 7)}; ` +
+        `publish from the tag: git checkout ${tag}, or gh workflow run release.yml --ref ${tag}`,
+    );
+  }
+  if (released) throw new Error(`release ${tag} is already published; bump the version to ship new binaries`);
+}
 
 function hostTarget(): Target | undefined {
   const os = { linux: 'linux', darwin: 'darwin', win32: 'windows' }[process.platform as string];
@@ -83,15 +101,20 @@ async function build() {
   return dir;
 }
 
+/** HEAD, the commit `tag` points at on REPO, and whether REPO already has a published release for it. */
+async function publishState(tag: string) {
+  const head = (await execOrThrow(['git', 'rev-parse', 'HEAD'], { cwd: ROOT })).trim();
+  const tagged = await exec(['gh', 'api', `repos/${REPO}/commits/tags/${tag}`, '--jq', '.sha']);
+  if (tagged.code !== 0)
+    throw new Error(`could not resolve tag ${tag} on ${REPO}; is it pushed? ${tagged.stderr.trim()}`);
+  const released = (await exec(['gh', 'api', `repos/${REPO}/releases/tags/${tag}`, '--silent'])).code === 0;
+  return { head, tagCommit: tagged.stdout.trim(), released };
+}
+
 async function publish(dir: string) {
   const tag = `v${version}`;
   const files = releaseAssets().map((name) => join(dir, name));
-  const exists = (await exec(['gh', 'release', 'view', tag, '--repo', REPO])).code === 0;
-  if (exists) {
-    console.log(`release ${tag} exists; replacing its assets`);
-    await execOrThrow(['gh', 'release', 'upload', tag, ...files, '--repo', REPO, '--clobber']);
-    return;
-  }
+  // gh uploads into a draft and publishes it once every asset is in, so installers never see a partial release.
   console.log(`creating release ${tag}`);
   await execOrThrow([
     'gh',
@@ -118,6 +141,7 @@ async function main() {
   if (!values['skip-upload'] && (await execOrThrow(['git', 'status', '--porcelain'], { cwd: ROOT })).trim()) {
     throw new Error('working tree has changes; commit them or pass --skip-upload');
   }
+  if (!values['skip-upload']) assertPublishable(`v${version}`, await publishState(`v${version}`));
 
   const dir = await build();
   console.log(`staged v${version} in ${dir}`);

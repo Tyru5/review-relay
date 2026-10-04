@@ -27,7 +27,8 @@ jobs:
           bun run check
           command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
           shellcheck scripts/relay scripts/install.sh
-      # Fails when a tag does not match package.json, then creates the GitHub Release with the binaries attached.
+      # Fails unless the package.json version's tag points at this commit and has no release yet, then creates the
+      # GitHub Release with the binaries attached. Retry from the tag: gh workflow run release.yml --ref v<version>
       - name: Build and publish
         env:
           GH_TOKEN: ${{ github.token }}

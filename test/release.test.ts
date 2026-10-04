@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { assetName, isPrerelease, releaseAssets, sha256sums, TARGETS } from '../scripts/release.ts';
+import { assertPublishable, assetName, isPrerelease, releaseAssets, sha256sums, TARGETS } from '../scripts/release.ts';
 
 test('assetName adds .exe only for Windows', () => {
   expect(assetName('linux-x64')).toBe('review-relay-linux-x64');
@@ -26,4 +26,19 @@ test('releaseAssets attaches every binary, the checksums the installers verify, 
 test('isPrerelease keys off a semver suffix', () => {
   expect(isPrerelease('1.2.3')).toBe(false);
   expect(isPrerelease('1.2.3-rc.1')).toBe(true);
+});
+
+const HEAD = 'a'.repeat(40);
+
+test('assertPublishable only publishes binaries built from the tagged commit', () => {
+  expect(() => assertPublishable('v1.2.3', { head: HEAD, tagCommit: HEAD, released: false })).not.toThrow();
+  expect(() => assertPublishable('v1.2.3', { head: HEAD, tagCommit: 'b'.repeat(40), released: false })).toThrow(
+    'tag v1.2.3 points at bbbbbbb, not HEAD aaaaaaa',
+  );
+});
+
+test('assertPublishable never replaces the assets of a published release', () => {
+  expect(() => assertPublishable('v1.2.3', { head: HEAD, tagCommit: HEAD, released: true })).toThrow(
+    'release v1.2.3 is already published',
+  );
 });
