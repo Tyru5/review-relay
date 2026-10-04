@@ -7,6 +7,16 @@ command -v bun >/dev/null || { echo "bun not found" >&2; exit 1; }
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   start) exec bun "$ROOT/src/cli.ts" start --detach "$@" ;;
+  killall)
+    # Stops every daemon on the box (installed binary, worktrees, foreground runs), not just the pidfile one.
+    # SIGTERM first so forwarders remove their temporary webhooks; SIGKILL whatever is left after 10s.
+    pat='^(\S*/)?(review-relay|bun \S*/src/cli\.ts) start'
+    pids=$(pgrep -f "$pat" || true)
+    [[ -z "$pids" ]] && { echo "no daemons running"; exit 0; }
+    ps -o pid=,args= -p "${pids//$'\n'/,}"
+    kill $pids 2>/dev/null || true
+    for _ in {1..20}; do pgrep -f "$pat" >/dev/null || { echo "stopped"; exit 0; }; sleep 0.5; done
+    left=$(pgrep -f "$pat" || true); echo "force-killing: $left"; kill -9 $left 2>/dev/null || true ;;
   logs)
     # Old form: logs [N] [-f|--follow]; -f and --follow are flags, N is positional.
     args=(); for a in "$@"; do [[ "$a" == --follow ]] && a=-f; args+=("$a"); done

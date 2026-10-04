@@ -27,6 +27,7 @@
     "relay:setup": "scripts/relay setup",
     "relay:start": "scripts/relay start",
     "relay:stop": "scripts/relay stop",
+    "relay:killall": "scripts/relay killall",
     "relay:restart": "scripts/relay restart",
     "relay:status": "scripts/relay status",
     "relay:info": "scripts/relay info",
