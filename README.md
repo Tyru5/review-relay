@@ -30,7 +30,7 @@ Windows PowerShell (installs to `%LOCALAPPDATA%\review-relay\bin` and adds it to
 irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1 | iex
 ```
 
-The installers download a standalone binary (no Bun needed) for your OS and CPU, verify it against the release's `SHA256SUMS`, and seed `~/.review-relay/config.json` from `config.example.json` if it does not exist. Rerun to update. Pin a version with `bash -s -- --version 0.2.0` (PowerShell: `-Version 0.2.0`, see the script header). Supported: macOS and glibc Linux on x64 and arm64, Windows x64.
+The installers download a standalone binary (no Bun needed) for your OS and CPU, verify it against the release's `SHA256SUMS`, and seed `~/.review-relay/config.json` from `config.example.json` if it does not exist. Rerun to update. Pin a version with `bash -s -- --version 0.4.0` (PowerShell: `-Version 0.4.0`, see the script header). Supported: macOS and glibc Linux on x64 and arm64, Windows x64.
 
 Then edit `~/.review-relay/config.json` and run `review-relay start`.
 
