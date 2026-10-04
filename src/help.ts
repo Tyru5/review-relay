@@ -91,8 +91,8 @@ export const HELP_GROUPS: Group[] = [
           { flag: '--route <name>', description: 'Use this route instead of the one the PR matches' },
         ],
         examples: [
-          'review-relay run --repo Tyru5/Agendex --pr 42',
-          'review-relay run --repo Tyru5/Agendex --pr 42 --route risky',
+          'review-relay run --repo owner/repo --pr 42',
+          'review-relay run --repo owner/repo --pr 42 --route risky',
         ],
       },
       {
@@ -111,8 +111,8 @@ export const HELP_GROUPS: Group[] = [
           },
         ],
         examples: [
-          'review-relay route --repo Tyru5/Agendex --pr 42',
-          'review-relay route --repo Tyru5/Agendex --pr 42 --source mention',
+          'review-relay route --repo owner/repo --pr 42',
+          'review-relay route --repo owner/repo --pr 42 --source mention',
         ],
       },
       {
