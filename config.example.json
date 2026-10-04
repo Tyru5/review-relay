@@ -9,8 +9,8 @@
   },
   "repos": [
     {
-      "fullName": "Tyru5/Agendex",
-      "localPath": "~/Documents/ti/Agendex",
+      "fullName": "owner/repo",
+      "localPath": "~/code/repo",
       "trigger": "auto",
       "postToPr": true
     },

@@ -30,7 +30,7 @@ Windows PowerShell (installs to `%LOCALAPPDATA%\review-relay\bin` and adds it to
 irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1 | iex
 ```
 
-The installers download a standalone binary (no Bun needed) for your OS and CPU, verify it against the release's `SHA256SUMS`, and seed `~/.review-relay/config.json` from `config.example.json` if it does not exist. Rerun to update. Pin a version with `bash -s -- --version 0.2.0` (PowerShell: `-Version 0.2.0`, see the script header). Supported: macOS and glibc Linux on x64 and arm64, Windows x64.
+The installers download a standalone binary (no Bun needed) for your OS and CPU, verify it against the release's `SHA256SUMS`, and seed `~/.review-relay/config.json` from `config.example.json` if it does not exist. Rerun to update. Pin a version with `bash -s -- --version 0.4.0` (PowerShell: `-Version 0.4.0`, see the script header). Supported: macOS and glibc Linux on x64 and arm64, Windows x64.
 
 Then edit `~/.review-relay/config.json` and run `review-relay start`.
 
@@ -286,3 +286,11 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
 - Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.
+
+## Security
+
+Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)

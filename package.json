@@ -1,8 +1,14 @@
 {
   "name": "review-relay",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Run local Codex and Claude PR reviews when Greptile starts a review, falling back to GitHub PR events.",
+  "description": "Runs local AI agent reviews (Claude Code, Codex, and 11 other agent CLIs) on GitHub pull requests and posts a 1-5 merge confidence score.",
+  "homepage": "https://reviewrelay.dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tyru5/review-relay.git"
+  },
   "bin": {
     "review-relay": "src/cli.ts"
   },

@@ -185,9 +185,9 @@ export const ENVIRONMENT: ReferenceRow[] = [
     'Installer destination. Unix --bin-dir and PowerShell -BinDir take precedence.',
   ],
   [
-    'REVIEW_RELAY_INSTALL_URL',
-    'https://downloads.reviewrelay.dev',
-    'Alternate download origin. Only use an origin you trust.',
+    'REVIEW_RELAY_INSTALL_REPO',
+    'Tyru5/review-relay',
+    'GitHub repo to download releases from. Only use a repo you trust.',
   ],
   [
     'REVIEW_RELAY_INSTALL_NO_MODIFY_PATH',
