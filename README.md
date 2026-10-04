@@ -240,7 +240,7 @@ To release, bump `version` in `package.json`, merge, then push a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-`.github/workflows/release.yml` runs the checks, rejects a tag that does not match `package.json`, builds all targets, and creates the release with `gh` using the workflow's `GITHUB_TOKEN` (no other secrets). Rerunning it replaces the assets on the existing release. `bun run release:build` stages the same files in `dist/v<version>/` without publishing; `bun run release` publishes from a clean tree with your local `gh auth login`.
+`.github/workflows/release.yml` runs the checks, rejects a tag that does not match `package.json`, builds all targets, and creates the release with `gh` using the workflow's `GITHUB_TOKEN` (no other secrets). It publishes only from the commit the tag points at, so retry a failed run with "Re-run jobs" or `gh workflow run release.yml --ref v0.2.0`. A published release is never modified, since replacing its assets would break installs mid-upload; bump the version to ship a fix. `bun run release:build` stages the same files in `dist/v<version>/` without publishing; `bun run release` publishes from a clean checkout of the tag with your local `gh auth login`.
 
 ## Daemon control
 
