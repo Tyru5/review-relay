@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the review-relay binary on macOS / Linux from the GitHub Releases of Tyru5/review-relay.
 #   curl -fsSL https://github.com/Tyru5/review-relay/releases/latest/download/install.sh | bash
-#   curl -fsSL https://github.com/Tyru5/review-relay/releases/latest/download/install.sh | bash -s -- --version 0.4.0
+#   curl -fsSL https://github.com/Tyru5/review-relay/releases/latest/download/install.sh | bash -s -- --version 0.4.1
 set -euo pipefail
 
 REPO="${REVIEW_RELAY_INSTALL_REPO:-Tyru5/review-relay}"
