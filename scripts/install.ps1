@@ -6,15 +6,16 @@
     irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1 | iex
 
   With options:
-    & ([scriptblock]::Create((irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1))) -Version 0.4.0 -NoModifyPath
+    & ([scriptblock]::Create((irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1))) -Version 0.4.0 -NoModifyPath -NoAlias
 
-  Env equivalents: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO,NO_MODIFY_PATH}, REVIEW_RELAY_CONFIG
+  Env equivalents: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO,NO_MODIFY_PATH,NO_ALIAS}, REVIEW_RELAY_CONFIG
 #>
 [CmdletBinding()]
 param(
     [string]$Version = '',
     [string]$BinDir = '',
-    [switch]$NoModifyPath
+    [switch]$NoModifyPath,
+    [switch]$NoAlias
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,7 @@ $Version = Get-Setting $Version 'REVIEW_RELAY_INSTALL_VERSION' 'latest'
 $BinDir = Get-Setting $BinDir 'REVIEW_RELAY_INSTALL_BIN_DIR' (Join-Path $env:LOCALAPPDATA 'review-relay\bin')
 $Config = Get-Setting '' 'REVIEW_RELAY_CONFIG' (Join-Path $HOME '.review-relay\config.json')
 $NoModifyPath = $NoModifyPath -or [bool]$env:REVIEW_RELAY_INSTALL_NO_MODIFY_PATH
+$NoAlias = $NoAlias -or [bool]$env:REVIEW_RELAY_INSTALL_NO_ALIAS
 $Asset = 'review-relay-windows-x64.exe'
 
 function Write-Info([string]$Message) { Write-Host '> ' -ForegroundColor White -NoNewline; Write-Host $Message }
@@ -109,6 +111,34 @@ function Install-Binary([string]$Ver) {
     return $exe
 }
 
+# `rr` is a hard link to the binary (a native exe, so Ctrl+C stays clean), falling back to a .cmd shim.
+# Recreated on every install, since replacing review-relay.exe detaches the old link.
+# A marker records that rr is ours; an rr.exe or rr.cmd without it is left alone.
+function Install-Alias([string]$Exe) {
+    $link = Join-Path $BinDir 'rr.exe'
+    $shim = Join-Path $BinDir 'rr.cmd'
+    $marker = Join-Path $BinDir '.rr-alias'
+    if (-not (Test-Path $marker) -and ((Test-Path $link) -or (Test-Path $shim))) {
+        Write-Warn "skipped rr shortcut: rr already exists in $BinDir"
+        return $false
+    }
+    try {
+        Remove-Item -Force -ErrorAction SilentlyContinue $shim
+        if (Test-Path $link) { Remove-Item -Force $link }
+    } catch {
+        Write-Warn "could not replace $link; stop any running rr and rerun"
+        return $false
+    }
+    try {
+        New-Item -ItemType HardLink -Path $link -Target $Exe | Out-Null
+    } catch {
+        Set-Content -Encoding Ascii -Path $shim -Value '@"%~dp0review-relay.exe" %*'
+    }
+    Set-Content -Path $marker -Value 'rr is managed by the review-relay installer'
+    Write-Ok 'rr -> review-relay'
+    return $true
+}
+
 function Initialize-Config([string]$Ver) {
     if (Test-Path $Config) { Write-Ok "keeping existing config $Config"; return }
     New-Item -ItemType Directory -Force -Path (Split-Path $Config -Parent) | Out-Null
@@ -161,6 +191,7 @@ function Install-ReviewRelay {
     Write-Ok "review-relay $installed installed to $exe"
 
     Initialize-Config $ver
+    $aliasHint = if (-not $NoAlias -and (Install-Alias $exe)) { "`n  rr is short for review-relay" } else { '' }
     Add-ToPath
     Show-RuntimeDeps
 
@@ -169,7 +200,7 @@ function Install-ReviewRelay {
 Next
   review-relay setup        # pick repos, reviewers, and models (or notepad $Config)
   review-relay start        # watch configured repos
-  review-relay status       # recent jobs
+  review-relay status       # recent jobs$aliasHint
   rerun the installer to update
 "@
 }

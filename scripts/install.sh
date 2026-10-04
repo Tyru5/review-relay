@@ -9,6 +9,7 @@ BASE_URL="https://github.com/$REPO/releases"
 VERSION="${REVIEW_RELAY_INSTALL_VERSION:-latest}"
 BIN_DIR="${REVIEW_RELAY_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 CONFIG="${REVIEW_RELAY_CONFIG:-$HOME/.review-relay/config.json}"
+NO_ALIAS="${REVIEW_RELAY_INSTALL_NO_ALIAS:-}"
 
 if [[ -t 1 ]]; then
   B=$'\e[1m'; D=$'\e[2m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
@@ -28,9 +29,10 @@ ${B}usage:${N} curl -fsSL $BASE_URL/latest/download/install.sh | bash [-s -- opt
 
   --version <x.y.z>   version to install (default: latest)
   --bin-dir <path>    install location (default: ~/.local/bin)
+  --no-alias          skip the rr shortcut for review-relay
   -h, --help          show this help
 
-${D}env: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO}, REVIEW_RELAY_CONFIG${N}
+${D}env: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO,NO_ALIAS}, REVIEW_RELAY_CONFIG${N}
 USAGE
 }
 
@@ -42,6 +44,7 @@ while (($#)); do
     --version=*) VERSION="${1#*=}"; shift ;;
     --bin-dir)   need_value "$1" "${2:-}"; BIN_DIR="$2"; shift 2 ;;
     --bin-dir=*) BIN_DIR="${1#*=}"; shift ;;
+    --no-alias)  NO_ALIAS=1; shift ;;
     -h|--help)   usage; exit 0 ;;
     *)           usage >&2; fail "unknown option: $1" ;;
   esac
@@ -105,6 +108,22 @@ sha256() {
   fi
 }
 
+# `rr` is a relative symlink beside the binary. An rr that is not ours (e.g. the rr debugger) is left alone.
+install_alias() {
+  local link="$BIN_DIR/rr" found
+  if [[ -e $link || -L $link ]] && [[ "$(readlink "$link" 2>/dev/null)" != review-relay ]]; then
+    warn "skipped rr shortcut: $link already exists"
+    return
+  fi
+  ln -sfn review-relay "$link"
+  ok "rr → review-relay"
+  ALIAS_HINT=$'\n'"  ${D}rr is short for review-relay${N}"
+  found="$(command -v rr 2>/dev/null || true)"
+  if [[ -n $found && $found != "$link" ]]; then
+    warn "rr resolves to $found first on PATH; use review-relay or reorder PATH"
+  fi
+}
+
 check_runtime_deps() {
   local missing=()
   has git || missing+=("git")
@@ -156,6 +175,8 @@ else
   fetch "$URL/config.example.json" "$CONFIG" && ok "wrote example config to $CONFIG ${Y}(edit repos before starting)${N}"
 fi
 
+ALIAS_HINT=
+[[ -n $NO_ALIAS ]] || install_alias
 check_runtime_deps
 
 case ":$PATH:" in
@@ -169,6 +190,6 @@ cat <<NEXT
 ${B}Next${N}
   review-relay setup        ${D}# pick repos, reviewers, and models (or \$EDITOR $CONFIG)${N}
   review-relay start        ${D}# watch configured repos${N}
-  review-relay status       ${D}# recent jobs${N}
+  review-relay status       ${D}# recent jobs${N}${ALIAS_HINT}
   rerun the installer to update
 NEXT
