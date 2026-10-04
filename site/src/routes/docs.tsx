@@ -169,8 +169,8 @@ function Docs() {
               </p>
               <p>
                 Unix also accepts <code>--bin-dir</code> and <code>--no-alias</code>. PowerShell accepts{' '}
-                <code>-BinDir</code>, <code>-NoModifyPath</code>, and <code>-NoAlias</code>. See <a href="#environment">environment variables</a> for equivalent
-                settings.
+                <code>-BinDir</code>, <code>-NoModifyPath</code>, and <code>-NoAlias</code>. See{' '}
+                <a href="#environment">environment variables</a> for equivalent settings.
               </p>
             </details>
           </Section>
