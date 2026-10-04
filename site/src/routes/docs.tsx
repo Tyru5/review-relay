@@ -159,13 +159,17 @@ function Docs() {
                 by default.
               </p>
               <p>
+                Both installers also add <code>rr</code> as a shortcut for <code>review-relay</code>. An existing{' '}
+                <code>rr</code> from another tool is left alone.
+              </p>
+              <p>
                 The installers verify the binary’s SHA-256 checksum and preserve an existing config. Run the installer
                 again to update, then restart the daemon. To pin a release, pass <code>--version x.y.z</code> to the
                 Unix installer, or <code>-Version x.y.z</code> to the PowerShell script.
               </p>
               <p>
-                Unix also accepts <code>--bin-dir</code>. PowerShell accepts <code>-BinDir</code> and{' '}
-                <code>-NoModifyPath</code>. See <a href="#environment">environment variables</a> for equivalent
+                Unix also accepts <code>--bin-dir</code> and <code>--no-alias</code>. PowerShell accepts{' '}
+                <code>-BinDir</code>, <code>-NoModifyPath</code>, and <code>-NoAlias</code>. See <a href="#environment">environment variables</a> for equivalent
                 settings.
               </p>
             </details>

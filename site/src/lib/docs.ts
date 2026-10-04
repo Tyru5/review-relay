@@ -194,6 +194,11 @@ export const ENVIRONMENT: ReferenceRow[] = [
     'Not set',
     'Windows only. Any non-empty value prevents PATH changes; equivalent to -NoModifyPath.',
   ],
+  [
+    'REVIEW_RELAY_INSTALL_NO_ALIAS',
+    'Not set',
+    'Any non-empty value skips the rr shortcut; equivalent to --no-alias or -NoAlias.',
+  ],
 ];
 
 export const QUICK_CONFIG = {
