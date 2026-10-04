@@ -286,3 +286,11 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
 - Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.
+
+## Security
+
+Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)
