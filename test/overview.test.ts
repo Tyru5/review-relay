@@ -68,6 +68,15 @@ describe('renderDaemon', () => {
     expect(lines.join('\n')).toContain('something else answers /health on :9988');
   });
 
+  test('running an older build than installed suggests a restart', () => {
+    const older = renderDaemon({ ...running, version: '0.1.0' }, opts, plain).lines.join('\n');
+    expect(older).toContain('runs v0.1.0');
+    expect(older).toContain('installed is v0.2.0; run review-relay restart to update');
+    const unknown = renderDaemon({ ...running, version: null }, opts, plain).lines.join('\n');
+    expect(unknown).toContain('runs an older version');
+    expect(renderDaemon(running, opts, plain).lines.join('\n')).not.toContain('restart to update');
+  });
+
   test('running: pid, uptime, health, one row per forwarder, down count', () => {
     const { lines, exitCode } = renderDaemon(running, { ...opts, now: Date.parse('2026-10-03T10:05:01.000Z') }, plain);
     expect(exitCode).toBe(0);

@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
-import type { DaemonState } from './daemon.ts';
+import { isOutdated, type DaemonState } from './daemon.ts';
 import { HARNESSES } from './reviewers/index.ts';
 import type { ReviewerId } from './types.ts';
 import { fmtDuration, padVisible, row, section, tildify, type Styles } from './ui.ts';
@@ -55,6 +55,17 @@ export function renderDaemon(
       : st.badge('danger', state.health === 'unexpected' ? 'unexpected reply' : 'unreachable');
   lines.push(row(st, 'endpoint', endpoint, undefined), row(st, 'health', health, `GET /health on :${state.port}`));
   lines.push(row(st, 'log', tildify(opts.logPath)));
+  if (isOutdated(state, opts.version)) {
+    const running = state.version ? `v${state.version}` : 'an older version';
+    lines.push(
+      row(
+        st,
+        'update',
+        st.badge('warning', `runs ${running}`),
+        `installed is v${opts.version}; run review-relay restart to update`,
+      ),
+    );
+  }
 
   lines.push(...section(st, 'Forwarders'));
   if (state.forwarders.length === 0) {

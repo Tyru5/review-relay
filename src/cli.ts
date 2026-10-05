@@ -8,6 +8,7 @@ import { defaultConfigPath, findRepo, loadConfig, type Config } from './config.t
 import {
   clearDaemonInfo,
   inspectDaemon,
+  isOutdated,
   logFilePath,
   readLast,
   readRange,
@@ -156,6 +157,11 @@ async function startDetached(config: Config, configPath: string) {
   const existing = await inspectDaemon(config.dataDir, config.port);
   if (existing.running) {
     warn(`already running (pid ${existing.pid})`);
+    if (isOutdated(existing, version)) {
+      warn(
+        `daemon runs ${existing.version ? `v${existing.version}` : 'an older version'}, installed is v${version}; run review-relay restart`,
+      );
+    }
     return showStatus(config, configPath, existing);
   }
   // Otherwise the health wait below would accept the other listener's reply and report a daemon that never bound.

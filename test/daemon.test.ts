@@ -8,15 +8,21 @@ import {
   inspectDaemon,
   isAlive,
   isRelayCommand,
+  isOutdated,
   isRelayProcess,
   matchesRecord,
+  PID_HEADER,
   pidFilePath,
+  portOwner,
+  probeDaemon,
   RECORD_SKEW_MS,
   readLast,
   readRange,
   selfCommand,
+  VERSION_HEADER,
   writeDaemonInfo,
 } from '../src/daemon.ts';
+import { healthResponse } from '../src/server.ts';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'relay-daemon-'));
 /** A port nothing listens on, so health probes fail fast. */
@@ -85,6 +91,87 @@ describe('daemon records', () => {
     const state = await inspectDaemon(d, DEAD_PORT);
     expect(state.running).toBe(false);
     expect(state.stale).toBe(true);
+  });
+});
+
+/** A `/health` listener on a free port: a current daemon (headers) or one from before 0.5.1 (plain `ok`). */
+function listen(legacy = false) {
+  return Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => (legacy ? new Response('ok') : healthResponse()) });
+}
+
+describe('identifying the daemon on the port', () => {
+  test('/health keeps the plain ok body and names its pid and version', async () => {
+    const res = healthResponse();
+    expect(await res.text()).toBe('ok');
+    expect(res.headers.get(PID_HEADER)).toBe(String(process.pid));
+    expect(res.headers.get(VERSION_HEADER)).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  test('probeDaemon reads the pid header, and null from an older daemon', async () => {
+    const current = listen();
+    const legacy = listen(true);
+    try {
+      expect(await probeDaemon(current.port!)).toMatchObject({ health: 'ok', pid: process.pid });
+      expect(await probeDaemon(legacy.port!)).toEqual({ health: 'ok', pid: null, version: null });
+    } finally {
+      current.stop(true);
+      legacy.stop(true);
+    }
+  });
+
+  test('a record rejected on start time is kept when /health reports the same pid', async () => {
+    const server = listen();
+    try {
+      const d = dir();
+      writeDaemonInfo(d, {
+        pid: process.pid, // not `review-relay start`, so only the health header can vouch for it
+        port: server.port!,
+        startedAt: '2000-01-01T00:00:00.000Z',
+        version: '0.1.0',
+        configPath: '/c.json',
+        forwarders: [
+          { repo: 'o/r', pid: process.pid, events: 'pull_request', since: '2000-01-01T00:00:00.000Z', restarts: 0 },
+        ],
+      });
+      const state = await inspectDaemon(d, server.port!);
+      expect(state).toMatchObject({ running: true, stale: false, foreign: false, pid: process.pid, health: 'ok' });
+      expect(state.startedAt).toBe('2000-01-01T00:00:00.000Z');
+      expect(state.forwarders).toHaveLength(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('with no record, the daemon answering /health is found by its reported pid', async () => {
+    const server = listen();
+    try {
+      const state = await inspectDaemon(dir(), server.port!);
+      expect(state).toMatchObject({ running: true, stale: false, foreign: false, pid: process.pid });
+      expect(state.version).toBe(healthResponse().headers.get(VERSION_HEADER));
+      expect(state.forwarders).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('an older listener whose port owner is not review-relay stays foreign', async () => {
+    const server = listen(true);
+    try {
+      // lsof or ss may be missing; when present they name this process.
+      expect([process.pid, null]).toContain(portOwner(server.port!));
+      const state = await inspectDaemon(dir(), server.port!);
+      expect(state).toMatchObject({ running: false, foreign: true, health: 'ok' });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('isOutdated flags a running daemon on another or unknown version', async () => {
+    const state = await inspectDaemon(dir(), DEAD_PORT);
+    expect(isOutdated(state, '0.5.0')).toBe(false); // stopped
+    expect(isOutdated({ ...state, running: true, version: '0.5.0' }, '0.5.0')).toBe(false);
+    expect(isOutdated({ ...state, running: true, version: '0.4.1' }, '0.5.0')).toBe(true);
+    expect(isOutdated({ ...state, running: true, version: null }, '0.5.0')).toBe(true);
   });
 });
 

@@ -3,7 +3,8 @@
  *
  * `start` writes `daemon.json` in the data dir (pid, port, start time, forwarder pids) and keeps it
  * current as forwarders restart. `status`, `stop`, and `info` read it, confirm the pid is still a
- * review-relay process, and ping `/health` on the port.
+ * review-relay process, and ping `/health` on the port. `/health` names the answering daemon's pid,
+ * which settles it when the record is missing or the process clock disagrees with it.
  */
 import { spawn } from 'node:child_process';
 import {
@@ -171,13 +172,60 @@ function readLegacyPid(dataDir: string): number | null {
 
 export type Health = 'ok' | 'unreachable' | 'unexpected';
 
-export async function probeHealth(port: number, timeoutMs = 1_500): Promise<Health> {
+/** Response headers `/health` sets; daemons before 0.5.1 send neither. */
+export const PID_HEADER = 'x-review-relay-pid';
+export const VERSION_HEADER = 'x-review-relay-version';
+
+export interface HealthReply {
+  health: Health;
+  /** Pid the daemon reported for itself, or null for an older daemon or another server. */
+  pid: number | null;
+  version: string | null;
+}
+
+export async function probeDaemon(port: number, timeoutMs = 1_500): Promise<HealthReply> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(timeoutMs) });
-    return res.ok && (await res.text()) === 'ok' ? 'ok' : 'unexpected';
+    if (!res.ok || (await res.text()) !== 'ok') return { health: 'unexpected', pid: null, version: null };
+    const pid = Number(res.headers.get(PID_HEADER));
+    return {
+      health: 'ok',
+      pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+      version: res.headers.get(VERSION_HEADER) || null,
+    };
   } catch {
-    return 'unreachable';
+    return { health: 'unreachable', pid: null, version: null };
   }
+}
+
+export const probeHealth = async (port: number, timeoutMs = 1_500): Promise<Health> =>
+  (await probeDaemon(port, timeoutMs)).health;
+
+/** Pid listening on the TCP port, from the OS; for daemons too old to report their own. */
+export function portOwner(port: number): number | null {
+  const run = (cmd: string[]) => {
+    try {
+      const out = Bun.spawnSync(cmd, { stdout: 'pipe', stderr: 'ignore' });
+      return out.success ? out.stdout.toString() : '';
+    } catch {
+      return ''; // tool not installed
+    }
+  };
+  const first = (text: string) => {
+    const n = Number(text.trim().split(/\s+/)[0]);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  if (process.platform === 'win32') {
+    return first(
+      powershell(
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`,
+      ) ?? '',
+    );
+  }
+  const lsof = first(run(['lsof', '-t', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN']));
+  if (lsof !== null || process.platform !== 'linux') return lsof;
+  const ss = /pid=(\d+)/.exec(run(['ss', '-Hltnp', `sport = :${port}`]));
+  return ss ? Number(ss[1]) : null;
 }
 
 export interface DaemonState {
@@ -215,20 +263,41 @@ export async function inspectDaemon(dataDir: string, port: number): Promise<Daem
   };
   const proc = pid !== null && isAlive(pid) ? probeProcess(pid) : null;
   if (pid !== null && proc && matchesRecord(proc, info?.startedAt ?? null)) {
-    state.running = true;
-    const startedMs = proc.startedMs ?? (info?.startedAt ? Date.parse(info.startedAt) : null);
-    state.uptimeMs = startedMs === null ? null : Date.now() - startedMs;
-    if (state.startedAt === null && startedMs !== null) state.startedAt = new Date(startedMs).toISOString();
-    state.health = await probeHealth(state.port);
-    state.forwarders = (info?.forwarders ?? []).map((f) => ({ ...f, alive: f.pid !== null && isAlive(f.pid) }));
-    return state;
+    return adopt(state, proc, info, await probeDaemon(state.port));
+  }
+
+  // The record is missing or did not check out, but whoever answers on the port may still be our daemon:
+  // a process clock that drifted (WSL after sleep), a record deleted by mistake, or one never written.
+  const reply = await probeDaemon(port);
+  if (reply.health === 'ok') {
+    const owner = reply.pid ?? portOwner(port);
+    const ownerProc = owner !== null && isAlive(owner) ? probeProcess(owner) : null;
+    // A self-reported pid is proof enough; a pid found through the OS must also look like `review-relay start`.
+    if (owner !== null && ownerProc && (reply.pid !== null || isRelayCommand(ownerProc.commandLine))) {
+      Object.assign(state, { pid: owner, port, version: reply.version, startedAt: null });
+      return adopt(state, ownerProc, owner === info?.pid ? info : null, reply);
+    }
+    state.foreign = true;
+    state.health = reply.health;
   }
   if (pid !== null) state.stale = true;
-  const health = await probeHealth(port);
-  if (health === 'ok') {
-    state.foreign = true;
-    state.health = health;
-  }
+  return state;
+}
+
+/** True when the running daemon is a different build than this CLI (an unknown version counts as older). */
+export const isOutdated = (state: DaemonState, cliVersion: string): boolean =>
+  state.running && state.version !== cliVersion;
+
+/** Fills in a running daemon's state; `info` is its record, or null when the record belongs to another pid. */
+function adopt(state: DaemonState, proc: ProcessInfo, info: DaemonInfo | null, reply: HealthReply): DaemonState {
+  state.running = true;
+  state.health = reply.health;
+  if (info) state.startedAt = info.startedAt;
+  state.version = reply.version ?? (info?.version || null);
+  const startedMs = proc.startedMs ?? (info?.startedAt ? Date.parse(info.startedAt) : null);
+  state.uptimeMs = startedMs === null ? null : Date.now() - startedMs;
+  if (state.startedAt === null && startedMs !== null) state.startedAt = new Date(startedMs).toISOString();
+  state.forwarders = (info?.forwarders ?? []).map((f) => ({ ...f, alive: f.pid !== null && isAlive(f.pid) }));
   return state;
 }
 
@@ -260,7 +329,9 @@ export async function waitForStart(
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if ((await probeHealth(port, 500)) === 'ok') return null;
+    const reply = await probeDaemon(port, 500);
+    // An older or different daemon answering is not this one; it will fail to bind and exit.
+    if (reply.health === 'ok' && (reply.pid === null || reply.pid === pid)) return null;
     if (!isAlive(pid)) return 'exited during startup';
     await sleep(200);
   }
