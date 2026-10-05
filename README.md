@@ -244,7 +244,7 @@ git tag v0.2.0 && git push origin v0.2.0
 
 ## Daemon control
 
-The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, version, and each `gh webhook forward` child), and `status`, `stop`, and `info` read that record, confirm the pid is still a review-relay process, and ping `GET /health`. Logs from `start -d` go to `<dataDir>/daemon.log`.
+The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, version, and each `gh webhook forward` child), and `status`, `stop`, and `info` read that record, confirm the pid is still a review-relay process, and ping `GET /health`. `/health` also returns the daemon's pid and version in `x-review-relay-pid` / `x-review-relay-version` headers, so a daemon whose record is missing or fails the start-time check is still recognized, and `status` flags a daemon older than the installed CLI. Logs from `start -d` go to `<dataDir>/daemon.log`.
 
 From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 

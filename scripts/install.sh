@@ -179,6 +179,11 @@ ALIAS_HINT=
 [[ -n $NO_ALIAS ]] || install_alias
 check_runtime_deps
 
+# A daemon started before this install keeps running the old build until it restarts.
+if has pgrep && pgrep -f 'review-relay start' >/dev/null 2>&1; then
+  warn "a review-relay daemon is still running the previous build; run: review-relay restart"
+fi
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) warn "$BIN_DIR is not on PATH; add to your shell rc:"

@@ -194,6 +194,10 @@ function Install-ReviewRelay {
     $aliasHint = if (-not $NoAlias -and (Install-Alias $exe)) { "`n  rr is short for review-relay" } else { '' }
     Add-ToPath
     Show-RuntimeDeps
+    # A daemon started before this install keeps running the old build until it restarts.
+    $daemon = Get-CimInstance Win32_Process -Filter "Name = 'review-relay.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '\bstart\b' }
+    if ($daemon) { Write-Warn 'a review-relay daemon is still running the previous build; run: review-relay restart' }
 
     Write-Host @"
 
