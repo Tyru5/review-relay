@@ -6,7 +6,7 @@
     irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1 | iex
 
   With options:
-    & ([scriptblock]::Create((irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1))) -Version 0.5.0 -NoModifyPath -NoAlias
+    & ([scriptblock]::Create((irm https://github.com/Tyru5/review-relay/releases/latest/download/install.ps1))) -Version 0.5.1 -NoModifyPath -NoAlias
 
   Env equivalents: REVIEW_RELAY_INSTALL_{VERSION,BIN_DIR,REPO,NO_MODIFY_PATH,NO_ALIAS}, REVIEW_RELAY_CONFIG
 #>
