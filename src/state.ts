@@ -20,11 +20,17 @@ export interface JobRecord {
   error?: string;
 }
 
+/** Jobs kept in state.json. Older ones are dropped, so a commit that old can be reviewed again if an event names it. */
+export const MAX_RECORDS = 1000;
+
 /** Job history persisted as one JSON file; `null` path keeps it in memory (tests, dry runs). */
 export class StateStore {
   private records = new Map<string, JobRecord>();
 
-  constructor(private readonly path: string | null) {
+  constructor(
+    private readonly path: string | null,
+    private readonly max = MAX_RECORDS,
+  ) {
     if (!path) return;
     try {
       const saved = JSON.parse(readFileSync(path, 'utf8')) as JobRecord[];
@@ -64,7 +70,20 @@ export class StateStore {
     return [...this.records.values()].toSorted((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
+  /** Drops the oldest finished jobs past `max`; running jobs always stay. */
+  private prune(): void {
+    let excess = this.records.size - this.max;
+    if (excess <= 0) return;
+    for (const r of this.list().toReversed()) {
+      if (excess === 0) break;
+      if (r.status === 'running') continue;
+      this.records.delete(r.key);
+      excess--;
+    }
+  }
+
   private save(): void {
+    this.prune();
     if (!this.path) return;
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.tmp`;
