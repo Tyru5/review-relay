@@ -197,7 +197,7 @@ review-relay start                                  # watch all configured repos
 review-relay start -d                               # same, as a background daemon (pid + log in dataDir)
 review-relay stop                                   # SIGTERM so temporary repo webhooks get deleted; forces after 20s
 review-relay restart                                # stop, then start -d
-review-relay status [--limit N]                     # daemon (pid, uptime, endpoint, health), forwarders, recent jobs; exit 3 if stopped
+review-relay status [--limit N] [--page N]          # daemon (pid, uptime, endpoint, health), forwarders, jobs (20/page); exit 3 if stopped
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
 review-relay run --repo owner/name --pr 123 --route risky   # ... with this route

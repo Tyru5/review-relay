@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reportDirFor } from '../src/report.ts';
 import type { JobRecord } from '../src/state.ts';
-import { fmtDuration, renderStatus } from '../src/status.ts';
+import { fmtDuration, paginate, renderStatus } from '../src/status.ts';
 
 const record = (sha: string, patch: Partial<JobRecord> = {}): JobRecord => ({
   key: `o/r@${sha}`,
@@ -116,4 +116,29 @@ test('fmtDuration', () => {
   expect(fmtDuration(4_400)).toBe('4s');
   expect(fmtDuration(919_423)).toBe('15m19s');
   expect(fmtDuration(3_900_000)).toBe('1h05m');
+});
+
+describe('paginate', () => {
+  const items = Array.from({ length: 45 }, (_, i) => i);
+
+  test('slices the requested page', () => {
+    expect(paginate(items, 2, 20)).toEqual({
+      items: items.slice(20, 40),
+      page: 2,
+      pages: 3,
+      total: 45,
+      from: 21,
+      to: 40,
+    });
+  });
+
+  test('clamps past the end to the last page', () => {
+    const last = paginate(items, 9, 20);
+    expect(last.page).toBe(3);
+    expect(last.items).toEqual([40, 41, 42, 43, 44]);
+  });
+
+  test('empty list is one empty page', () => {
+    expect(paginate([], 1, 20)).toEqual({ items: [], page: 1, pages: 1, total: 0, from: 0, to: 0 });
+  });
 });

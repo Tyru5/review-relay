@@ -156,3 +156,24 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
       .trimEnd();
   return [line(header.map((text) => ({ text, color: DIM }))), ...rows.map(line)];
 }
+
+export interface Page<T> {
+  items: T[];
+  /** 1-based, clamped to the last page. */
+  page: number;
+  pages: number;
+  total: number;
+  /** 1-based index of the first item shown; 0 when there are none. */
+  from: number;
+  to: number;
+}
+
+/** One page of `items`; a page past the end shows the last one. */
+export function paginate<T>(items: T[], page: number, size: number): Page<T> {
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const current = Math.min(Math.max(1, page), pages);
+  const start = (current - 1) * size;
+  const slice = items.slice(start, start + size);
+  return { items: slice, page: current, pages, total, from: slice.length ? start + 1 : 0, to: start + slice.length };
+}

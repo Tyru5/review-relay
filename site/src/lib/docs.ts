@@ -137,8 +137,8 @@ export const COMMANDS: ReferenceRow[] = [
   ['restart', 'No flags', 'Stop, then start in the background. Use after editing config.'],
   [
     'status',
-    '--limit <n>',
-    'Daemon, endpoint, forwarders, and recent jobs. Default 20 jobs; exits 3 when the daemon is not running.',
+    '--limit <n>, --page <n>',
+    'Daemon, endpoint, forwarders, and recent jobs. 20 jobs per page; --page reaches older ones. Exits 3 when the daemon is not running.',
   ],
   ['logs', '[N], -f, --follow', 'Read the last N log lines, default 50. Use -f to follow new output.'],
   [

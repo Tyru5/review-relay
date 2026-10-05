@@ -29,7 +29,7 @@ import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
-import { renderStatus } from './status.ts';
+import { paginate, renderStatus } from './status.ts';
 import type { JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
@@ -70,6 +70,7 @@ interface Options {
   dryRun: boolean;
   grace?: string;
   limit?: string;
+  page?: string;
   route?: string;
   source?: string;
   detach: boolean;
@@ -155,7 +156,7 @@ async function startDetached(config: Config, configPath: string) {
   const existing = await inspectDaemon(config.dataDir, config.port);
   if (existing.running) {
     warn(`already running (pid ${existing.pid})`);
-    return showStatus(config, configPath, existing, undefined);
+    return showStatus(config, configPath, existing);
   }
   // Otherwise the health wait below would accept the other listener's reply and report a daemon that never bound.
   if (existing.foreign) fail(`port ${config.port} is already in use by something that is not review-relay`);
@@ -168,7 +169,7 @@ async function startDetached(config: Config, configPath: string) {
   const state = await inspectDaemon(config.dataDir, config.port);
   ok(`started (pid ${state.pid ?? pid})`);
   console.log();
-  return showStatus(config, configPath, state, undefined);
+  return showStatus(config, configPath, state);
 }
 
 async function stop(config: Config): Promise<boolean> {
@@ -193,14 +194,39 @@ async function showStatus(
   config: Config,
   configPath: string,
   state: DaemonState | undefined,
-  limit: string | undefined,
+  limit?: string,
+  page?: string,
 ) {
+  const size = positiveInt('--limit', limit, 20);
+  const pageNo = positiveInt('--page', page, 1);
   state ??= await inspectDaemon(config.dataDir, config.port);
   const daemon = renderDaemon(state, { version, configPath, logPath: logFilePath(config.dataDir) }, st);
-  const records = new StateStore(join(config.dataDir, 'state.json')).list().slice(0, Number(limit ?? 20));
-  const jobs = renderStatus(records, { dataDir: config.dataDir, reviewers: config.reviewers, color: st.color });
-  print([...daemon.lines, ...section(st, 'Recent jobs'), ...jobs.map((l) => `  ${l}`)]);
+  // Only the requested page is rendered, so reports are read for at most `size` jobs.
+  const jobs = paginate(new StateStore(join(config.dataDir, 'state.json')).list(), pageNo, size);
+  const table = renderStatus(jobs.items, { dataDir: config.dataDir, reviewers: config.reviewers, color: st.color });
+  const heading =
+    jobs.pages > 1
+      ? [
+          '',
+          `${st.section('Recent jobs')}  ${st.muted(`${jobs.from}-${jobs.to} of ${jobs.total} • page ${jobs.page}/${jobs.pages}`)}`,
+        ]
+      : section(st, 'Recent jobs');
+  const more =
+    jobs.page < jobs.pages
+      ? [
+          '',
+          `  ${st.muted('older:')} ${st.command(`review-relay status --page ${jobs.page + 1}${limit === undefined ? '' : ` --limit ${size}`}`)}`,
+        ]
+      : [];
+  print([...daemon.lines, ...heading, ...table.map((l) => `  ${l}`), ...more]);
   if (daemon.exitCode) process.exitCode = daemon.exitCode;
+}
+
+function positiveInt(flag: string, value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) fail(`${flag} takes a positive whole number, got "${value}"`);
+  return n;
 }
 
 async function info(config: Config, configPath: string, json: boolean) {
@@ -331,6 +357,7 @@ export function parse(argv: string[]) {
       'dry-run': { type: 'boolean', default: false },
       grace: { type: 'string' },
       limit: { type: 'string' },
+      page: { type: 'string' },
       route: { type: 'string' },
       source: { type: 'string' },
       detach: { type: 'boolean', short: 'd', default: false },
@@ -347,6 +374,7 @@ export function parse(argv: string[]) {
     dryRun: values['dry-run'],
     grace: values.grace,
     limit: values.limit,
+    page: values.page,
     route: values.route,
     source: values.source,
     detach: values.detach,
@@ -406,7 +434,7 @@ async function main() {
       await stop(config);
       return startDetached(config, configPath);
     case 'status':
-      return showStatus(config, configPath, undefined, opts.limit);
+      return showStatus(config, configPath, undefined, opts.limit, opts.page);
     case 'logs':
       return logs(config, arg, opts.follow);
     case 'run':

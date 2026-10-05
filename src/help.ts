@@ -56,11 +56,14 @@ export const HELP_GROUPS: Group[] = [
       },
       {
         name: 'status',
-        args: '[--limit N]',
+        args: '[--limit N] [--page N]',
         summary: 'Daemon, endpoint, forwarders, and recent review jobs',
         detail: ['Exits 3 when the daemon is not running, so scripts can test it.'],
-        options: [{ flag: '--limit <n>', description: 'Review jobs to list (default 20)' }],
-        examples: ['review-relay status', 'review-relay status --limit 5'],
+        options: [
+          { flag: '--limit <n>', description: 'Review jobs per page (default 20)' },
+          { flag: '--page <n>', description: 'Page of jobs, newest first (default 1)' },
+        ],
+        examples: ['review-relay status', 'review-relay status --limit 5', 'review-relay status --page 2'],
       },
       {
         name: 'logs',
