@@ -109,17 +109,15 @@ describe('renderMarkdown', () => {
     expect(text).toContain('                             Codex  Claude');
     expect(text).toMatch(/───+ {2}─────  ──────\n/);
     expect(text).toContain('Overall                       4/5    5/5');
-    expect(text).toContain('Correctness                    5       5');
-    expect(text).toContain('Standards (repo + industry)    5       5');
+    expect(text).toContain('Correctness                    5      5');
+    expect(text).toContain('Standards (repo + industry)    5      5');
     expect(text).toContain('Findings (1)');
     // Links show their text, the escaped pipe is literal, and nested details show expanded under a label.
     expect(text).toContain('• Minor .github/workflows/ci.yml:39: Publish not gated on CI | really (Claude)');
     expect(text).not.toContain('https://');
     expect(text).toContain('  ▸ Details');
-    expect(text).toContain(
-      '  The release PR is opened by a bot token, so pull_request workflows never start and the merge',
-    );
-    expect(text).toContain('  publishes with zero checks run against it.');
+    expect(text).toContain('  The release PR is opened by a bot token, so pull_request workflows never start and the');
+    expect(text).toContain('  merge publishes with zero checks run against it.');
     expect(text).toContain('  Suggested fix: Pass an app token to the action.');
     expect(text).not.toContain('<details>');
     expect(text).not.toContain('</details>');
