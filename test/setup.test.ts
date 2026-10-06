@@ -8,7 +8,6 @@ import {
   modelKeys,
   nextModels,
   nextRepos,
-  parseKeys,
   reduce,
   renderSetup,
   setupContext,
@@ -16,6 +15,7 @@ import {
   type SetupContext,
   type SetupState,
 } from '../src/setup.ts';
+import { parseKeys } from '../src/term.ts';
 
 /** The clone setup is run from, which the file lists unless a test says otherwise. */
 const APP = { fullName: 'acme/app', localPath: '/home/u/app' };

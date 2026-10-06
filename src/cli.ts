@@ -31,6 +31,7 @@ import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
 import { paginate, renderStatus } from './status.ts';
+import { tui } from './tui.ts';
 import type { JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
@@ -288,9 +289,14 @@ async function logs(config: Config, count: string | undefined, follow: boolean) 
   }
 }
 
+/** Names the configured repos next to the one that wasn't found, since a typo in `owner/name` is the usual cause. */
+const unknownRepo = (config: Config, name: string) =>
+  `no configured repo named "${name}" (configured: ${config.repos.map((r) => r.fullName).join(', ') || 'none'})`;
+
 async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined, route?: string) {
   const repo = findRepo(config, repoName);
-  if (!repo || !pr) fail('run needs --repo <configured owner/name> and --pr <number>');
+  if (!repoName || !pr) fail('run needs --repo <configured owner/name> and --pr <number>');
+  if (!repo) fail(unknownRepo(config, repoName!));
   if (route !== undefined) {
     const named = config.routes.find((r) => r.name === route);
     const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
@@ -312,7 +318,8 @@ async function runOnce(config: Config, repoName: string | undefined, pr: string 
 /** Fetches the PR and prints how every route judges it, without running a reviewer or touching job state. */
 async function explain(config: Config, repoName: string | undefined, pr: string | undefined, source = 'github') {
   const repo = findRepo(config, repoName);
-  if (!repo || !pr) return fail('route needs --repo <configured owner/name> and --pr <number>');
+  if (!repoName || !pr) return fail('route needs --repo <configured owner/name> and --pr <number>');
+  if (!repo) return fail(unknownRepo(config, repoName!));
   if (!SOURCES.includes(source as JobSource)) return fail(`--source must be one of ${SOURCES.join(', ')}`);
   const job = await resolveJob(
     { repo: repo.fullName, pr: Number(pr), source: source as JobSource, reason: 'route' },
@@ -395,6 +402,7 @@ const COMMANDS = [
   'stop',
   'restart',
   'status',
+  'tui',
   'logs',
   'run',
   'route',
@@ -441,6 +449,8 @@ async function main() {
       return startDetached(config, configPath);
     case 'status':
       return showStatus(config, configPath, undefined, opts.limit, opts.page);
+    case 'tui':
+      return tui(config, configPath, version);
     case 'logs':
       return logs(config, arg, opts.follow);
     case 'run':
