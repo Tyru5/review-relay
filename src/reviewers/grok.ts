@@ -22,7 +22,7 @@ export const grok: Harness = {
   shell: 'none',
   // Loaded only for trusted folders, but trust covers subfolders, so they go regardless.
   projectFiles: ['.grok', '.envrc'],
-  async run({ bin, dir, prompt, scratchDir, timeoutMs, model, effort }) {
+  async run({ bin, dir, prompt, scratchDir, timeoutMs, signal, model, effort }) {
     const promptFile = join(scratchDir, 'prompt.txt');
     await Bun.write(promptFile, prompt);
     const result = await exec(
@@ -51,7 +51,7 @@ export const grok: Harness = {
         ...opt('-m', model),
         ...opt('--reasoning-effort', effort),
       ],
-      { cwd: dir, timeoutMs, env: NO_IMPORTS },
+      { cwd: dir, timeoutMs, signal, env: NO_IMPORTS },
     );
     const raw = result.stdout.trim();
     if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || raw };

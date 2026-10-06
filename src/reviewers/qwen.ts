@@ -21,7 +21,7 @@ export const qwen: Harness = {
   // Headless plan mode puts the shell, edit, and write tools on the deny list.
   shell: 'none',
   projectFiles: ['.qwen'],
-  async run({ bin, dir, prompt, timeoutMs, model }) {
+  async run({ bin, dir, prompt, timeoutMs, signal, model }) {
     const result = await exec(
       [
         bin,
@@ -35,7 +35,7 @@ export const qwen: Harness = {
         JSON.stringify(VERDICT_SCHEMA),
         ...opt('-m', model),
       ],
-      { cwd: dir, timeoutMs, stdin: prompt },
+      { cwd: dir, timeoutMs, signal, stdin: prompt },
     );
     const raw = result.stdout.trim();
     if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || raw };

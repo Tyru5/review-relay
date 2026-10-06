@@ -19,6 +19,11 @@ export async function resolveJob(job: ReviewJob, { open = true } = {}): Promise<
   return { ...job, headSha: pr.headRefOid, headRef: pr.headRefName, baseRef: pr.baseRefName };
 }
 
+/** The PR's head commit on GitHub right now, which decides whether a review is still current. */
+export async function prHead(repo: string, pr: number): Promise<string> {
+  return (await execOrThrow(['gh', 'api', `repos/${repo}/pulls/${pr}`, '--jq', '.head.sha'])).trim();
+}
+
 /** Keeps one relay comment per PR: edits the signed-in user's marked comment, or creates it. */
 export async function upsertComment(repo: string, pr: number, body: string): Promise<void> {
   const login = (await execOrThrow(['gh', 'api', 'user', '--jq', '.login'])).trim();

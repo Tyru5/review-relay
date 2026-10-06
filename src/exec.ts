@@ -11,6 +11,8 @@ export interface ExecOptions {
   timeoutMs?: number;
   /** Added to the inherited environment. */
   env?: Record<string, string>;
+  /** Kills the process when aborted, as a timeout does, but without marking it timed out. */
+  signal?: AbortSignal;
 }
 
 /** Runs a binary directly (no shell, so user aliases and functions never apply). */
@@ -23,19 +25,25 @@ export async function exec(cmd: string[], opts: ExecOptions = {}): Promise<ExecR
     stderr: 'pipe',
   });
   let timedOut = false;
+  const kill = () => {
+    proc.kill('SIGTERM');
+    setTimeout(() => proc.kill('SIGKILL'), 5_000).unref();
+  };
   const timer = opts.timeoutMs
     ? setTimeout(() => {
         timedOut = true;
-        proc.kill('SIGTERM');
-        setTimeout(() => proc.kill('SIGKILL'), 5_000).unref();
+        kill();
       }, opts.timeoutMs)
     : undefined;
+  if (opts.signal?.aborted) kill();
+  else opts.signal?.addEventListener('abort', kill, { once: true });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
   if (timer) clearTimeout(timer);
+  opts.signal?.removeEventListener('abort', kill);
   return { code, stdout, stderr, timedOut };
 }
 

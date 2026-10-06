@@ -39,6 +39,7 @@ function setup(graceMs = 120_000) {
     state: new StateStore(null),
     graceMs,
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    prHead: async (j) => j.headSha,
     run: async (j) => {
       runs.push(j);
       return {};
@@ -150,6 +151,7 @@ test('a failed run can be retried by the next trigger', async () => {
     state,
     graceMs: 0,
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    prHead: async (j) => j.headSha,
     run: async () => {
       calls += 1;
       if (calls === 1) throw new Error('boom');
@@ -176,6 +178,7 @@ test('a skip route records the commit as skipped and handled, with its route', a
     state,
     graceMs: 0,
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    prHead: async (j) => j.headSha,
     run: async () => {
       calls += 1;
       return calls === 1 ? { route, skipped: true } : { reportDir: '/tmp/r', route };
@@ -196,4 +199,132 @@ test('a skip route records the commit as skipped and handled, with its route', a
   expect(calls).toBe(2);
   expect(state.list()[0]).toMatchObject({ status: 'done', route: 'docs', reportDir: '/tmp/r' });
   expect(logs.at(-1)).toBe('[Tyru5/Agendex] PR #223: route docs (onlyPaths: 2 files), done -> /tmp/r');
+});
+
+describe('stale commits and the queue', () => {
+  const NEWER = 'ffffffffffffffffffffffffffffffffffffffff';
+  const settle = () => Bun.sleep(5);
+
+  /** A scheduler whose PR heads come from `heads` and whose reviews each wait for `finish(sha)`. */
+  function gated(opts: { maxConcurrent?: number } = {}) {
+    const state = new StateStore(null);
+    const heads = new Map<number, string>();
+    const runs: ResolvedJob[] = [];
+    const signals = new Map<string, AbortSignal>();
+    const gates = new Map<string, () => void>();
+    const scheduler = new Scheduler({
+      state,
+      graceMs: 0,
+      maxConcurrent: opts.maxConcurrent,
+      resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+      prHead: async (j) => heads.get(j.pr) ?? j.headSha,
+      run: (j, _repo, signal) => {
+        runs.push(j);
+        signals.set(j.headSha, signal);
+        return new Promise((resolve, reject) => {
+          gates.set(j.headSha, () => resolve({ reportDir: `/tmp/${j.headSha}` }));
+          signal.addEventListener('abort', () => reject(new Error('reviewer exited 143')));
+        });
+      },
+      log: () => {},
+    });
+    const start = (pr: number, sha: string) =>
+      scheduler.handle(repoWith('greptile'), { kind: 'greptileStart', job: { ...job('greptile', sha), pr } });
+    const finish = (sha: string) => gates.get(sha)!();
+    const status = (sha: string) => state.list().find((r) => r.headSha === sha);
+    return { scheduler, state, heads, runs, signals, start, finish, status };
+  }
+
+  test('a commit that is no longer the PR head is not reviewed, and stays open to a later review', async () => {
+    const t = gated();
+    t.heads.set(223, NEWER);
+    t.start(223, SHA);
+    await t.scheduler.idle();
+    expect(t.runs).toEqual([]);
+    expect(t.status(SHA)).toMatchObject({ status: 'superseded', supersededBy: NEWER });
+
+    // Force-pushed back: the commit is the head again, so it gets its review.
+    t.heads.set(223, SHA);
+    t.start(223, SHA);
+    await settle();
+    t.finish(SHA);
+    await t.scheduler.idle();
+    expect(t.status(SHA)).toMatchObject({ status: 'done', reportDir: `/tmp/${SHA}` });
+  });
+
+  test('reviewing the new head stops the review of the older commit on the same PR only', async () => {
+    const OTHER_PR = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const t = gated();
+    t.start(223, SHA);
+    t.start(9, OTHER_PR);
+    await settle();
+    expect(t.status(SHA)?.status).toBe('running');
+
+    t.heads.set(223, NEWER);
+    t.start(223, NEWER);
+    await settle();
+    expect(t.signals.get(SHA)?.aborted).toBe(true);
+    expect(t.signals.get(SHA)?.reason).toBe(NEWER);
+    expect(t.signals.get(OTHER_PR)?.aborted).toBe(false);
+    expect(t.status(SHA)).toMatchObject({ status: 'superseded', supersededBy: NEWER });
+    expect(t.status(SHA)?.error).toBeUndefined();
+
+    t.finish(NEWER);
+    t.finish(OTHER_PR);
+    await t.scheduler.idle();
+    expect(t.status(NEWER)?.status).toBe('done');
+    expect(t.status(OTHER_PR)?.status).toBe('done');
+  });
+
+  test('a review the runner could not post because the PR moved on is superseded, with its report', async () => {
+    const state = new StateStore(null);
+    const scheduler = new Scheduler({
+      state,
+      graceMs: 0,
+      resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+      prHead: async (j) => j.headSha,
+      run: async () => ({ reportDir: '/tmp/r', supersededBy: NEWER }),
+      log: () => {},
+    });
+    scheduler.handle(repoWith('greptile'), greptileStart());
+    await scheduler.idle();
+    expect(state.list()[0]).toMatchObject({ status: 'superseded', supersededBy: NEWER, reportDir: '/tmp/r' });
+    expect(state.isHandled(state.list()[0]!.key)).toBe(false);
+  });
+
+  test('maxConcurrent runs that many reviews and queues the rest, oldest first', async () => {
+    const [A, B, C] = ['a', 'b', 'c'].map((c) => c.repeat(40)) as [string, string, string];
+    const t = gated({ maxConcurrent: 2 });
+    t.start(1, A);
+    t.start(2, B);
+    t.start(3, C);
+    await settle();
+    expect(t.runs.map((r) => r.headSha)).toEqual([A, B]);
+    expect(t.status(C)?.status).toBe('queued');
+    // A second event for a queued commit doesn't queue it twice.
+    t.start(3, C);
+    t.finish(B);
+    await settle();
+    expect(t.runs.map((r) => r.headSha)).toEqual([A, B, C]);
+    expect(t.status(C)?.status).toBe('running');
+    t.finish(A);
+    t.finish(C);
+    await t.scheduler.idle();
+    expect(t.runs).toHaveLength(3);
+    expect([A, B, C].map((sha) => t.status(sha)?.status)).toEqual(['done', 'done', 'done']);
+  });
+
+  test('a queued commit whose PR moved on while it waited is dropped when its turn comes', async () => {
+    const A = 'a'.repeat(40);
+    const t = gated({ maxConcurrent: 1 });
+    t.start(1, A);
+    t.start(223, SHA);
+    await settle();
+    expect(t.status(SHA)?.status).toBe('queued');
+    t.heads.set(223, NEWER);
+    t.finish(A);
+    await t.scheduler.idle();
+    expect(t.runs.map((r) => r.headSha)).toEqual([A]);
+    expect(t.status(SHA)).toMatchObject({ status: 'superseded', supersededBy: NEWER });
+  });
 });

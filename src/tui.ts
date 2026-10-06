@@ -14,7 +14,7 @@ import type { Config } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
 import { renderMarkdown } from './markdown.ts';
 import { reportDirFor } from './report.ts';
-import type { JobRecord, JobStatus } from './state.ts';
+import { activeJob, type JobRecord, type JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
 import { colorDepth, fill, moved, rgb, runScreen, windowed } from './term.ts';
 import {
@@ -30,12 +30,14 @@ import {
 } from './ui.ts';
 import { mergeFindings, type Finding, type MergedFinding, type Verdict } from './verdict.ts';
 
-const STATUSES: JobStatus[] = ['running', 'done', 'failed', 'skipped'];
+const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded'];
 const STATUS_TONES: Record<JobStatus, Tone> = {
+  queued: 'muted',
   running: 'warning',
   done: 'success',
   failed: 'danger',
   skipped: 'info',
+  superseded: 'muted',
 };
 /** Log lines kept per job view; the file itself is read from the end. */
 const LOG_LINES = 300;
@@ -93,7 +95,11 @@ const readJson = (path: string): any => {
   }
 };
 
-const isFinished = (job: JobRecord) => job.status !== 'running';
+const isFinished = (job: JobRecord) => !activeJob(job);
+
+/** Why a queued or running job can't be re-reviewed yet. */
+const busyText = (job: JobRecord) =>
+  `${job.repo} #${job.pr} ${job.status === 'queued' ? 'is queued for review' : 'is being reviewed now'}`;
 
 /**
  * The cache key for a job's report folder reads. A re-run reuses the job's key (`repo@sha`) but starts again, moves
@@ -278,8 +284,7 @@ function jobKeys(state: TuiState, key: string, ctx: TuiContext): TuiState | unde
   const pinned = { ...state, selected: job.key };
   switch (key) {
     case 'r':
-      if (job.status === 'running')
-        return flash(pinned, `${job.repo} #${job.pr} is being reviewed now`, ctx, 'warning');
+      if (activeJob(job)) return flash(pinned, busyText(job), ctx, 'warning');
       return { ...pinned, confirm: { action: 'rerun', key: job.key } };
     case 'o':
       return { ...pinned, effect: { kind: 'open', url: prUrl(job) } };
@@ -348,7 +353,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
     // The job as it is now, not as it was when asked: it may have gone, or a review of it may have started since.
     const job = ctx.store.jobs.find((j) => j.key === state.confirm!.key);
     if (!job) return flash(next, 'that job is no longer listed', ctx, 'warning');
-    if (job.status === 'running') return flash(next, `${job.repo} #${job.pr} is being reviewed now`, ctx, 'warning');
+    if (activeJob(job)) return flash(next, busyText(job), ctx, 'warning');
     return { ...next, effect: { kind: 'rerun', job } };
   }
   if (state.view === 'help') return { ...base, view: 'list' };
@@ -450,7 +455,7 @@ export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string
   const lines = [
     `${st.bold(`${job.repo} #${job.pr}`)}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[job.status], job.status)}`,
     field('url', prUrl(job)),
-    field('started', `${fmtTime(job.startedAt)}  ${st.muted(job.status === 'running' ? `${took} so far` : took)}`),
+    field('started', `${fmtTime(job.startedAt)}  ${st.muted(activeJob(job) ? `${took} so far` : took)}`),
     field('source', [job.source, job.route && `route ${job.route}`].filter(Boolean).join(' · ')),
   ];
   if (detail.meta?.baseRef) lines.push(field('base', detail.meta.baseRef));
@@ -488,11 +493,16 @@ export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string
     }
   }
 
+  if (job.status === 'superseded') {
+    const head = job.supersededBy ? ` (${job.supersededBy.slice(0, 8)})` : '';
+    lines.push('', st.muted(`  the PR moved to a newer commit${head} first, so nothing was posted`));
+  }
   if (detail.comment.length) {
     // Two for the panel's padding and border on each side, two for the section indent.
     const width = Math.max(20, ctx.width - 6);
-    lines.push('', st.section('Comment'), ...renderMarkdown(detail.comment.join('\n'), width, st).map((l) => `  ${l}`));
-  } else if (job.status === 'running' || job.status === 'failed') {
+    const title = job.status === 'superseded' ? 'Comment (not posted)' : 'Comment';
+    lines.push('', st.section(title), ...renderMarkdown(detail.comment.join('\n'), width, st).map((l) => `  ${l}`));
+  } else if (activeJob(job) || job.status === 'failed') {
     const log = ctx.store.log(job);
     lines.push(
       '',
@@ -516,7 +526,7 @@ const HELP_LINES: [string, string][] = [
   ['o', 'open the PR in the browser'],
   ['y', "copy the PR's URL to the clipboard"],
   ['/', 'filter by repo, PR, commit, status, source, route, or error text'],
-  ['s', 'cycle the status filter: running, done, failed, skipped, all'],
+  ['s', 'cycle the status filter: queued, running, done, failed, skipped, superseded, all'],
   ['esc', 'back; on the list it clears the filters, then quits'],
   ['q', 'quit'],
 ];

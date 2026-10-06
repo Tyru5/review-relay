@@ -400,13 +400,13 @@ describe('list view', () => {
     expect(visible(press(ctx, ['/', ...'timed', 'space', ...'out', 'enter']), ctx.store.jobs)).toEqual([FAILED]);
     expect(render(press(ctx, ['/', ...'zzz']), ctx)).toContain('no job matches the filter');
 
-    const cycle = ['running', 'done', 'failed', 'skipped', undefined];
+    const cycle = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded', undefined];
     let state = initialState();
     for (const status of cycle) {
       state = reduce(state, 's', ctx);
       expect(state.status).toBe(status as TuiState['status']);
     }
-    const done = press(ctx, ['s', 's']);
+    const done = press(ctx, ['s', 's', 's']);
     expect(render(done, ctx)).toContain('[done]');
     expect(visible(done, ctx.store.jobs)).toEqual([DONE]);
     expect(press(ctx, ['escape'], done).status).toBeUndefined();

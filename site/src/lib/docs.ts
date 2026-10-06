@@ -18,6 +18,7 @@ export const GLOBAL_OPTIONS: ReferenceRow[] = [
   ['port', '9988', 'Local webhook server port. Listens on 127.0.0.1 only.'],
   ['graceMs', '120000', 'In auto mode, wait this many milliseconds for Greptile before the GitHub fallback runs.'],
   ['timeoutMs', '1800000', 'Per-reviewer timeout in milliseconds. The default is 30 minutes.'],
+  ['maxConcurrent', '2', 'Reviews that run at once, each with its whole panel. Later ones queue, oldest first.'],
   ['reviewers', '["codex","claude"]', 'Fallback panel when no route matches. At least one reviewer ID is required.'],
   [
     'models',

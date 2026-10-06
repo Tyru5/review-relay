@@ -10,6 +10,8 @@ export interface ReviewerInput {
   /** Per-job directory for reviewer output files. */
   scratchDir: string;
   timeoutMs: number;
+  /** Aborted when a newer commit makes this review stale; every process the harness spawns must take it. */
+  signal?: AbortSignal;
   /** Unset means the CLI's own default. */
   model?: string;
   effort?: string;

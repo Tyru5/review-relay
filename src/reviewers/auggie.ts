@@ -41,7 +41,12 @@ export const auggie: Harness = {
 
     // Auggie has deny rules but no allowlist, and new tools (including the user's sub-agents) start enabled,
     // so list what this install has and remove everything that isn't read-only.
-    const listing = await exec([input.bin, 'tools', 'list', ...cache], { cwd: input.dir, env, timeoutMs: 120_000 });
+    const listing = await exec([input.bin, 'tools', 'list', ...cache], {
+      cwd: input.dir,
+      env,
+      timeoutMs: 120_000,
+      signal: input.signal,
+    });
     const tools = listedTools(listing.stdout);
     if (!tools.includes('view')) {
       const raw = (listing.stderr || listing.stdout).trim();

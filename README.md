@@ -53,6 +53,7 @@ bun src/cli.ts start
 | `port` | `9988` | Local port for forwarded webhooks |
 | `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
+| `maxConcurrent` | `2` | Reviews that run at once, each with all of its reviewers. Later ones wait as `queued`, oldest first |
 | `reviewers` | `["codex", "claude"]` | Which reviewers run, by the names under [Supported agents](#supported-agents) or the ids of [custom reviewers](#custom-reviewers) |
 | `models.<id>` | see below | `model` and `effort` for that reviewer's CLI, passed with the flags listed under Supported agents. Unset means review-relay's default for that CLI, below, and otherwise the CLI's own default. `provider` is also read for `hermes`. |
 | `models.<id>.harness` | the id | The CLI a [custom reviewer](#custom-reviewers) runs |
@@ -149,6 +150,8 @@ A config error in a route names it, such as `routes[1] "tiny": skip can't use ma
 - `github`: only GitHub PR events (plus mentions). Use this for repos with no AI reviewer bot.
 
 Each commit is reviewed once. Mentions and `run` always review again. Drafts are skipped until marked ready.
+
+Only a PR's current head gets reviewed. A job checks GitHub for the PR's head commit when its turn comes and is recorded as `superseded` instead of running when the PR has moved on; a review that passes the check stops any review still running on an older commit of the same PR. The comment is posted only if the commit is still the head at that moment, so a slow review of an older commit never replaces a newer one's comment. Its report is still saved locally, and `status` shows the job as `superseded`.
 
 ## Supported agents
 
@@ -255,13 +258,14 @@ Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comm
 
 ## How a review runs
 
-1. Fetch `refs/pull/<n>/head` and the base branch into the local clone.
-2. Compute diff stats in the clone (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
-3. Pick the route (see [Routing](#routing)). A skip route stops here, before any worktree exists.
-4. Create a detached worktree at the PR head commit.
-5. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
-6. Run the route's reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any reviewer, in `reviewers` or a route, whose CLI isn't on PATH.
-7. Write reports, post or update the PR comment, remove the worktree.
+1. Wait for a free slot (`maxConcurrent`), then check that the commit is still the PR's head, and stop any review of an older commit on the same PR.
+2. Fetch `refs/pull/<n>/head` and the base branch into the local clone.
+3. Compute diff stats in the clone (files, lines, test files touched, wide-impact files such as lockfiles, CI, migrations, schemas).
+4. Pick the route (see [Routing](#routing)). A skip route stops here, before any worktree exists.
+5. Create a detached worktree at the PR head commit.
+6. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
+7. Run the route's reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any reviewer, in `reviewers` or a route, whose CLI isn't on PATH.
+8. Write reports, remove the worktree, and post or update the PR comment if the commit is still the PR's head. Posts to one PR happen one at a time.
 
 Reviewers are spawned directly, not through your shell, so shell aliases (for example a `codex` alias that bypasses the sandbox) do not apply.
 
@@ -286,6 +290,7 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 
 - `gh webhook forward` is GitHub's development tool: one forwarder per repo at a time, and the machine must be online. Stop the daemon with Ctrl+C so it removes the temporary repo webhooks.
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
+- The `maxConcurrent` limit and the one-post-per-PR lock hold within one process. A `run` started while the daemon reviews the same PR is checked against the PR head but can still post at the same moment as the daemon.
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
 - Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.

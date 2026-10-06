@@ -40,6 +40,8 @@ export interface Config {
   graceMs: number;
   /** Per-reviewer timeout. */
   timeoutMs: number;
+  /** Reviews that run at once; each runs all of its reviewers. Later ones queue. */
+  maxConcurrent: number;
   /** Ids of the reviewers that review every PR. */
   reviewers: ReviewerId[];
   /** Every reviewer by id: each CLI under its own name, plus the file's custom entries. */
@@ -53,6 +55,9 @@ export interface Config {
 export const DEFAULT_DATA_DIR = join(homedir(), '.review-relay');
 
 export const defaultConfigPath = () => process.env.REVIEW_RELAY_CONFIG ?? join(DEFAULT_DATA_DIR, 'config.json');
+
+/** Reviews at once by default; each spawns every reviewer it runs, so a burst of PRs would otherwise run them all. */
+export const DEFAULT_MAX_CONCURRENT = 2;
 
 /** Reviewers when the config lists none. */
 export const DEFAULT_REVIEWERS: ReviewerId[] = ['codex', 'claude'];
@@ -213,10 +218,16 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
   });
   checkLabels([...reviewers, ...routes.flatMap((route) => route.reviewers ?? [])], models);
 
+  const maxConcurrent = c.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
+    throw new Error('maxConcurrent must be a whole number of reviews, 1 or more');
+  }
+
   return {
     port: c.port ?? 9988,
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,
+    maxConcurrent,
     reviewers,
     models,
     routes,

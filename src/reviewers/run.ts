@@ -28,6 +28,7 @@ export async function runText(input: ReviewerInput, run: TextRun): Promise<Revie
   const result = await exec(run.argv, {
     cwd: input.dir,
     timeoutMs: input.timeoutMs,
+    signal: input.signal,
     stdin: run.stdin === false ? undefined : input.prompt,
     env: run.env,
   });

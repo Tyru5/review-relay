@@ -14,7 +14,7 @@ export const codex: Harness = {
   schema: 'native',
   // The read-only sandbox blocks writes at the OS level, so any shell command is safe to allow.
   shell: 'git',
-  async run({ bin, dir, prompt, schemaPath, scratchDir, timeoutMs, model, effort }) {
+  async run({ bin, dir, prompt, schemaPath, scratchDir, timeoutMs, signal, model, effort }) {
     const outFile = `${scratchDir}/codex-verdict.json`;
     const result = await exec(
       [
@@ -35,7 +35,7 @@ export const codex: Harness = {
         outFile,
         '-',
       ],
-      { cwd: dir, timeoutMs, stdin: prompt },
+      { cwd: dir, timeoutMs, signal, stdin: prompt },
     );
     if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || result.stdout.trim() };
     const raw = (

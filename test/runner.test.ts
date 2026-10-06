@@ -76,6 +76,7 @@ function setup(
     post: async (_repo, _pr, body) => {
       posts.push(body);
     },
+    prHead: async () => job.headSha,
   };
   const scratch = (call: ReviewerInput) => call.scratchDir.split('/').at(-1)!;
   return { config, repo, deps, calls, posts, fetches, checkouts, dataDir, scratch };
@@ -148,6 +149,69 @@ describe('runReview', () => {
     await expect(runReview(job, broken.repo, broken.config, broken.deps)).rejects.toThrow(
       'all reviewers failed (claude: exit 1: boom; mini: exit 1: boom)',
     );
+  });
+});
+
+describe('stale commits', () => {
+  const NEWER = 'ffffffffffffffffffffffffffffffffffffffff';
+
+  test('posts nothing once the PR has moved past the reviewed commit, but keeps the local report', async () => {
+    const t = setup({ reviewers: ['codex'] });
+    t.deps.prHead = async () => NEWER;
+    const outcome = await runReview(job, t.repo, t.config, t.deps);
+    expect(outcome.supersededBy).toBe(NEWER);
+    expect(t.posts).toEqual([]);
+    expect(existsSync(join(outcome.reportDir!, 'comment.md'))).toBe(true);
+  });
+
+  test("a newer commit's review waits for an older one's post, so the PR keeps one comment, the newer", async () => {
+    const t = setup({ reviewers: ['codex'] });
+    // GitHub as upsertComment sees it: it looks for the comment, then creates or edits it a moment later.
+    const comments: string[] = [];
+    let head = job.headSha;
+    let posting!: () => void;
+    const olderPosting = new Promise<void>((resolve) => (posting = resolve));
+    t.deps.prHead = async () => head;
+    t.deps.post = async (_repo, _pr, body) => {
+      const existing = comments.length > 0;
+      posting();
+      await Bun.sleep(150);
+      if (existing) comments[0] = body;
+      else comments.push(body);
+    };
+
+    const older = runReview(job, t.repo, t.config, t.deps);
+    await olderPosting;
+    head = NEWER;
+    const newer = runReview({ ...job, headSha: NEWER }, t.repo, t.config, t.deps);
+    expect((await older).supersededBy).toBeUndefined();
+    expect((await newer).supersededBy).toBeUndefined();
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain(`Commit \`${NEWER.slice(0, 8)}\``);
+  });
+
+  test('an abort kills the reviewers and ends the review with no report and no post', async () => {
+    const t = setup({ reviewers: ['codex'] });
+    const controller = new AbortController();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    const signals: (AbortSignal | undefined)[] = [];
+    t.deps.harnesses.codex = {
+      ...t.deps.harnesses.codex,
+      run: async (input) => {
+        signals.push(input.signal);
+        started();
+        await new Promise((resolve) => input.signal!.addEventListener('abort', resolve));
+        return { code: 143, stdout: '', stderr: '', timedOut: false, raw: '' };
+      },
+    };
+    const review = runReview(job, t.repo, t.config, t.deps, controller.signal);
+    await running;
+    controller.abort(NEWER);
+    expect(await review).toEqual({ route: undefined, supersededBy: NEWER });
+    expect(signals).toEqual([controller.signal]);
+    expect(t.posts).toEqual([]);
+    expect(existsSync(reportDirFor(t.dataDir, job))).toBe(false);
   });
 });
 

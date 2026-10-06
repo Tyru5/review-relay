@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
-import type { JobRecord } from './state.ts';
+import { activeJob, type JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
 import { fmtDuration, sanitize } from './ui.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
@@ -64,7 +64,14 @@ const RED = '31';
 const GREEN = '32';
 const YELLOW = '33';
 const CYAN = '36';
-const STATUS_COLORS: Record<string, string> = { done: GREEN, failed: RED, running: YELLOW, skipped: CYAN };
+const STATUS_COLORS: Record<string, string> = {
+  queued: DIM,
+  done: GREEN,
+  failed: RED,
+  running: YELLOW,
+  skipped: CYAN,
+  superseded: DIM,
+};
 const scoreColor = (n: number) => (n >= 4 ? GREEN : n === 3 ? YELLOW : RED);
 const countCell = (n: number, color: string): Cell => (n > 0 ? { text: String(n), color } : { text: '0', color: DIM });
 
@@ -83,7 +90,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
   const now = opts.now ?? Date.now();
   const reports =
     opts.reports ??
-    records.map((r) => (r.status === 'running' ? null : readReport(r.reportDir ?? reportDirFor(opts.dataDir, r))));
+    records.map((r) => (activeJob(r) ? null : readReport(r.reportDir ?? reportDirFor(opts.dataDir, r))));
   const reviewers = [...opts.reviewers];
   for (const rep of reports)
     for (const r of rep?.reviewers ?? []) if (!reviewers.includes(r.name)) reviewers.push(r.name);
@@ -108,7 +115,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
 
   const rows = records.map((r, i): Cell[] => {
     const rep = reports[i];
-    const end = r.finishedAt ? Date.parse(r.finishedAt) : r.status === 'running' ? now : null;
+    const end = r.finishedAt ? Date.parse(r.finishedAt) : activeJob(r) ? now : null;
     const reviewerCells = reviewers.map((name): Cell => {
       const m = rep?.reviewers.find((x) => x.name === name);
       if (!m) return none;
@@ -135,7 +142,12 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
           ]
         : [none, none, none]),
       // Reviewer errors quote CLI output, so they are untrusted.
-      { text: oneLine(sanitize(r.error ?? failures.join('; ')), 80), color: DIM },
+      {
+        text: r.supersededBy
+          ? `PR moved to ${r.supersededBy.slice(0, 8)}; not posted`
+          : oneLine(sanitize(r.error ?? failures.join('; ')), 80),
+        color: DIM,
+      },
     ];
   });
 

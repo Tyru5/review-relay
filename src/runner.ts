@@ -2,7 +2,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Config, RepoConfig, ReviewerEntry } from './config.ts';
 import { diffStats, promptDiff, type DiffStats } from './diffstats.ts';
-import { upsertComment } from './github.ts';
+import { prHead, upsertComment } from './github.ts';
 import { reviewPrompt } from './prompt.ts';
 import { commentBody, routeLine, writeReport } from './report.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
@@ -26,6 +26,8 @@ export interface RunnerDeps {
   promptDiff: (dir: string, baseRef: string) => Promise<string>;
   /** Posts or updates the PR comment. */
   post: (repo: string, pr: number, body: string) => Promise<void>;
+  /** The PR's head commit on GitHub now, checked just before posting. */
+  prHead: (repo: string, pr: number) => Promise<string>;
 }
 
 export const RUNNER_DEPS: RunnerDeps = {
@@ -36,6 +38,7 @@ export const RUNNER_DEPS: RunnerDeps = {
   checkout: withCheckout,
   promptDiff,
   post: upsertComment,
+  prHead,
 };
 
 async function runReviewer(
@@ -100,22 +103,55 @@ export interface ReviewOutcome {
   reportDir?: string;
   route?: RouteChoice;
   skipped?: boolean;
+  /** The PR's newer head when one made this review stale, so nothing was posted. */
+  supersededBy?: string;
+}
+
+/** The tail of each PR's chain of posts, so two reviews of one PR never post at once. */
+const posting = new Map<string, Promise<unknown>>();
+
+/** Runs `fn` after every earlier call with the same key has settled. */
+function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const result = (posting.get(key) ?? Promise.resolve()).then(fn);
+  const tail = result.catch(() => {});
+  posting.set(key, tail);
+  void tail.then(() => {
+    if (posting.get(key) === tail) posting.delete(key);
+  });
+  return result;
+}
+
+/**
+ * Posts the comment unless the PR has moved past the reviewed commit, and returns the newer head when it has. The
+ * check and the post share one turn per PR: a slower review of an older commit can't overwrite a newer one's
+ * comment, and two first reviews can't both create a comment.
+ */
+function postIfCurrent(job: ResolvedJob, body: string, deps: RunnerDeps): Promise<string | undefined> {
+  return serialized(`${job.repo}#${job.pr}`, async () => {
+    const head = await deps.prHead(job.repo, job.pr);
+    if (head !== job.headSha) return head;
+    await deps.post(job.repo, job.pr, body);
+    return undefined;
+  });
 }
 
 /**
  * Picks the PR's route from its diff, read in the clone, then runs that route's reviewers in parallel on a fresh
- * worktree; one failing never drops the others. A skip route stops before any worktree exists.
+ * worktree; one failing never drops the others. A skip route stops before any worktree exists. Aborting `signal`
+ * with the PR's newer head kills the reviewers and ends the review without a report or a post.
  */
 export async function runReview(
   job: ResolvedJob,
   repo: RepoConfig,
   config: Config,
   deps: RunnerDeps = RUNNER_DEPS,
+  signal?: AbortSignal,
 ): Promise<ReviewOutcome> {
   await deps.fetch(repo, job);
   const stats = await deps.diffStats(repo, job);
   const pick = pickRoute(config, job, stats);
   if (pick.skip) return { route: pick.route, skipped: true };
+  if (signal?.aborted) return { route: pick.route, supersededBy: String(signal.reason) };
 
   const scratchRoot = join(config.dataDir, 'tmp', jobKey(job).replace(/[^\w.-]+/g, '_'));
   const schemaPath = join(config.dataDir, 'verdict-schema.json');
@@ -149,6 +185,7 @@ export async function runReview(
             schemaPath,
             scratchDir,
             timeoutMs: pick.timeoutMs,
+            signal,
             model: entry.model,
             effort: entry.effort,
             provider: entry.provider,
@@ -157,6 +194,8 @@ export async function runReview(
       );
     })
     .finally(() => rm(scratchRoot, { recursive: true, force: true }));
+  // Killed reviewers report failures that say nothing about the PR, so they get no report.
+  if (signal?.aborted) return { route: pick.route, supersededBy: String(signal.reason) };
 
   // The routing line shows only for configs that route, so a config without routes keeps its comment as it was.
   const routing = config.routes.length > 0 ? routeLine(pick.route, results) : undefined;
@@ -165,6 +204,9 @@ export async function runReview(
   if (results.every((r) => !r.ok)) {
     throw new Error(`all reviewers failed (${results.map((r) => `${r.name}: ${r.error}`).join('; ')})`);
   }
-  if (repo.postToPr) await deps.post(job.repo, job.pr, body);
+  if (repo.postToPr) {
+    const supersededBy = await postIfCurrent(job, body, deps);
+    if (supersededBy) return { reportDir, route: pick.route, supersededBy };
+  }
   return { reportDir, route: pick.route };
 }

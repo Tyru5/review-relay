@@ -324,8 +324,14 @@ function Docs() {
               </li>
               <li>
                 <strong>Resolve and deduplicate.</strong> The scheduler keys automatic reviews by repository and head
-                commit. Completed, skipped, and in-progress jobs suppress duplicates. Failed jobs can retry on another
-                trigger.
+                commit. Completed, skipped, queued, and in-progress jobs suppress duplicates. Failed jobs can retry on
+                another trigger. At most <code>maxConcurrent</code> reviews run at once; the rest wait as{' '}
+                <code>queued</code>.
+              </li>
+              <li>
+                <strong>Check the commit is current.</strong> When a job&rsquo;s turn comes, it runs only if its commit
+                is still the PR&rsquo;s head on GitHub, and it stops any review still running on an older commit of that
+                PR. Either way the stale job is recorded as <code>superseded</code>.
               </li>
               <li>
                 <strong>Choose the route.</strong> Fetch the PR and base branch, inspect the diff, and select reviewers.
@@ -337,7 +343,8 @@ function Docs() {
               </li>
               <li>
                 <strong>Save and publish.</strong> Remove the temporary worktree, save reports, and create or update a
-                PR comment if enabled.
+                PR comment if enabled. The comment is posted only if the commit is still the PR&rsquo;s head, one post
+                per PR at a time, so a slow review of an older commit never replaces a newer one&rsquo;s comment.
               </li>
             </ol>
             <p>
@@ -351,8 +358,8 @@ function Docs() {
               associated PR are ignored; use <code>auto</code> for the GitHub fallback.
             </p>
             <Note title="One daemon per config">
-              Deduplication is not a cross-process lock. Avoid running a separate manual review while that same commit
-              is already being reviewed by the daemon.
+              Deduplication, the <code>maxConcurrent</code> limit, and the one-post-per-PR lock all live in one process.
+              Avoid running a separate manual review while that same commit is already being reviewed by the daemon.
             </Note>
           </Section>
 
@@ -379,8 +386,8 @@ function Docs() {
               opens it in the browser, <code>y</code> copies its URL, <code>l</code> follows the job’s log and{' '}
               <code>L</code> the whole log. <code>?</code> lists every key. It reads <code>state.json</code>, the report
               directories, and <code>daemon.log</code> directly, so it works whether or not the daemon is running.
-              Unlike <code>status</code>, it shows an in-flight job as running; <code>status</code> treats a running
-              record as a failed run so it can retry.
+              Unlike <code>status</code>, it shows an in-flight job as queued or running; <code>status</code> treats a
+              queued or running record as a failed run so it can retry.
             </p>
             <h3>Preview or force a route</h3>
             <Snippet

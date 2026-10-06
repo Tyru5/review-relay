@@ -23,7 +23,7 @@ export const claude: Harness = {
   // A `git diff:*` allow rule also matches `git diff --output=<file>`, which writes anywhere, and `git grep -O<cmd>`
   // runs a program, so Bash stays off and the diff goes in the prompt.
   shell: 'none',
-  async run({ bin, dir, prompt, timeoutMs, model, effort }) {
+  async run({ bin, dir, prompt, timeoutMs, signal, model, effort }) {
     const result = await exec(
       [
         bin,
@@ -48,7 +48,7 @@ export const claude: Harness = {
         'Grep',
         'Glob',
       ],
-      { cwd: dir, timeoutMs, stdin: prompt },
+      { cwd: dir, timeoutMs, signal, stdin: prompt },
     );
     const raw = result.stdout.trim();
     if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || raw };
