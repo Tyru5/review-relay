@@ -90,7 +90,7 @@ review-relay checks routes from the top. The first route whose `when` matches de
 | - | - | - |
 | `repos` | globs | The repo's `owner/name` matches one, ignoring case. |
 | `baseBranches` | globs | The PR's base branch matches one. |
-| `sources` | list | The trigger is one of `greptile`, `github`, `mention`, `manual`. |
+| `sources` | list | The trigger is one of `greptile`, `coderabbit`, `github`, `mention`, `manual`. |
 | `paths` | globs | Any changed file matches one. |
 | `onlyPaths` | globs | At least one file changed and every changed file matches one. |
 | `minLines`, `maxLines` | integer, 0 or more | Counted lines are at least, or at most, this many. |
@@ -220,7 +220,7 @@ Without `routes` the comment is unchanged. The headline is still the lowest scor
 ## The `route` command
 
 ```sh
-review-relay route --repo Tyru5/Agendex --pr 278 [--source github|greptile|mention|manual]
+review-relay route --repo Tyru5/Agendex --pr 278 [--source github|greptile|coderabbit|mention|manual]
 ```
 
 `route` fetches the PR the way a review does, reads the changed files, and checks every route without running a reviewer. `--source` defaults to `github`. It works on closed and merged PRs, so you can test rules against past PRs. `run` still needs an open PR.

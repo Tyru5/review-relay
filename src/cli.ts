@@ -20,7 +20,7 @@ import {
 } from './daemon.ts';
 import { diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
-import { prHead, resolveJob } from './github.ts';
+import { openPrForCommit, prHead, resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
@@ -60,6 +60,7 @@ function makeScheduler(config: Config, state: StateStore, overrides: Partial<Sch
     graceMs: config.graceMs,
     maxConcurrent: config.maxConcurrent,
     resolve: resolveJob,
+    findPr: openPrForCommit,
     prHead: (job) => prHead(job.repo, job.pr),
     run: (job, repo, signal) => runReview(job, repo, config, RUNNER_DEPS, signal),
     log,
@@ -346,6 +347,11 @@ async function replay(config: Config, file: string | undefined, dryRun: boolean,
             headSha: job.headSha ?? 'unresolved',
             baseRef: job.baseRef ?? 'unresolved',
           }),
+          // Offline: a commit status names no PR, so the PR stays unknown (#0).
+          findPr: async (repo, sha) => {
+            log(`[dry-run] would look up the open PR in ${repo} whose head is ${sha.slice(0, 8)}`);
+            return { pr: 0, headRef: 'unresolved', baseRef: 'unresolved' };
+          },
           // Offline: every replayed commit counts as its PR's head.
           prHead: async (job) => job.headSha,
           run: async (job) => {

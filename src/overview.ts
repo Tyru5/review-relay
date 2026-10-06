@@ -116,7 +116,7 @@ export function renderInfo(config: Config, opts: InfoOptions, st: Styles): strin
     row(st, 'config', tildify(opts.configPath), undefined),
     ...(fileNote ? [`  ${' '.repeat(12)}${st.tone(fileNoteTone, fileNote)}`] : []),
     row(st, 'port', String(config.port)),
-    row(st, 'grace', fmtDuration(config.graceMs), 'auto mode waits this long for Greptile'),
+    row(st, 'grace', fmtDuration(config.graceMs), 'auto mode waits this long for Greptile or CodeRabbit'),
     row(st, 'timeout', fmtDuration(config.timeoutMs), 'per reviewer'),
     row(st, 'concurrent', String(config.maxConcurrent), 'reviews at once; later ones queue'),
     row(st, 'dataDir', tildify(config.dataDir)),

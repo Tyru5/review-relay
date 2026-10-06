@@ -82,7 +82,9 @@ describe('parseRoutes', () => {
     fails([route({ paths: ['src/[ab.ts'] })]).toThrow('when.paths "src/[ab.ts" has a [ or { that never closes');
     fails([route({ onlyPaths: ['src/{a,b.ts'] })]).toThrow('has a [ or { that never closes');
     fails([route({ repos: ['Tyru5/agendx'] })]).toThrow('when.repos "Tyru5/agendx" matches no configured repo');
-    fails([route({ sources: ['push'] })]).toThrow('when.sources must list some of greptile, github, mention, manual');
+    fails([route({ sources: ['push'] })]).toThrow(
+      'when.sources must list some of greptile, coderabbit, github, mention, manual',
+    );
     fails([route({ maxLines: -1 })]).toThrow('when.maxLines must be a whole number');
     fails([route({ minFiles: 1.5 })]).toThrow('when.minFiles must be a whole number');
     fails([route({ minLines: 10, maxLines: 5 })]).toThrow('when.minLines is above when.maxLines');

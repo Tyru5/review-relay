@@ -3,6 +3,7 @@
 Runs local AI agent reviews (Claude Code, Codex, or any of 11 other agent CLIs) on a pull request as soon as a review starts on GitHub, then posts their findings and a 1-5 merge confidence score to the PR.
 
 - Repos with Greptile: triggers on Greptile's `Greptile Review` check run starting (`check_run` `created`, `in_progress`).
+- Repos with [CodeRabbit](https://coderabbit.ai): triggers when CodeRabbit sets its `CodeRabbit` commit status to `pending` / `Review in progress` (`status`), or creates a check run.
 - Repos without an AI reviewer bot: triggers on GitHub `pull_request` events, the same ones Greptile reacts to.
 - Any repo: a PR comment containing `@review-relay` from an owner, member, or collaborator requests a review.
 
@@ -51,7 +52,7 @@ bun src/cli.ts start
 | Field | Default | Meaning |
 | - | - | - |
 | `port` | `9988` | Local port for forwarded webhooks |
-| `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile before running anyway |
+| `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile or CodeRabbit before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
 | `maxConcurrent` | `2` | Reviews that run at once, each with all of its reviewers. Later ones wait as `queued`, oldest first |
 | `reviewers` | `["codex", "claude"]` | Which reviewers run, by the names under [Supported agents](#supported-agents) or the ids of [custom reviewers](#custom-reviewers) |
@@ -64,7 +65,7 @@ bun src/cli.ts start
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
 | `repos[].fullName` | required | `owner/name` |
 | `repos[].localPath` | required | Local clone used to create worktrees |
-| `repos[].trigger` | `auto` | `auto`, `greptile`, or `github` (see below) |
+| `repos[].trigger` | `auto` | `auto`, `greptile`, `coderabbit`, or `github` (see below) |
 | `repos[].postToPr` | `true` | Post the scored review as one PR comment (edited in place on later reviews) |
 | `repos[].github.onPush` | `false` | Review new commits pushed to an open PR (`synchronize`) |
 | `repos[].github.mention` | `@review-relay` | Comment text that requests a review |
@@ -116,7 +117,7 @@ review-relay checks routes from the top. The first route whose `when` matches de
 | - | - |
 | `repos` | The repo's `owner/name` matches one of these globs, ignoring case. Each must match a configured repo. |
 | `baseBranches` | The base branch matches one of these globs, such as `release/*` |
-| `sources` | The trigger is one of `greptile`, `github`, `mention`, `manual` (`run`) |
+| `sources` | The trigger is one of `greptile`, `coderabbit`, `github`, `mention`, `manual` (`run`) |
 | `paths` | Any changed file matches one of these globs |
 | `onlyPaths` | At least one file changed, and every changed file matches one of these globs |
 | `minLines`, `maxLines` | Lines added plus deleted, lockfiles left out, are at least or at most this many |
@@ -145,9 +146,26 @@ A config error in a route names it, such as `routes[1] "tiny": skip can't use ma
 
 ### Trigger modes
 
-- `auto`: a Greptile start runs immediately. A GitHub PR event (opened, reopened, ready for review) waits `graceMs`; if Greptile starts on that commit first, Greptile's start is used, otherwise the GitHub event runs. Use this for repos that have Greptile, so reviews still happen when Greptile skips a PR, is down, or the PR comes from a fork.
+- `auto`: a Greptile or CodeRabbit start runs immediately. A GitHub PR event (opened, reopened, ready for review) waits `graceMs`; if either bot starts on that commit first, the bot's start is used, otherwise the GitHub event runs. Use this for repos that have Greptile or CodeRabbit, so reviews still happen when the bot skips a PR, is down, or the PR comes from a fork.
 - `greptile`: only Greptile starts (plus mentions).
+- `coderabbit`: only CodeRabbit starts (plus mentions).
 - `github`: only GitHub PR events (plus mentions). Use this for repos with no AI reviewer bot.
+
+#### CodeRabbit
+
+CodeRabbit marks each review with a commit status named `CodeRabbit`: `pending` / `Review queued`, then `pending` / `Review in progress`, then `success` / `Review completed`. A PR it won't review gets `success` with `Review skipped: ...` instead. review-relay starts on `Review in progress` only when `coderabbitai[bot]` set the status, so it follows CodeRabbit's own rules for drafts, base branches, paused PRs, `@coderabbitai ignore`, and `@coderabbitai review` commands. With CodeRabbit's default `auto_incremental_review`, that means new pushes get reviewed too, whatever `github.onPush` says.
+
+A status names a commit but not a PR. In `auto` mode the PR event for that commit usually arrived first, and its PR is used. Otherwise review-relay looks up the open, non-draft PR whose head is that commit (`gh pr list`, up to 1,000 open PRs), and fork PRs are found the same way. A PR event that arrives during the lookup doesn't start its own fallback; if the lookup fails or finds nothing, the review still runs as CodeRabbit's, on the PR that event named.
+
+CodeRabbit's docs say newer installs report progress through a check run instead of the commit status (`reviews.review_progress`). review-relay also starts on a check run created by the `coderabbitai` app, other than the `CodeRabbit Security` merge gate. CodeRabbit doesn't publish that check's name or payload, and the PRs checked while building this all used commit statuses, so check-run starts are untested against real deliveries. To force the commit status, set this in `.coderabbit.yaml`:
+
+```yaml
+reviews:
+  review_progress: false
+  commit_status: true
+```
+
+CodeRabbit can set `Review in progress` and then stop with `Review rate limited`; review-relay has started by then and reviews anyway.
 
 Each commit is reviewed once. Mentions and `run` always review again. Drafts are skipped until marked ready.
 
@@ -288,6 +306,7 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 
 ## Limits
 
+- CodeRabbit's check-run signal is matched by app, not by check name, because CodeRabbit doesn't document the name (see [CodeRabbit](#coderabbit)). A self-hosted CodeRabbit running under a different app or bot name won't trigger reviews.
 - `gh webhook forward` is GitHub's development tool: one forwarder per repo at a time, and the machine must be online. Stop the daemon with Ctrl+C so it removes the temporary repo webhooks.
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
 - The `maxConcurrent` limit and the one-post-per-PR lock hold within one process. A `run` started while the daemon reviews the same PR is checked against the PR head but can still post at the same moment as the daemon.

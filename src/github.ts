@@ -1,5 +1,6 @@
 import { execOrThrow } from './exec.ts';
 import { COMMENT_MARKER } from './report.ts';
+import type { CommitPr } from './scheduler.ts';
 import type { ResolvedJob, ReviewJob } from './types.ts';
 
 /** Fills in head SHA and refs from GitHub for triggers whose payload lacks them. `open: false` takes a closed PR too. */
@@ -17,6 +18,35 @@ export async function resolveJob(job: ReviewJob, { open = true } = {}): Promise<
   const pr = JSON.parse(out) as { headRefOid: string; headRefName: string; baseRefName: string; state: string };
   if (open && pr.state !== 'OPEN') throw new Error(`PR #${job.pr} is ${pr.state.toLowerCase()}`);
   return { ...job, headSha: pr.headRefOid, headRef: pr.headRefName, baseRef: pr.baseRefName };
+}
+
+/**
+ * The open, non-draft PR whose head is `sha`, for a commit status, which names no PR. Lists open PRs rather than asking
+ * `commits/{sha}/pulls`, which misses fresh fork PRs.
+ */
+export async function openPrForCommit(repo: string, sha: string): Promise<CommitPr | null> {
+  const out = await execOrThrow([
+    'gh',
+    'pr',
+    'list',
+    '--repo',
+    repo,
+    '--state',
+    'open',
+    '--limit',
+    '1000',
+    '--json',
+    'number,headRefOid,headRefName,baseRefName,isDraft',
+  ]);
+  const prs = JSON.parse(out) as {
+    number: number;
+    headRefOid: string;
+    headRefName: string;
+    baseRefName: string;
+    isDraft: boolean;
+  }[];
+  const pr = prs.find((p) => p.headRefOid === sha && !p.isDraft);
+  return pr ? { pr: pr.number, headRef: pr.headRefName, baseRef: pr.baseRefName } : null;
 }
 
 /** The PR's head commit on GitHub right now, which decides whether a review is still current. */

@@ -298,8 +298,8 @@ function Docs() {
               rows={[
                 [
                   'auto',
-                  'Greptile or GitHub',
-                  'Default. Greptile starts immediately. A GitHub PR event waits graceMs, then runs if Greptile has not started for that commit.',
+                  'Greptile, CodeRabbit, or GitHub',
+                  'Default. A Greptile or CodeRabbit start runs immediately. A GitHub PR event waits graceMs, then runs if neither bot has started for that commit.',
                 ],
                 [
                   'github',
@@ -311,10 +311,15 @@ function Docs() {
                   'Greptile check start',
                   'Only the Greptile start triggers automatic reviews. No GitHub fallback.',
                 ],
+                [
+                  'coderabbit',
+                  'CodeRabbit review start',
+                  'Only the CodeRabbit start triggers automatic reviews. No GitHub fallback.',
+                ],
               ]}
             />
             <p>
-              Mentions work in all three modes. Only new PR comments by an OWNER, MEMBER, or COLLABORATOR qualify. Bot
+              Mentions work in every mode. Only new PR comments by an OWNER, MEMBER, or COLLABORATOR qualify. Bot
               comments and ordinary issues do not.
             </p>
             <ol className="docs-flow">
@@ -357,6 +362,14 @@ function Docs() {
               created check that is queued or in progress. Completed checks only log a result. Fork checks without an
               associated PR are ignored; use <code>auto</code> for the GitHub fallback.
             </p>
+            <p>
+              CodeRabbit matching requires a <code>CodeRabbit</code> commit status set by <code>coderabbitai[bot]</code>{' '}
+              to <code>pending</code> with <code>Review in progress</code>. <code>Review queued</code> and{' '}
+              <code>Review skipped: ...</code> do not start a review. The status names only a commit, so the open,
+              non-draft PR whose head is that commit is looked up, forks included. A check run created by the{' '}
+              <code>coderabbitai</code> app, other than <code>CodeRabbit Security</code>, also counts, for installs that
+              report progress through check runs.
+            </p>
             <Note title="One daemon per config">
               Deduplication, the <code>maxConcurrent</code> limit, and the one-post-per-PR lock all live in one process.
               Avoid running a separate manual review while that same commit is already being reviewed by the daemon.
@@ -397,7 +410,8 @@ function Docs() {
             <p>
               <code>run --route sensitive</code> forces that non-skip route. Unlike mentions, an unknown or skip route
               is rejected. <code>route --source</code> accepts <code>github</code>, <code>greptile</code>,{' '}
-              <code>mention</code>, or <code>manual</code>. Route inspection also works on closed PRs.
+              <code>coderabbit</code>, <code>mention</code>, or <code>manual</code>. Route inspection also works on
+              closed PRs.
             </p>
             <h3>Replay recorded deliveries</h3>
             <p>

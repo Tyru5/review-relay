@@ -1,8 +1,11 @@
 import type { Verdict } from './verdict.ts';
 
-export type TriggerMode = 'auto' | 'greptile' | 'github';
+export type TriggerMode = 'auto' | 'greptile' | 'coderabbit' | 'github';
 
-export type JobSource = 'greptile' | 'github' | 'mention' | 'manual';
+/** An AI review bot whose start triggers a review. */
+export type Bot = 'greptile' | 'coderabbit';
+
+export type JobSource = Bot | 'github' | 'mention' | 'manual';
 
 /** A supported agent CLI. */
 export type HarnessName =
