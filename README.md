@@ -2,7 +2,7 @@
 
 Runs local AI agent reviews (Claude Code, Codex, or any of 11 other agent CLIs) on a pull request as soon as a review starts on GitHub, then posts their findings and a 1-5 merge confidence score to the PR.
 
-- Repos with Greptile: triggers on Greptile's `Greptile Review` check run starting (`check_run` `created`, `in_progress`).
+- Repos with [Greptile](https://greptile.com): triggers on Greptile's `Greptile Review` check run starting (`check_run` `created`, `in_progress`).
 - Repos with [CodeRabbit](https://coderabbit.ai): triggers when CodeRabbit sets its `CodeRabbit` commit status to `pending` / `Review in progress` (`status`), or creates a check run.
 - Repos without an AI reviewer bot: triggers on GitHub `pull_request` events, the same ones Greptile reacts to.
 - Any repo: a PR comment containing `@review-relay` from an owner, member, or collaborator requests a review.
