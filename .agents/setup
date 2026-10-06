@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Amp orb setup: runs once per fresh orb (and again on a stale snapshot), so every step is idempotent.
+# Installs what CI uses (.github/workflows/ci.yml): Bun pinned to the CI version, shellcheck, and both lockfiles.
+set -euo pipefail
+
+BUN_VERSION=1.4.2 # keep in sync with bun-version in .github/workflows/*.yml
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step() {
+  local name=$1 start=$SECONDS
+  shift
+  echo "==> $name"
+  "$@"
+  echo "    done: $name ($((SECONDS - start))s)"
+}
+
+install_shellcheck() {
+  if command -v shellcheck >/dev/null; then
+    shellcheck --version | sed -n 2p
+    return
+  fi
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq shellcheck
+}
+
+install_bun() {
+  local bun_bin="$HOME/.bun/bin/bun"
+  if [[ -x "$bun_bin" && "$("$bun_bin" --version)" == "$BUN_VERSION" ]]; then
+    echo "    bun $BUN_VERSION already installed"
+  else
+    local arch tmp
+    case "$(uname -m)" in
+      x86_64) arch=x64 ;;
+      aarch64 | arm64) arch=aarch64 ;;
+      *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+    esac
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/bun.zip" \
+      "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-$arch.zip"
+    unzip -q -o "$tmp/bun.zip" -d "$tmp"
+    mkdir -p "$HOME/.bun/bin"
+    install -m 755 "$tmp/bun-linux-$arch/bun" "$bun_bin"
+    ln -sf bun "$HOME/.bun/bin/bunx"
+    rm -rf "$tmp"
+  fi
+
+  # Login shells (Amp, supervised services) must find this Bun before the base image's /usr/local/bin/bun.
+  local marker="# review-relay: pinned Bun on PATH"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >>"$HOME/.bash_profile" <<'EOF'
+
+# review-relay: pinned Bun on PATH
+case ":$PATH:" in
+  *":$HOME/.bun/bin:"*) ;;
+  *) export PATH="$HOME/.bun/bin:$PATH" ;;
+esac
+EOF
+  fi
+  export PATH="$HOME/.bun/bin:$PATH"
+  bun --version
+}
+
+step "shellcheck" install_shellcheck
+step "bun $BUN_VERSION" install_bun
+step "bun install (root)" bun install --frozen-lockfile
+step "bun install (site)" bun install --frozen-lockfile --cwd site

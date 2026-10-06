@@ -63,5 +63,7 @@ Thumbs.db
 .impeccable/review/
 .impeccable/decision/
 .impeccable/mocks/
+# Amp orb portals
+.amp/portals/*
 # roborev snapshots
 /.roborev/
