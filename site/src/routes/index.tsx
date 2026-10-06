@@ -194,10 +194,11 @@ function Home() {
             <p className="mt-10 leading-relaxed">
               <Code tone="paper">setup</Code> finds the GitHub clones under your home folder so you can pick the repos
               to watch, then lists the agent CLIs on your PATH so you can pick your panel and each judge&rsquo;s model
-              and effort. It writes <Code tone="paper">~/.review-relay/config.json</Code>, and{' '}
-              <Code tone="paper">start</Code> keeps watching:
+              and effort. It writes <Code tone="paper">~/.review-relay/config.json</Code>,{' '}
+              <Code tone="paper">start</Code> keeps watching, and <Code tone="paper">tui</Code> shows the jobs as they
+              run:
             </p>
-            <Terminal lines={['review-relay setup', 'review-relay start -d', 'review-relay status']} />
+            <Terminal lines={['review-relay setup', 'review-relay start -d', 'review-relay tui']} />
             <p className="mt-8 border-t border-paper-rule pt-5 text-sm leading-relaxed text-slate">
               Reviews run from your machine, and your code goes to whichever providers your chosen agents and models
               use.
