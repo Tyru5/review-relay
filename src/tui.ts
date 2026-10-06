@@ -317,6 +317,12 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
   }
   if (state.view === 'help') return { ...base, view: 'list' };
   if (state.filtering) return filtered(base, key, ctx);
+  // The header's tabs: a digit picks one, tab moves to the other.
+  const onLog = state.view === 'log';
+  if (key === '1' || (key === 'tab' && onLog)) return onLog ? { ...base, view: 'list' } : base;
+  if (key === '2' || (key === 'tab' && !onLog)) {
+    return onLog ? base : { ...base, view: 'log', follow: true, scroll: 0 };
+  }
 
   if (state.view === 'list') {
     const stepped = listMove(base, key, ctx);
@@ -464,6 +470,7 @@ const HELP_LINES: [string, string][] = [
   ['n p', 'next and previous job while viewing one'],
   ['l', "the job's lines from the daemon log, following as they arrive"],
   ['L', 'the whole daemon log'],
+  ['1 2 tab', 'switch between the Jobs and Log tabs'],
   ['r', 'review the PR again (asks first); runs in the background and logs to daemon.log'],
   ['o', 'open the PR in the browser'],
   ['y', "copy the PR's URL to the clipboard"],

@@ -25,6 +25,7 @@ const KEY_NAMES: Record<string, string> = {
   '\x1b[5~': 'pageup',
   '\x1b[6~': 'pagedown',
   '\r': 'enter',
+  '\t': 'tab',
   '\n': 'enter',
   ' ': 'space',
   '\x1b': 'escape',

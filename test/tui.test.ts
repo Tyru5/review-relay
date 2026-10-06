@@ -438,6 +438,24 @@ describe('log view', () => {
     // The Log tab lights up.
     expect(lines(whole, ctx)[0]).toContain('1 Jobs   2 Log');
   });
+
+  test('2 and tab open the Log tab, 1 and tab return to Jobs, from any view', () => {
+    const ctx = ctxFor();
+    expect(press(ctx, ['2']).view).toBe('log');
+    expect(press(ctx, ['tab']).view).toBe('log');
+    expect(press(ctx, ['tab', 'tab']).view).toBe('list');
+    expect(press(ctx, ['2', '1']).view).toBe('list');
+    expect(press(ctx, ['2', '2']).view).toBe('log');
+    expect(press(ctx, ['down', 'enter', '2']).view).toBe('log');
+    // The log opens on the highlighted job and follows its end; a kept whole-log choice stays.
+    const log = press(ctx, ['down', 'down', 'tab']);
+    expect(log.follow).toBe(true);
+    expect(render(log, ctx)).toContain('Log · acme/lib #12');
+    expect(press(ctx, ['L', '1', '2'], log).wholeLog).toBe(true);
+    // While typing a filter, digits are text.
+    expect(press(ctx, ['/', '2']).filter).toBe('2');
+    expect(parseKeys('\t')).toEqual(['tab']);
+  });
 });
 
 describe('actions', () => {
