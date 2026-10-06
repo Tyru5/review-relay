@@ -36,7 +36,7 @@ export interface ReviewerEntry extends ModelConfig {
 
 export interface Config {
   port: number;
-  /** How long `auto` mode waits for Greptile after a GitHub PR event before running anyway. */
+  /** How long `auto` mode waits for Greptile or CodeRabbit after a GitHub PR event before running anyway. */
   graceMs: number;
   /** Per-reviewer timeout. */
   timeoutMs: number;
@@ -72,7 +72,7 @@ export const REVIEWER_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 const ENTRY_FIELDS = ['harness', 'model', 'effort', 'provider', 'label'];
 
-const TRIGGERS: TriggerMode[] = ['auto', 'greptile', 'github'];
+const TRIGGERS: TriggerMode[] = ['auto', 'greptile', 'coderabbit', 'github'];
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);

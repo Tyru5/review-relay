@@ -1,0 +1,25 @@
+{
+  "id": 41879522131,
+  "sha": "8335bfb9620209084a208e9e926c35c7d8bef13a",
+  "name": "Tyru5/Agendex",
+  "target_url": null,
+  "avatar_url": "https://avatars.githubusercontent.com/in/347564?v=4",
+  "context": "CodeRabbit",
+  "description": "Review in progress",
+  "state": "pending",
+  "commit": {
+    "sha": "8335bfb9620209084a208e9e926c35c7d8bef13a"
+  },
+  "branches": [],
+  "created_at": "2026-10-06T06:02:45Z",
+  "updated_at": "2026-10-06T06:02:45Z",
+  "repository": {
+    "full_name": "Tyru5/Agendex",
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "coderabbitai[bot]",
+    "id": 136622811,
+    "type": "Bot"
+  }
+}

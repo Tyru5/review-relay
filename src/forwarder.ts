@@ -4,11 +4,15 @@ import type { RepoConfig } from './config.ts';
 import type { ForwarderInfo } from './daemon.ts';
 import type { TriggerMode } from './types.ts';
 
-/** Event types each trigger mode needs; `issue_comment` carries the mention trigger in every mode. */
+/**
+ * Event types each trigger mode needs. Greptile starts with a `check_run`; CodeRabbit sets a commit `status` (or, with
+ * its newer progress reports, a `check_run`). `issue_comment` carries the mention trigger in every mode.
+ */
 export const EVENTS_BY_MODE: Record<TriggerMode, string[]> = {
   greptile: ['check_run', 'issue_comment'],
+  coderabbit: ['status', 'check_run', 'issue_comment'],
   github: ['pull_request', 'issue_comment'],
-  auto: ['check_run', 'pull_request', 'issue_comment'],
+  auto: ['check_run', 'status', 'pull_request', 'issue_comment'],
 };
 
 /**

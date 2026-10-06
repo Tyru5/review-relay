@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { RepoConfig } from '../src/config.ts';
 import type { Classified } from '../src/match.ts';
-import { Scheduler } from '../src/scheduler.ts';
+import { Scheduler, type CommitPr, type SchedulerDeps } from '../src/scheduler.ts';
 import { StateStore } from '../src/state.ts';
 import type { ResolvedJob, ReviewJob, TriggerMode } from '../src/types.ts';
 
@@ -23,7 +23,10 @@ const job = (source: ReviewJob['source'], sha = SHA): ReviewJob => ({
   headSha: sha,
   baseRef: 'main',
 });
-const greptileStart = (sha = SHA): Classified => ({ kind: 'greptileStart', job: job('greptile', sha) });
+const greptileStart = (sha = SHA): Classified => ({
+  kind: 'botStart',
+  job: { ...job('greptile', sha), source: 'greptile', headSha: sha },
+});
 const prEvent = (sha = SHA): Classified => ({ kind: 'prEvent', job: job('github', sha) });
 const mention: Classified = {
   kind: 'mention',
@@ -31,7 +34,7 @@ const mention: Classified = {
 };
 
 /** Scheduler with manual timers so grace periods fire only when the test says so. */
-function setup(graceMs = 120_000) {
+function setup(graceMs = 120_000, overrides: Partial<SchedulerDeps> = {}) {
   const runs: ResolvedJob[] = [];
   const timers = new Map<number, () => void>();
   let nextTimer = 0;
@@ -39,6 +42,7 @@ function setup(graceMs = 120_000) {
     state: new StateStore(null),
     graceMs,
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    findPr: async () => null,
     prHead: async (j) => j.headSha,
     run: async (j) => {
       runs.push(j);
@@ -50,6 +54,7 @@ function setup(graceMs = 120_000) {
       return nextTimer;
     },
     clearTimer: (h) => timers.delete(h as number),
+    ...overrides,
   });
   const fireTimers = () => {
     const fns = [...timers.values()];
@@ -109,11 +114,320 @@ describe('auto mode', () => {
   });
 });
 
+/** A CodeRabbit commit status: it names the commit, and the scheduler looks up the PR. */
+const coderabbitStatus = (sha = SHA): Classified => ({
+  kind: 'botStart',
+  job: { repo: 'Tyru5/Agendex', source: 'coderabbit', reason: 'CodeRabbit started', headSha: sha },
+});
+
+/** A `findPr` that knows one open PR, #224, whose head is `head`, and records each lookup. */
+function onePr(head = SHA) {
+  const lookups: [string, string][] = [];
+  const findPr: SchedulerDeps['findPr'] = async (repo, sha) => {
+    lookups.push([repo, sha]);
+    return sha === head ? { pr: 224, headRef: 'feat/x', baseRef: 'release' } : null;
+  };
+  return { lookups, findPr };
+}
+
+describe('coderabbit mode', () => {
+  test('a commit status runs on the PR found by its head commit, without resolving the PR again', async () => {
+    const { lookups, findPr } = onePr();
+    const resolved: ReviewJob[] = [];
+    const { scheduler, runs } = setup(120_000, {
+      findPr,
+      resolve: async (j) => {
+        resolved.push(j);
+        return { ...j, headSha: SHA, baseRef: 'main' };
+      },
+    });
+    scheduler.handle(repoWith('coderabbit'), coderabbitStatus());
+    await scheduler.idle();
+    expect(lookups).toEqual([['Tyru5/Agendex', SHA]]);
+    expect(resolved).toEqual([]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      pr: 224,
+      headSha: SHA,
+      headRef: 'feat/x',
+      baseRef: 'release',
+      source: 'coderabbit',
+    });
+  });
+
+  test('a commit no open PR has as its head is not reviewed', async () => {
+    const { lookups, findPr } = onePr('ffffffffffffffffffffffffffffffffffffffff');
+    const { scheduler, runs } = setup(120_000, { findPr });
+    scheduler.handle(repoWith('coderabbit'), coderabbitStatus());
+    await scheduler.idle();
+    expect(lookups).toHaveLength(1);
+    expect(runs).toHaveLength(0);
+  });
+
+  test('a commit already reviewed skips the PR lookup', async () => {
+    const { lookups, findPr } = onePr();
+    const { scheduler, runs } = setup(120_000, { findPr });
+    const repo = repoWith('coderabbit');
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    expect(lookups).toHaveLength(1);
+    expect(runs).toHaveLength(1);
+  });
+
+  test('Greptile starts and PR events are ignored', async () => {
+    const { findPr } = onePr();
+    const { scheduler, runs, timers } = setup(120_000, { findPr });
+    const repo = repoWith('coderabbit');
+    scheduler.handle(repo, greptileStart());
+    scheduler.handle(repo, prEvent());
+    expect(timers.size).toBe(0);
+    await scheduler.idle();
+    expect(runs).toHaveLength(0);
+  });
+});
+
+/** A `findPr` that answers only when the test releases it, as `gh pr list` would after a while. */
+function heldLookup(answer: () => Promise<CommitPr | null>) {
+  const lookups: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const findPr: SchedulerDeps['findPr'] = async (_repo, sha) => {
+    lookups.push(sha);
+    await gate;
+    return answer();
+  };
+  return { lookups, findPr, release };
+}
+
+const failingLookup = async (): Promise<CommitPr | null> => {
+  throw new Error('gh: connection reset');
+};
+
+describe('auto mode with CodeRabbit', () => {
+  test('a CodeRabbit status after a PR event takes the PR from the fallback it cancels, with no lookup', async () => {
+    const { lookups, findPr } = heldLookup(failingLookup);
+    const { scheduler, runs, timers } = setup(120_000, { findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, prEvent());
+    expect(timers.size).toBe(1);
+    scheduler.handle(repo, coderabbitStatus());
+    expect(timers.size).toBe(0);
+    await scheduler.idle();
+    expect(lookups).toEqual([]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ pr: 223, baseRef: 'main', source: 'coderabbit' });
+  });
+
+  test('a PR event during the lookup starts no rival fallback, so the review stays CodeRabbit-sourced', async () => {
+    const held = heldLookup(async () => ({ pr: 223, headRef: 'feat/x', baseRef: 'main' }));
+    const { scheduler, runs, timers, fireTimers } = setup(120_000, { findPr: held.findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, prEvent());
+    expect(timers.size).toBe(0);
+    fireTimers();
+    held.release();
+    await scheduler.idle();
+    expect(runs.map((r) => r.source)).toEqual(['coderabbit']);
+  });
+
+  test('a failed lookup falls back to the PR a pull_request event named meanwhile', async () => {
+    const held = heldLookup(failingLookup);
+    const { scheduler, runs, fireTimers } = setup(120_000, { findPr: held.findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, prEvent());
+    held.release();
+    await scheduler.idle();
+    fireTimers();
+    await scheduler.idle();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ pr: 223, baseRef: 'main', source: 'coderabbit' });
+  });
+
+  test('a lookup that finds no PR also uses the PR a pull_request event named', async () => {
+    const held = heldLookup(async () => null);
+    const { scheduler, runs } = setup(120_000, { findPr: held.findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, prEvent());
+    held.release();
+    await scheduler.idle();
+    expect(runs.map((r) => [r.pr, r.source])).toEqual([[223, 'coderabbit']]);
+  });
+
+  test('a failed lookup with no PR known reviews nothing and leaves the commit open to the next start', async () => {
+    let calls = 0;
+    const findPr: SchedulerDeps['findPr'] = async () => {
+      if (++calls === 1) throw new Error('gh: connection reset');
+      return { pr: 224, headRef: 'feat/x', baseRef: 'main' };
+    };
+    const { scheduler, runs } = setup(120_000, { findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    expect(runs).toHaveLength(0);
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    expect(calls).toBe(2);
+    expect(runs.map((r) => r.pr)).toEqual([224]);
+  });
+
+  /** `resolve` held until released, for a PR whose base ref the event left out. */
+  function heldResolve(headSha = SHA) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const resolved: ReviewJob[] = [];
+    const resolve: SchedulerDeps['resolve'] = async (j) => {
+      resolved.push(j);
+      await gate;
+      return { ...j, headSha, baseRef: 'main' };
+    };
+    return { resolved, resolve, release };
+  }
+  const prEventWithoutBase: Classified = {
+    kind: 'prEvent',
+    job: { repo: 'Tyru5/Agendex', pr: 223, source: 'github', reason: 'github', headSha: SHA },
+  };
+
+  test('a failed lookup holds the commit while it resolves the base ref of the PR an event named', async () => {
+    const lookup = heldLookup(failingLookup);
+    const refs = heldResolve();
+    const { scheduler, runs, timers, fireTimers } = setup(120_000, { findPr: lookup.findPr, resolve: refs.resolve });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, prEventWithoutBase);
+    lookup.release();
+    while (refs.resolved.length === 0) await Bun.sleep(1);
+    scheduler.handle(repo, prEvent());
+    expect(timers.size).toBe(0);
+    fireTimers();
+    refs.release();
+    await scheduler.idle();
+    expect(runs.map((r) => [r.pr, r.baseRef, r.source])).toEqual([[223, 'main', 'coderabbit']]);
+  });
+
+  test('a start that reuses a fallback without a base ref holds the commit while it resolves it', async () => {
+    const lookup = heldLookup(failingLookup);
+    const refs = heldResolve();
+    const { scheduler, runs, timers, fireTimers } = setup(120_000, { findPr: lookup.findPr, resolve: refs.resolve });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, prEventWithoutBase);
+    scheduler.handle(repo, coderabbitStatus());
+    while (refs.resolved.length === 0) await Bun.sleep(1);
+    scheduler.handle(repo, prEvent());
+    expect(timers.size).toBe(0);
+    fireTimers();
+    refs.release();
+    await scheduler.idle();
+    expect(lookup.lookups).toEqual([]);
+    expect(refs.resolved).toHaveLength(1);
+    expect(runs.map((r) => [r.pr, r.source])).toEqual([[223, 'coderabbit']]);
+  });
+
+  test.each(['fallback', 'lookup'])('%s resolution preserves the trigger SHA when the PR moves on', async (path) => {
+    const newer = 'ffffffffffffffffffffffffffffffffffffffff';
+    const state = new StateStore(null);
+    const refs = heldResolve(newer);
+    const lookup = heldLookup(async () => null);
+    let head = newer;
+    const { scheduler, runs } = setup(120_000, {
+      state,
+      findPr: lookup.findPr,
+      resolve: refs.resolve,
+      prHead: async () => head,
+    });
+    const repo = repoWith('auto');
+    if (path === 'fallback') scheduler.handle(repo, prEventWithoutBase);
+    scheduler.handle(repo, coderabbitStatus());
+    if (path === 'lookup') scheduler.handle(repo, prEventWithoutBase);
+    lookup.release();
+    while (refs.resolved.length === 0) await Bun.sleep(1);
+    refs.release();
+    await scheduler.idle();
+    expect(runs).toHaveLength(0);
+    expect(state.list()).toHaveLength(1);
+    expect(state.list()[0]).toMatchObject({ headSha: SHA, status: 'superseded', supersededBy: newer });
+
+    // A force-push back to the original commit must not be suppressed by a claim or dedupe for the newer commit.
+    head = SHA;
+    scheduler.handle(repo, prEvent());
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    expect(runs.map((r) => [r.headSha, r.source])).toEqual([[SHA, 'coderabbit']]);
+  });
+
+  test('the claim ends with the review: a later start of the same commit is deduped, not looked up', async () => {
+    const { lookups, findPr } = onePr();
+    const { scheduler, runs } = setup(120_000, { findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    scheduler.handle(repo, prEvent());
+    scheduler.handle(repo, coderabbitStatus());
+    await scheduler.idle();
+    expect(lookups).toHaveLength(1);
+    expect(runs).toHaveLength(1);
+  });
+
+  test('repeated statuses during one lookup share it', async () => {
+    const held = heldLookup(async () => ({ pr: 224, headRef: 'feat/x', baseRef: 'main' }));
+    const { scheduler, runs } = setup(120_000, { findPr: held.findPr });
+    const repo = repoWith('coderabbit');
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, coderabbitStatus());
+    held.release();
+    await scheduler.idle();
+    expect(held.lookups).toHaveLength(1);
+    expect(runs).toHaveLength(1);
+  });
+
+  test('Greptile starting while CodeRabbit looks up its PR reviews the commit once', async () => {
+    const held = heldLookup(async () => ({ pr: 223, headRef: 'feat/x', baseRef: 'main' }));
+    const { scheduler, runs } = setup(120_000, { findPr: held.findPr });
+    const repo = repoWith('auto');
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, greptileStart());
+    held.release();
+    await scheduler.idle();
+    expect(runs.map((r) => r.source)).toEqual(['greptile']);
+  });
+
+  test('a commit found by lookup whose PR moved on before its turn is superseded, not reviewed', async () => {
+    const state = new StateStore(null);
+    const { scheduler, runs } = setup(120_000, {
+      state,
+      findPr: onePr().findPr,
+      prHead: async () => 'ffffffffffffffffffffffffffffffffffffffff',
+    });
+    scheduler.handle(repoWith('coderabbit'), coderabbitStatus());
+    await scheduler.idle();
+    expect(runs).toHaveLength(0);
+    expect(state.list().find((r) => r.headSha === SHA)).toMatchObject({ status: 'superseded', pr: 224 });
+  });
+});
+
+describe('greptile mode ignores CodeRabbit', () => {
+  test('a CodeRabbit start does not run', async () => {
+    const { lookups, findPr } = onePr();
+    const { scheduler, runs } = setup(120_000, { findPr });
+    scheduler.handle(repoWith('greptile'), coderabbitStatus());
+    await scheduler.idle();
+    expect(lookups).toEqual([]);
+    expect(runs).toHaveLength(0);
+  });
+});
+
 describe('github mode', () => {
-  test('PR events run immediately and Greptile is ignored', async () => {
-    const { scheduler, runs, timers } = setup();
+  test('PR events run immediately and Greptile and CodeRabbit are ignored', async () => {
+    const { scheduler, runs, timers } = setup(120_000, {
+      findPr: onePr('ffffffffffffffffffffffffffffffffffffffff').findPr,
+    });
     const repo = repoWith('github');
     scheduler.handle(repo, greptileStart('ffffffffffffffffffffffffffffffffffffffff'));
+    scheduler.handle(repo, coderabbitStatus('ffffffffffffffffffffffffffffffffffffffff'));
     scheduler.handle(repo, prEvent());
     expect(timers.size).toBe(0);
     await scheduler.idle();
@@ -151,6 +465,7 @@ test('a failed run can be retried by the next trigger', async () => {
     state,
     graceMs: 0,
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    findPr: async () => null,
     prHead: async (j) => j.headSha,
     run: async () => {
       calls += 1;
@@ -178,6 +493,7 @@ test('a skip route records the commit as skipped and handled, with its route', a
     state,
     graceMs: 0,
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+    findPr: async () => null,
     prHead: async (j) => j.headSha,
     run: async () => {
       calls += 1;
@@ -217,6 +533,7 @@ describe('stale commits and the queue', () => {
       graceMs: 0,
       maxConcurrent: opts.maxConcurrent,
       resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+      findPr: async () => null,
       prHead: async (j) => heads.get(j.pr) ?? j.headSha,
       run: (j, _repo, signal) => {
         runs.push(j);
@@ -229,7 +546,10 @@ describe('stale commits and the queue', () => {
       log: () => {},
     });
     const start = (pr: number, sha: string) =>
-      scheduler.handle(repoWith('greptile'), { kind: 'greptileStart', job: { ...job('greptile', sha), pr } });
+      scheduler.handle(repoWith('greptile'), {
+        kind: 'botStart',
+        job: { ...job('greptile', sha), source: 'greptile', headSha: sha, pr },
+      });
     const finish = (sha: string) => gates.get(sha)!();
     const status = (sha: string) => state.list().find((r) => r.headSha === sha);
     return { scheduler, state, heads, runs, signals, start, finish, status };
@@ -282,6 +602,7 @@ describe('stale commits and the queue', () => {
       state,
       graceMs: 0,
       resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
+      findPr: async () => null,
       prHead: async (j) => j.headSha,
       run: async () => ({ reportDir: '/tmp/r', supersededBy: NEWER }),
       log: () => {},

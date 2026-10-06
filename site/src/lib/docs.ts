@@ -16,7 +16,11 @@ export type ReferenceRow = readonly [name: string, defaultValue: string, descrip
 export const GLOBAL_OPTIONS: ReferenceRow[] = [
   ['repos', 'Required', 'Non-empty list of GitHub repositories and their local clones.'],
   ['port', '9988', 'Local webhook server port. Listens on 127.0.0.1 only.'],
-  ['graceMs', '120000', 'In auto mode, wait this many milliseconds for Greptile before the GitHub fallback runs.'],
+  [
+    'graceMs',
+    '120000',
+    'In auto mode, wait this many milliseconds for Greptile or CodeRabbit before the GitHub fallback runs.',
+  ],
   ['timeoutMs', '1800000', 'Per-reviewer timeout in milliseconds. The default is 30 minutes.'],
   ['maxConcurrent', '2', 'Reviews that run at once, each with its whole panel. Later ones queue, oldest first.'],
   ['reviewers', '["codex","claude"]', 'Fallback panel when no route matches. At least one reviewer ID is required.'],
@@ -40,7 +44,7 @@ export const REPO_OPTIONS: ReferenceRow[] = [
     'Required',
     'Existing local clone with an origin remote for this repository. ~/ expands to your home. Relative paths resolve from the process working directory.',
   ],
-  ['trigger', 'auto', 'auto, greptile, or github. Mentions work in every mode.'],
+  ['trigger', 'auto', 'auto, greptile, coderabbit, or github. Mentions work in every mode.'],
   ['postToPr', 'true', 'Publish the report as a PR comment. Set false for local reports only; reviewers still run.'],
   [
     'github.onPush',
@@ -109,7 +113,7 @@ export const ROUTE_OPTIONS: ReferenceRow[] = [
 export const ROUTE_CONDITIONS: ReferenceRow[] = [
   ['repos', 'Glob list', 'Match owner/name, ignoring case. Each pattern must match at least one configured repo.'],
   ['baseBranches', 'Glob list', 'Match the target branch, not the PR head branch. Case-sensitive.'],
-  ['sources', 'Value list', 'greptile, github, mention, or manual.'],
+  ['sources', 'Value list', 'greptile, coderabbit, github, mention, or manual.'],
   ['paths', 'Glob list', 'At least one changed path matches. Includes the old path of a renamed file.'],
   [
     'onlyPaths',

@@ -119,7 +119,7 @@ export const HELP_GROUPS: Group[] = [
           { flag: '--pr <n>', description: 'Pull request number' },
           {
             flag: '--source <source>',
-            description: 'Trigger to check as: github (default), greptile, mention, manual',
+            description: 'Trigger to check as: github (default), greptile, coderabbit, mention, manual',
           },
         ],
         examples: [
@@ -222,7 +222,7 @@ export function renderHelp(version: string, st: Styles = styles(), width = helpW
   const lines: string[] = [
     `${st.title('review-relay')}  ${st.muted(`v${version}`)}`,
     ...paragraph(
-      'Local AI code review for pull requests. Runs your agent CLIs when Greptile or GitHub says a PR is ready, and posts the verdict back.',
+      'Local AI code review for pull requests. Runs your agent CLIs when Greptile, CodeRabbit, or GitHub says a PR is ready, and posts the verdict back.',
       width,
       0,
     ),

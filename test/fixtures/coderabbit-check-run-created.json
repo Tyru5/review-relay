@@ -1,0 +1,40 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "Tyru5/Agendex",
+    "default_branch": "main"
+  },
+  "check_run": {
+    "id": 111010708999,
+    "name": "CodeRabbit",
+    "status": "in_progress",
+    "conclusion": null,
+    "head_sha": "8335bfb9620209084a208e9e926c35c7d8bef13a",
+    "app": {
+      "slug": "coderabbitai"
+    },
+    "check_suite": {
+      "head_branch": "refactor/chainstate-sync-progress"
+    },
+    "pull_requests": [
+      {
+        "number": 224,
+        "head": {
+          "ref": "refactor/chainstate-sync-progress",
+          "sha": "8335bfb9620209084a208e9e926c35c7d8bef13a"
+        },
+        "base": {
+          "ref": "main",
+          "sha": "661ab4847acf6980abef70eb82404fab3f6297c7"
+        }
+      }
+    ],
+    "output": {
+      "title": "Review in progress"
+    }
+  },
+  "sender": {
+    "login": "coderabbitai[bot]",
+    "type": "Bot"
+  }
+}

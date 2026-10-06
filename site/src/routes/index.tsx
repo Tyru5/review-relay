@@ -20,9 +20,9 @@ const EVENTS: { title: string; body: ReactNode }[] = [
     title: 'A review starts',
     body: (
       <>
-        Greptile&rsquo;s check run begins, a pull request is opened or marked ready, or a collaborator comments{' '}
-        <Code>@review-relay</Code>. Each repo picks its trigger: <Code>auto</Code>, <Code>greptile</Code>, or{' '}
-        <Code>github</Code>.
+        Greptile or CodeRabbit starts reviewing, a pull request is opened or marked ready, or a collaborator comments{' '}
+        <Code>@review-relay</Code>. Each repo picks its trigger: <Code>auto</Code>, <Code>greptile</Code>,{' '}
+        <Code>coderabbit</Code>, or <Code>github</Code>.
       </>
     ),
   },

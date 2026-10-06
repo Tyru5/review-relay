@@ -8,7 +8,7 @@ web
 
 ## Users
 
-- Developers and maintainers who already use coding agents or LLMs and want the ones they choose reviewing every pull request automatically, alongside Greptile on repos that use it.
+- Developers and maintainers who already use coding agents or LLMs and want the ones they choose reviewing every pull request automatically, alongside Greptile or CodeRabbit on repos that use them.
 - Teams on repos with no AI reviewer bot who want scored reviews without adding another hosted reviewer.
 
 Both are comfortable in a terminal: they install a CLI, edit a JSON config, and keep `gh` and their chosen agents signed in or configured with API keys.
@@ -23,7 +23,7 @@ The website at reviewrelay.dev exists so people can understand the tool and inst
 
 - Bring your agents: users seat any of the 13 supported agent CLIs (Claude Code, Codex, Augment Auggie, GitHub Copilot CLI, Factory Droid, Gemini CLI, Grok Build, Hermes Agent, Kilo Code CLI, opencode, pi, Qwen Code, Mistral Vibe), as many as they want, each on the model and effort they choose. Claude Code and Codex are the defaults; no vendor is required. CLIs whose lockdown a PR could escape are not supported (see README).
 - Reviews run on the user's machine through their own agent logins and API keys, against a temporary worktree of their own clone. No hosted reviewer, no public URL: GitHub events arrive through `gh webhook forward`.
-- It rides existing triggers: Greptile's check run starting, GitHub PR events, or an `@review-relay` mention.
+- It rides existing triggers: Greptile's check run starting, CodeRabbit's review starting, GitHub PR events, or an `@review-relay` mention.
 - Every reviewer scores the same six dimensions (correctness, security, code quality, standards, blast radius, testing). The headline is the lowest score among reviewers, with caps tied to findings (a critical finding limits a reviewer to 2/5, a major one to 3/5).
 
 ## Operating Context
@@ -32,7 +32,7 @@ GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` 
 
 ## Capabilities and Constraints
 
-- Trigger modes per repo: `auto`, `greptile`, `github`. Each commit is reviewed once; mentions and `run` review again. Drafts are skipped.
+- Trigger modes per repo: `auto`, `greptile`, `coderabbit`, `github`. Each commit is reviewed once; mentions and `run` review again. Drafts are skipped.
 - One PR comment, edited in place on later reviews, with findings linked to exact lines.
 - Distributed as standalone binaries attached to GitHub Releases at https://github.com/Tyru5/review-relay/releases (macOS and glibc Linux on x64/arm64, Windows x64), installed with `curl ... | bash` or `irm ... | iex`. Versions are published by tagging `v*.*.*`.
 - Code is sent to whichever providers the user's chosen agents and models use; the site must never claim code stays on the machine.

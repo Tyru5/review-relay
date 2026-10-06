@@ -8,7 +8,7 @@ import { fmtDuration } from './ui.ts';
 /** Route names, like reviewer ids, so a mention can name one. */
 export const ROUTE_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-export const SOURCES: JobSource[] = ['greptile', 'github', 'mention', 'manual'];
+export const SOURCES: JobSource[] = ['greptile', 'coderabbit', 'github', 'mention', 'manual'];
 
 const GLOB_CONDITIONS = ['repos', 'baseBranches', 'paths', 'onlyPaths'] as const;
 const COUNT_CONDITIONS = ['minLines', 'maxLines', 'minFiles', 'maxFiles'] as const;
