@@ -141,7 +141,7 @@ function Docs() {
             <p>
               <code>setup</code> finds GitHub clones under your home directory and agent CLIs on your PATH. Choose the
               repos, reviewers, models, and effort. It saves <code>~/.review-relay/config.json</code>. <code>tui</code>{' '}
-              shows the jobs live as the daemon runs them; <code>status</code> prints the same in one shot.
+              shows the jobs live as the daemon runs them; <code>status</code> prints a one-shot summary.
             </p>
             <Note title="Try a local-only review first">
               Set <code>postToPr: false</code> on the repo before running a review. Reports still save locally and the
@@ -369,14 +369,18 @@ function Docs() {
               <code>tui</code> takes over the terminal: the job table on top, the highlighted job’s detail below it, and
               the daemon’s state in the status line, refreshing as the daemon writes <code>state.json</code>. Enter
               expands a job: the published score, each reviewer’s score, model, and time, the merged findings with their
-              file and line, and the posted comment, or the job’s log lines while it runs or after it fails.
+              file and line, and the review comment from <code>comment.md</code>, which is only posted to the PR when{' '}
+              <code>postToPr</code> is on and a reviewer succeeded. A job with no comment yet shows its log lines
+              instead.
             </p>
             <p>
               <code>/</code> filters by repo, PR, commit, status, source, route, or error text and <code>s</code> cycles
               the status filter. <code>r</code> reviews the PR again in the background after confirming, <code>o</code>{' '}
               opens it in the browser, <code>y</code> copies its URL, <code>l</code> follows the job’s log and{' '}
-              <code>L</code> the whole log. <code>?</code> lists every key. It reads the same files <code>status</code>{' '}
-              does, so it works whether or not the daemon is running.
+              <code>L</code> the whole log. <code>?</code> lists every key. It reads <code>state.json</code>, the report
+              directories, and <code>daemon.log</code> directly, so it works whether or not the daemon is running.
+              Unlike <code>status</code>, it shows an in-flight job as running; <code>status</code> treats a running
+              record as a failed run so it can retry.
             </p>
             <h3>Preview or force a route</h3>
             <Snippet
@@ -483,8 +487,9 @@ function Docs() {
               code={'review-relay status\nreview-relay info\nreview-relay logs 100\ngh auth status'}
             />
             <p>
-              <code>tui</code> shows each job’s log lines while it runs or after it fails, and <code>r</code> re-runs it
-              once the cause is fixed.
+              <code>tui</code> shows a job’s log lines while it runs, and <code>l</code> opens them for any job,
+              including a failed one whose saved comment fills the detail view. <code>r</code> re-runs it once the cause
+              is fixed.
             </p>
             <details>
               <summary>No review appeared</summary>
