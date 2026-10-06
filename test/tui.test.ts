@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonState } from '../src/daemon.ts';
@@ -60,9 +60,20 @@ const MANY = Array.from({ length: 12 }, (_, i) =>
   job(`${i}`.padStart(8, 'e'), { pr: 100 + i, startedAt: `2026-10-01T${String(23 - i).padStart(2, '0')}:00:00.000Z` }),
 );
 
+/** Every temp folder a test made, removed after it. */
+const made: string[] = [];
+const tempDir = (prefix: string) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  made.push(dir);
+  return dir;
+};
+afterEach(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 /** A data folder with the four jobs, a report for the done one, and a daemon log naming two of them. */
 function dataDir(jobs: JobRecord[] = [FAILED, DONE, RUNNING, SKIPPED]) {
-  const dir = mkdtempSync(join(tmpdir(), 'relay-tui-'));
+  const dir = tempDir('relay-tui-');
   writeFileSync(join(dir, 'state.json'), JSON.stringify(jobs));
   const report = reportDirFor(dir, DONE);
   mkdirSync(report, { recursive: true });
@@ -168,6 +179,30 @@ describe('readJobs and JobStore', () => {
     expect(store.detail(SKIPPED).summary).toBeNull();
   });
 
+  test('a re-run of the same commit drops the cached report and detail', () => {
+    const dir = dataDir([DONE]);
+    const store = new JobStore(dir);
+    store.refresh();
+    expect(store.detail(DONE).summary?.score).toBe(3);
+    expect(store.report(DONE)?.score).toBe(3);
+    // The re-run starts: same key, back to running; nothing cached applies.
+    const again = { ...DONE, status: 'running' as const, startedAt: '2026-10-02T12:00:00.000Z', finishedAt: undefined };
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([again]));
+    store.refresh();
+    expect(store.report(again)).toBeNull();
+    expect(store.detail(again).summary).toBeNull();
+    // It finishes with a new report in the same folder, which is read afresh.
+    const report = reportDirFor(dir, DONE);
+    writeFileSync(join(report, 'meta.json'), JSON.stringify({ score: 5, reviewers: [] }));
+    const finished = { ...again, status: 'done' as const, finishedAt: '2026-10-02T12:03:00.000Z' };
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([finished]));
+    store.refresh();
+    expect(store.report(finished)?.score).toBe(5);
+    expect(store.detail(finished).summary?.score).toBe(5);
+    // Caching still holds while nothing about the job changed.
+    expect(store.detail(finished)).toBe(store.detail(finished));
+  });
+
   test('log narrows the daemon log to one job by its repo tag and PR number', () => {
     const store = new JobStore(dataDir());
     expect(store.log(FAILED)).toEqual([
@@ -176,7 +211,7 @@ describe('readJobs and JobStore', () => {
     ]);
     expect(store.log()).toHaveLength(12);
     expect(store.log(SKIPPED)).toEqual([]);
-    expect(new JobStore(mkdtempSync(join(tmpdir(), 'relay-empty-'))).log()).toEqual([]);
+    expect(new JobStore(tempDir('relay-empty-')).log()).toEqual([]);
   });
 });
 
@@ -239,7 +274,7 @@ describe('frame', () => {
   });
 
   test('says so when the daemon is stopped and when there are no jobs', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'relay-none-'));
+    const dir = tempDir('relay-none-');
     const ctx = ctxFor(dir, { daemon: { ...DAEMON, running: false, pid: null } });
     const text = render(initialState(), ctx);
     expect(text).toContain('✗ daemon stopped  start it with review-relay start -d  │  no review jobs yet');
@@ -492,7 +527,7 @@ describe('actions', () => {
     expect(press(ctx, ['o']).effect).toEqual({ kind: 'open', url: 'https://github.com/acme/app/pull/7' });
     expect(press(ctx, ['down', 'down', 'enter', 'y']).effect).toEqual({ kind: 'copy', text: prUrl(FAILED) });
     expect(press(ctx, ['o'], initialState()).view).toBe('list');
-    expect(press(ctxFor(mkdtempSync(join(tmpdir(), 'relay-none-'))), ['o']).effect).toBeUndefined();
+    expect(press(ctxFor(tempDir('relay-none-')), ['o']).effect).toBeUndefined();
   });
 });
 

@@ -85,6 +85,12 @@ const readJson = (path: string): any => {
 
 const isFinished = (job: JobRecord) => job.status !== 'running';
 
+/**
+ * The cache key for a job's report folder reads. A re-run reuses the job's key (`repo@sha`) but moves it back to
+ * `running` and then to a new `finishedAt`, so those are part of the key and a stale read can't survive a re-run.
+ */
+const cacheKey = (job: JobRecord) => `${job.key}|${job.status}|${job.finishedAt ?? ''}`;
+
 /** What the TUI reads from the data folder, cached where a job can no longer change. */
 export class JobStore {
   jobs: JobRecord[] = [];
@@ -94,7 +100,10 @@ export class JobStore {
 
   constructor(readonly dataDir: string) {}
 
-  /** Re-reads `state.json` when its size or mtime changed; returns true when the list was reloaded. */
+  /**
+   * Re-reads `state.json` when its size or mtime changed; returns true when the list was reloaded. Cache entries
+   * for jobs that are gone or have changed are dropped.
+   */
   refresh(): boolean {
     const path = join(this.dataDir, 'state.json');
     let stamp = '';
@@ -107,6 +116,10 @@ export class JobStore {
     if (stamp === this.seen) return false;
     this.seen = stamp;
     this.jobs = readJobs(path);
+    const live = new Set(this.jobs.map(cacheKey));
+    for (const cache of [this.reports, this.details]) {
+      for (const key of cache.keys()) if (!live.has(key)) cache.delete(key);
+    }
     return true;
   }
 
@@ -117,12 +130,14 @@ export class JobStore {
   /** Scores and finding counts; null while running or when the job never got a report. */
   report(job: JobRecord): ReportSummary | null {
     if (!isFinished(job)) return null;
-    if (!this.reports.has(job.key)) this.reports.set(job.key, readReport(this.dirOf(job)));
-    return this.reports.get(job.key)!;
+    const key = cacheKey(job);
+    if (!this.reports.has(key)) this.reports.set(key, readReport(this.dirOf(job)));
+    return this.reports.get(key)!;
   }
 
   detail(job: JobRecord): JobDetail {
-    const cached = this.details.get(job.key);
+    const key = cacheKey(job);
+    const cached = this.details.get(key);
     if (cached) return cached;
     const dir = this.dirOf(job);
     const summary = this.report(job);
@@ -144,7 +159,7 @@ export class JobStore {
       // No comment written: a skipped job, or every reviewer failed before the report.
     }
     const detail = { summary, meta, reviewers, findings, comment };
-    if (isFinished(job)) this.details.set(job.key, detail);
+    if (isFinished(job)) this.details.set(key, detail);
     return detail;
   }
 
