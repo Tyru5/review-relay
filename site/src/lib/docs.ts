@@ -140,6 +140,11 @@ export const COMMANDS: ReferenceRow[] = [
     '--limit <n>, --page <n>',
     'Daemon, endpoint, forwarders, and recent jobs. 20 jobs per page; --page reaches older ones. Exits 3 when the daemon is not running.',
   ],
+  [
+    'tui',
+    'No flags',
+    'Live terminal view of the jobs. Enter opens scores, findings, and the posted comment; r re-reviews a PR, o opens it, / filters.',
+  ],
   ['logs', '[N], -f, --follow', 'Read the last N log lines, default 50. Use -f to follow new output.'],
   [
     'run',

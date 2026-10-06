@@ -30,6 +30,7 @@
     "relay:killall": "scripts/relay killall",
     "relay:restart": "scripts/relay restart",
     "relay:status": "scripts/relay status",
+    "relay:tui": "scripts/relay tui",
     "relay:info": "scripts/relay info",
     "relay:logs": "scripts/relay logs",
     "relay:help": "scripts/relay help",

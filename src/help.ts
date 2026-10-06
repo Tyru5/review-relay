@@ -55,6 +55,15 @@ export const HELP_GROUPS: Group[] = [
         examples: ['review-relay restart'],
       },
       {
+        name: 'tui',
+        summary: 'Live terminal view of the review jobs: open one, read its findings, re-run it',
+        detail: [
+          'Lists every job in state.json with its score per reviewer and finding counts, refreshing as the daemon writes. Enter opens a job (scores, merged findings, the posted comment, or its log lines while running); / filters; s cycles the status filter.',
+          'r reviews the PR again in the background, o opens it in the browser, y copies its URL. Press ? inside for every key.',
+        ],
+        examples: ['review-relay tui'],
+      },
+      {
         name: 'status',
         args: '[--limit N] [--page N]',
         summary: 'Daemon, endpoint, forwarders, and recent review jobs',

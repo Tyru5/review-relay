@@ -3,6 +3,7 @@ import { resolve as resolvePath } from 'node:path';
 import { DEFAULT_MODELS, DEFAULT_REVIEWERS, REVIEWER_ID, type ModelConfig } from './config.ts';
 import { cloneAround, cloneAt, discoverClones, type Clone } from './repos.ts';
 import { findBin, HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
+import { runScreen, windowed } from './term.ts';
 import type { HarnessName, ReviewerId } from './types.ts';
 
 /** The `models` keys setup configures, in the order their steps run. */
@@ -111,18 +112,6 @@ const plain = (value: unknown): Record<string, any> =>
 /** A config value as text; empty and null count as unset. */
 const asText = (value: unknown) => (value === undefined || value === null || value === '' ? undefined : String(value));
 
-/** The rows that fit in `room` lines, kept around the cursor, with markers for what scrolled out of view. */
-function windowed(rows: string[], cursor: number, room: number, paint: Paint): string[] {
-  if (rows.length <= room) return rows;
-  const size = Math.max(1, room - 2);
-  const start = Math.min(Math.max(0, cursor - Math.floor(size / 2)), rows.length - size);
-  const below = rows.length - start - size;
-  return [
-    paint(DIM, start > 0 ? `  ↑ ${start} more` : ''),
-    ...rows.slice(start, start + size),
-    paint(DIM, below > 0 ? `  ↓ ${below} more` : ''),
-  ];
-}
 const tildify = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
 const untildify = (path: string) => resolvePath(path.replace(/^~(?=\/|$)/, homedir()));
 
@@ -763,34 +752,6 @@ export function renderSetup(state: SetupState, ctx: SetupContext, color: boolean
   return [...head, ...body, ...foot].map((line) => (line ? `  ${line}` : line));
 }
 
-const KEY_NAMES: Record<string, string> = {
-  '\x1b[A': 'up',
-  '\x1b[B': 'down',
-  '\x1b[C': 'right',
-  '\x1b[D': 'left',
-  // Sent instead when the terminal is left in application cursor mode.
-  '\x1bOA': 'up',
-  '\x1bOB': 'down',
-  '\x1bOC': 'right',
-  '\x1bOD': 'left',
-  '\r': 'enter',
-  '\n': 'enter',
-  ' ': 'space',
-  '\x1b': 'escape',
-  '\x03': 'ctrl-c',
-  '\x15': 'ctrl-u',
-  '\x7f': 'backspace',
-  '\b': 'backspace',
-};
-
-/**
- * Splits raw-mode terminal input into key names (`up`, `enter`, `space`, ...) or the typed characters.
- * readline's keypress events would do this too, but they hold a lone Esc for 500ms before reporting it.
- */
-export const parseKeys = (input: string): string[] =>
-  // oxlint-disable-next-line no-control-regex -- terminal escape sequences start with ESC
-  (input.match(/\x1b\[[\d;]*[~A-Za-z]|\x1bO[A-Z]|[\s\S]/g) ?? []).map((seq) => KEY_NAMES[seq] ?? seq);
-
 const INLINE_WIDTH = 80;
 
 /** Two-space JSON that keeps short arrays and objects of plain values on one line, the way config.example.json reads. */
@@ -827,48 +788,16 @@ async function readRawConfig(path: string): Promise<Record<string, any> | undefi
 }
 
 /** Runs the steps on the terminal's alternate screen until the user saves or quits. */
-function interact(ctx: SetupContext): Promise<SetupState> {
-  const { stdin, stdout } = process;
+async function interact(ctx: SetupContext): Promise<SetupState> {
   let state = initialState(ctx);
-  // Home the cursor and clear each line's leftovers instead of the whole screen, so redraws don't flicker.
-  const draw = () => stdout.write(`\x1b[H${renderSetup(state, ctx, true, stdout.rows).join('\x1b[K\n')}\x1b[K\x1b[J`);
-  const restore = () => stdout.write('\x1b[?25h\x1b[?1049l');
-  return new Promise((resolve, reject) => {
-    // Leaves the alternate screen before settling, so whatever prints next (an error too) stays visible.
-    const stop = (settle: () => void) => {
-      stdin.off('data', onData);
-      stdout.off('resize', onResize);
-      process.off('exit', restore);
-      stdin.setRawMode(false);
-      stdin.pause();
-      restore();
-      settle();
-    };
-    const guarded = (fn: () => void) => {
-      try {
-        fn();
-      } catch (err) {
-        stop(() => reject(err));
-      }
-    };
-    const onData = (chunk: Buffer) =>
-      guarded(() => {
-        for (const key of parseKeys(String(chunk))) {
-          state = reduce(state, key, ctx);
-          if (state.done) return stop(() => resolve(state));
-        }
-        draw();
-      });
-    const onResize = () => guarded(draw);
-    // Raw mode turns Ctrl+C into a key press, not SIGINT. The exit hook is a backstop for throws `guarded` misses.
-    stdin.setRawMode(true);
-    process.on('exit', restore);
-    stdout.write('\x1b[?1049h\x1b[?25l');
-    stdin.on('data', onData);
-    stdin.resume();
-    stdout.on('resize', onResize);
-    onResize();
+  await runScreen({
+    render: (height) => renderSetup(state, ctx, true, height),
+    key: (key) => {
+      state = reduce(state, key, ctx);
+      return !!state.done;
+    },
   });
+  return state;
 }
 
 /**

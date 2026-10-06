@@ -198,6 +198,7 @@ review-relay start -d                               # same, as a background daem
 review-relay stop                                   # SIGTERM so temporary repo webhooks get deleted; forces after 20s
 review-relay restart                                # stop, then start -d
 review-relay status [--limit N] [--page N]          # daemon (pid, uptime, endpoint, health), forwarders, jobs (20/page); exit 3 if stopped
+review-relay tui                                    # live job list; enter opens a job, r re-reviews, o opens the PR, / filters
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
 review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
@@ -209,6 +210,8 @@ review-relay setup                                  # interactive config: pick r
 ```
 
 Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `review-relay --help` groups the commands with examples.
+
+`review-relay tui` keeps the job table on screen and refreshes it as the daemon writes `state.json`, with the daemon's state in the header. Enter opens a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
 
 ## Development
 

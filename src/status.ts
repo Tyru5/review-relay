@@ -73,15 +73,17 @@ export interface StatusOptions {
   reviewers: ReviewerId[];
   color: boolean;
   now?: number;
+  /** One summary per record, when the caller has them already (the TUI caches them); else they are read here. */
+  reports?: (ReportSummary | null)[];
 }
 
 /** Recent jobs as an aligned table with a header row; ROUTE and NOTE (errors) are dropped when no job has one. */
 export function renderStatus(records: JobRecord[], opts: StatusOptions): string[] {
   if (records.length === 0) return ['no review jobs yet'];
   const now = opts.now ?? Date.now();
-  const reports = records.map((r) =>
-    r.status === 'running' ? null : readReport(r.reportDir ?? reportDirFor(opts.dataDir, r)),
-  );
+  const reports =
+    opts.reports ??
+    records.map((r) => (r.status === 'running' ? null : readReport(r.reportDir ?? reportDirFor(opts.dataDir, r))));
   const reviewers = [...opts.reviewers];
   for (const rep of reports)
     for (const r of rep?.reviewers ?? []) if (!reviewers.includes(r.name)) reviewers.push(r.name);

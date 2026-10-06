@@ -31,6 +31,7 @@ import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
 import { paginate, renderStatus } from './status.ts';
+import { tui } from './tui.ts';
 import type { JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
@@ -395,6 +396,7 @@ const COMMANDS = [
   'stop',
   'restart',
   'status',
+  'tui',
   'logs',
   'run',
   'route',
@@ -441,6 +443,8 @@ async function main() {
       return startDetached(config, configPath);
     case 'status':
       return showStatus(config, configPath, undefined, opts.limit, opts.page);
+    case 'tui':
+      return tui(config, configPath, version);
     case 'logs':
       return logs(config, arg, opts.follow);
     case 'run':
