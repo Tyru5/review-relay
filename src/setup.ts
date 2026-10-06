@@ -67,6 +67,10 @@ export interface SetupState {
   models: Record<ReviewerId, ModelConfig>;
   /** The text typed on a list step after picking "other"; undefined while its list is shown. */
   typing?: string;
+  /** Text narrowing the repos step to the rows whose name or path contains it; undefined when none is set. */
+  filter?: string;
+  /** True while the filter input on the repos step takes the keys. */
+  filtering?: boolean;
   /** Why the current step can't be left yet. */
   error?: string;
   done?: 'save' | 'cancel';
@@ -434,18 +438,57 @@ function selectRepo(state: SetupState, clone: Clone): SetupState {
     const repos = state.repos.map((row) => (row === known ? next : row));
     return { ...state, repos, typing: undefined };
   }
-  const repos = [...state.repos, { ...clone, exists: true, on: true }];
+  const next = { ...state, repos: [...state.repos, { ...clone, exists: true, on: true }], typing: undefined };
   // The cursor stays on "other", which the new row pushed down.
-  return { ...state, repos, cursor: repos.length, typing: undefined };
+  return { ...next, cursor: shown(next).length };
+}
+
+/** True when `row` matches `filter`: a case-insensitive substring of its name or path. */
+const matches = (row: RepoOption, filter: string) =>
+  `${row.fullName}\n${tildify(row.localPath)}`.toLowerCase().includes(filter.toLowerCase());
+
+/**
+ * The rows the repos step lists, as indices into `state.repos`: every row with no filter, else those matching it.
+ * The cursor counts over these, with "other" at `shown.length`.
+ */
+const shown = (state: SetupState): number[] =>
+  state.repos.flatMap((row, i) => (!state.filter || matches(row, state.filter) ? [i] : []));
+
+/** Sets the filter, keeping the cursor on the highlighted row when it is still shown (or on "other"), else on the top. */
+function setFilter(state: SetupState, filter: string | undefined, filtering: boolean): SetupState {
+  const row = shown(state)[state.cursor];
+  const next = { ...state, filter: filter || undefined, filtering };
+  const list = shown(next);
+  const at = row === undefined ? list.length : list.indexOf(row);
+  return { ...next, cursor: at >= 0 ? at : 0 };
+}
+
+/**
+ * Keys while the filter input is open: editing keys, the arrows and space still move and toggle on the narrowed list,
+ * enter closes the input keeping the filter, and escape clears it. Every other key does nothing.
+ */
+function filtered(state: SetupState, key: string): SetupState {
+  const text = state.filter ?? '';
+  if (key === 'escape') return setFilter(state, undefined, false);
+  if (key === 'enter') return { ...state, filtering: false };
+  if (key === 'backspace') return setFilter(state, text.slice(0, -1), true);
+  if (key === 'ctrl-u') return setFilter(state, '', true);
+  if (key === 'up' || key === 'down') return move(state, key, shown(state).length + 1);
+  if (key === 'space') {
+    const row = state.repos[shown(state)[state.cursor]!];
+    return row ? selectRepo(state, row) : state;
+  }
+  return key.length === 1 && key > ' ' ? setFilter(state, text + key, true) : state;
 }
 
 const REPOS_STEP: Step = {
   group: 'Repos',
   body: (state, ctx, paint, height) => {
-    const other = state.repos.length;
-    const width = (text: (row: RepoOption) => string) => Math.max(0, ...state.repos.map((row) => text(row).length));
+    const listed = shown(state).map((i) => state.repos[i]!);
+    const other = listed.length;
+    const width = (text: (row: RepoOption) => string) => Math.max(0, ...listed.map((row) => text(row).length));
     const [nameW, pathW] = [width((row) => row.fullName), width((row) => tildify(row.localPath))];
-    const rows = state.repos.map((row, i) => {
+    const rows = listed.map((row, i) => {
       const active = i === state.cursor;
       return [
         active ? paint(CYAN, '›') : ' ',
@@ -466,7 +509,19 @@ const REPOS_STEP: Step = {
       found > 0
         ? paint(DIM, `Found ${found} GitHub clones under ~. Each repo selected is reviewed on every PR.`)
         : paint(DIM, "No GitHub clone found under ~; pick other to type a clone's path.");
-    return ['Which repos should review-relay watch?', intro, '', ...windowed(rows, state.cursor, height - 3, paint)];
+    // The filter line takes the blank line's place, so the list doesn't jump when it opens.
+    const count = `${other} of ${state.repos.length} · ${state.repos.filter((row) => row.on).length} selected`;
+    const filter = state.filtering
+      ? `${paint(CYAN, '/')} ${state.filter ?? ''}▏ ${paint(DIM, count)}`
+      : state.filter
+        ? paint(DIM, `/ ${state.filter} · ${count}`)
+        : '';
+    return [
+      'Which repos should review-relay watch?',
+      intro,
+      filter,
+      ...windowed(rows, state.cursor, height - 3, paint),
+    ];
   },
   // Starts on the first selected repo, which a long list of clones may otherwise scroll out of view.
   cursor: (state) =>
@@ -476,7 +531,9 @@ const REPOS_STEP: Step = {
     ),
   hint: (state) => {
     if (state.typing !== undefined) return "type a clone's path · enter add it · esc back to the list";
-    return `↑↓ move · ${state.cursor === state.repos.length ? 'enter type a path' : 'space select · enter next'} · q quit`;
+    if (state.filtering) return 'type to filter · ↑↓ move · space select · enter keep filter · esc clear it';
+    const act = state.cursor === shown(state).length ? 'enter type a path' : 'space select · enter next';
+    return `↑↓ move · ${act} · / filter · ${state.filter ? 'esc clear filter' : 'q quit'}`;
   },
   onKey: (state, key, ctx) => {
     if (state.typing !== undefined) {
@@ -486,9 +543,14 @@ const REPOS_STEP: Step = {
         return clone ? selectRepo(state, clone) : { ...state, error: `no GitHub clone at ${tildify(dir)}` };
       });
     }
-    const stepped = move(state, key, state.repos.length + 1);
+    if (state.filtering) return filtered(state, key);
+    if (key === '/') return { ...state, filtering: true };
+    // With a filter kept, escape clears it before it would quit.
+    if (key === 'escape' && state.filter) return setFilter(state, undefined, false);
+    const list = shown(state);
+    const stepped = move(state, key, list.length + 1);
     if (stepped !== state) return stepped;
-    const row = state.repos[state.cursor];
+    const row = state.repos[list[state.cursor]!];
     if (!row) return key === 'enter' || key === 'right' ? { ...state, typing: '' } : state;
     return key === 'space' ? selectRepo(state, row) : state;
   },
@@ -639,7 +701,14 @@ const steps = (state: SetupState, ctx: SetupContext): Step[] => [
 
 /** Moves to step `index` with the row that step starts on highlighted. */
 function goTo(state: SetupState, index: number, ctx: SetupContext): SetupState {
-  const next: SetupState = { ...state, step: index, error: undefined, typing: undefined };
+  const next: SetupState = {
+    ...state,
+    step: index,
+    error: undefined,
+    typing: undefined,
+    filter: undefined,
+    filtering: false,
+  };
   return { ...next, cursor: steps(next, ctx)[index]!.cursor?.(next, ctx) ?? 0 };
 }
 
@@ -653,7 +722,7 @@ export function reduce(state: SetupState, key: string, ctx: SetupContext): Setup
   const own = step.onKey?.(cleared, key, ctx) ?? cleared;
   if (own !== cleared) return own;
   // A text input takes every other key as well, so q and the arrows can't act on the setup while typing.
-  if (state.typing !== undefined) return state;
+  if (state.typing !== undefined || state.filtering) return state;
   if (key === 'q' || key === 'escape') return { ...state, done: 'cancel' };
   const last = state.step === list.length - 1;
   if (key === 'enter' || (key === 'right' && !last)) {

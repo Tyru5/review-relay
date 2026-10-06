@@ -186,7 +186,7 @@ describe('repos step', () => {
     expect(text).toMatch(/ {2}■ acme\/gone\s+\/home\/u\/gone\s+auto\s+no clone at this path\n/);
     expect(text).toMatch(/ {2}□ acme\/app\s+\/home\/u\/app\s+auto\n/);
     expect(text).toContain('other…');
-    expect(text).toContain('↑↓ move · space select · enter next · q quit');
+    expect(text).toContain('↑↓ move · space select · enter next · / filter · q quit');
   });
 
   test('with no file, preselects the clone setup was run from', () => {
@@ -326,6 +326,71 @@ describe('repos step', () => {
     expect(again.repos.map((row) => row.on)).toEqual([true, true, true]);
     expect(again.repos).toHaveLength(3);
     expect(press(ctx, ['escape'], typing).typing).toBeUndefined();
+  });
+
+  test('/ filters the list by name or path, and the cursor and space work on what is shown', () => {
+    const ctx = ctxFor({ repos: [{ fullName: 'acme/lib', localPath: '/home/u/lib' }] });
+    // Rows: lib (configured, on), app (found), then other.
+    const open = press(ctx, ['/'], initialState(ctx));
+    expect(open.filtering).toBe(true);
+    expect(render(open, ctx)).toContain('/ ▏ 2 of 2 · 1 selected');
+    expect(render(open, ctx)).toContain('type to filter · ↑↓ move · space select · enter keep filter · esc clear it');
+    // Matching is a case-insensitive substring of the name or the path; q and j type instead of quitting or moving.
+    const app = press(ctx, [...'APP'], open);
+    expect(app.filter).toBe('APP');
+    expect(app.done).toBeUndefined();
+    expect(render(app, ctx)).toContain('/ APP▏ 1 of 2 · 1 selected');
+    expect(render(app, ctx)).toMatch(/› □ acme\/app\s+\/home\/u\/app\s+auto\n\s+other…/);
+    expect(render(app, ctx)).not.toContain('acme/lib');
+    expect(press(ctx, [...'q'], open).done).toBeUndefined();
+    expect(press(ctx, [...'/opt'], open).filter).toBe('/opt');
+    // Space toggles the highlighted shown row, leaving hidden rows as they were.
+    const picked = press(ctx, ['space'], app);
+    expect(picked.repos.map((row) => [row.fullName, row.on])).toEqual([
+      ['acme/lib', true],
+      ['acme/app', true],
+    ]);
+    expect(render(picked, ctx)).toContain('1 of 2 · 2 selected');
+    // No match leaves only other, with the cursor on it.
+    const none = press(ctx, [...'zzz'], open);
+    expect(none.cursor).toBe(0);
+    expect(render(none, ctx)).toContain('/ zzz▏ 0 of 2');
+    expect(render(none, ctx)).toMatch(/›\s+other…/);
+    expect(press(ctx, ['backspace', 'backspace', 'backspace'], none).filter).toBeUndefined();
+    expect(press(ctx, ['ctrl-u'], none).filter).toBeUndefined();
+  });
+
+  test('enter keeps the filter and returns to the list; escape clears it before it would quit', () => {
+    const ctx = ctxFor({});
+    const kept = press(ctx, ['/', ...'lib', 'enter'], initialState(ctx));
+    expect(kept.filtering).toBe(false);
+    expect(kept.filter).toBe('lib');
+    expect(kept.done).toBeUndefined();
+    expect(kept.step).toBe(0);
+    expect(render(kept, ctx)).toContain('/ lib · 1 of 2 · 1 selected');
+    expect(render(kept, ctx)).toContain('↑↓ move · space select · enter next · / filter · esc clear filter');
+    expect(render(kept, ctx)).not.toContain('acme/app ');
+    // The kept filter still narrows what the cursor and space reach, and / reopens it with its text.
+    expect(press(ctx, ['space'], kept).repos.map((row) => row.on)).toEqual([true, true]);
+    expect(press(ctx, ['/', 'x'], kept).filter).toBe('libx');
+    const cleared = press(ctx, ['escape'], kept);
+    expect(cleared.filter).toBeUndefined();
+    expect(cleared.done).toBeUndefined();
+    expect(press(ctx, ['escape'], cleared).done).toBe('cancel');
+    // The cursor stays on the highlighted row when the filter changes and it is still shown.
+    const onLib = press(ctx, ['down', '/', ...'acme'], initialState(ctx));
+    expect(onLib.cursor).toBe(1);
+    expect(press(ctx, ['escape'], press(ctx, [...'/'], onLib)).cursor).toBe(1);
+    // Enter past the step validates the whole list, and leaving the step drops the filter.
+    const next = press(ctx, ['enter'], kept);
+    expect(next.step).toBe(1);
+    expect(next.filter).toBeUndefined();
+    expect(press(ctx, ['left'], next).filter).toBeUndefined();
+    // A repo added under other while a filter is kept lands the cursor back on other.
+    const added = press(ctx, ['down', 'enter', ...'/opt/tool', 'enter'], kept);
+    expect(added.repos.map((row) => row.fullName)).toEqual(['acme/app', 'acme/lib', 'acme/tool']);
+    expect(render(added, ctx)).toMatch(/›\s+other…/);
+    expect(render(added, ctx)).not.toContain('acme/tool');
   });
 
   test('save step lists the repos with new and removed ones marked', () => {
