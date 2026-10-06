@@ -2,6 +2,7 @@
  * Raw-mode terminal plumbing shared by the interactive commands (`setup`, `tui`): key parsing, list windowing,
  * ANSI-aware clipping, and the alternate-screen loop that redraws a screen on every key, tick, and resize.
  */
+import { visibleLength } from './ui.ts';
 
 const KEY_NAMES: Record<string, string> = {
   '\x1b[A': 'up',
@@ -180,4 +181,21 @@ export function runScreen(screen: Screen): Promise<void> {
     }
     onResize();
   });
+}
+
+/** SGR parameters for a 24-bit color, `fg` or `bg`, from a `0xrrggbb` value. */
+export const rgb = (hex: number, layer: 'fg' | 'bg' = 'fg'): string =>
+  `${layer === 'fg' ? 38 : 48};2;${(hex >> 16) & 255};${(hex >> 8) & 255};${hex & 255}`;
+
+/**
+ * `line` clipped and padded to exactly `width` visible columns. With `base` (SGR parameters for the row's background
+ * and text color), the row is painted edge to edge, and the base is restored after every reset inside the line, so a
+ * colored cell can't punch a hole in the background.
+ */
+export function fill(line: string, width: number, base?: string): string {
+  const cut = clip(line, width);
+  const padded = cut + ' '.repeat(Math.max(0, width - visibleLength(cut)));
+  if (!base) return padded;
+  const on = `\x1b[${base}m`;
+  return `${on}${padded.replaceAll('\x1b[0m', `\x1b[0m${on}`)}\x1b[0m`;
 }

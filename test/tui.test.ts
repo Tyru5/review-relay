@@ -5,19 +5,21 @@ import { join } from 'node:path';
 import type { DaemonState } from '../src/daemon.ts';
 import { reportDirFor } from '../src/report.ts';
 import type { JobRecord } from '../src/state.ts';
-import { clip, moved, parseKeys } from '../src/term.ts';
+import { clip, fill, moved, parseKeys, rgb } from '../src/term.ts';
 import {
   initialState,
   JobStore,
+  MIN_SIZE,
   prUrl,
   readJobs,
   reduce,
   renderTui,
+  themeStyles,
   visible,
   type TuiContext,
   type TuiState,
 } from '../src/tui.ts';
-import { styles } from '../src/ui.ts';
+import { styles, visibleLength } from '../src/ui.ts';
 
 const job = (sha: string, patch: Partial<JobRecord> = {}): JobRecord => ({
   key: `acme/app@${sha}`,
@@ -52,6 +54,11 @@ const finding = (severity: string, line: number, title: string) => ({
   detail: 'why it matters',
   suggestion: 'fix it',
 });
+
+/** Twelve finished jobs on one PR, newest first, for scrolling. */
+const MANY = Array.from({ length: 12 }, (_, i) =>
+  job(`${i}`.padStart(8, 'e'), { pr: 100 + i, startedAt: `2026-10-01T${String(23 - i).padStart(2, '0')}:00:00.000Z` }),
+);
 
 /** A data folder with the four jobs, a report for the done one, and a daemon log naming two of them. */
 function dataDir(jobs: JobRecord[] = [FAILED, DONE, RUNNING, SKIPPED]) {
@@ -88,6 +95,7 @@ function dataDir(jobs: JobRecord[] = [FAILED, DONE, RUNNING, SKIPPED]) {
   writeFileSync(
     join(dir, 'daemon.log'),
     [
+      ...Array.from({ length: 8 }, (_, i) => `10:5${i}:00 forwarder acme/app: event ${i}`),
       '11:00:00 [acme/app] PR #7 @ aaaaaaaa: reviewing (opened)',
       '09:00:00 [acme/lib] PR #12 @ cccccccc: reviewing (opened)',
       '09:30:00 [acme/lib] PR #12: failed: codex: timed out after 1800s',
@@ -122,7 +130,8 @@ function ctxFor(dir = dataDir(), patch: Partial<TuiContext> = {}): TuiContext {
 const press = (ctx: TuiContext, keys: string[], state: TuiState = initialState()) =>
   keys.reduce((s, key) => reduce(s, key, ctx), state);
 
-const render = (state: TuiState, ctx: TuiContext) => renderTui(state, ctx, styles(false), '0.6.0').join('\n');
+const lines = (state: TuiState, ctx: TuiContext) => renderTui(state, ctx, styles(false), '0.6.0');
+const render = (state: TuiState, ctx: TuiContext) => lines(state, ctx).join('\n');
 
 describe('readJobs and JobStore', () => {
   test('keeps running jobs as running and sorts newest first, unlike StateStore', () => {
@@ -165,52 +174,98 @@ describe('readJobs and JobStore', () => {
       '09:00:00 [acme/lib] PR #12 @ cccccccc: reviewing (opened)',
       '09:30:00 [acme/lib] PR #12: failed: codex: timed out after 1800s',
     ]);
-    expect(store.log()).toHaveLength(4);
+    expect(store.log()).toHaveLength(12);
     expect(store.log(SKIPPED)).toEqual([]);
     expect(new JobStore(mkdtempSync(join(tmpdir(), 'relay-empty-'))).log()).toEqual([]);
   });
 });
 
-describe('list view', () => {
-  test('shows the daemon, the counts, and the jobs table with the cursor on the newest job', () => {
+describe('frame', () => {
+  test('fills the terminal edge to edge: header, status, panels, message, footer', () => {
     const ctx = ctxFor();
-    const text = render(initialState(), ctx);
-    expect(text).toContain('review-relay v0.6.0  ✓ daemon running  pid 4242 · up 2h05m · 1/2 forwarders');
-    expect(text).toContain('4 jobs · 1 running · 1 done · 1 failed · 1 skipped');
-    expect(text).toMatch(/STATUS\s+STARTED\s+TIME\s+REPO\s+PR\s+COMMIT\s+SOURCE\s+ROUTE\s+SCORE\s+CODEX\s+CLAUDE/);
-    expect(text).toMatch(/› running\s+10-02 \d\d:00\s+3m30s\s+acme\/app\s+#7\s+aaaaaaaa/);
-    expect(text).toMatch(
-      / {2}done\s+.*acme\/app\s+#7\s+bbbbbbbb\s+github\s+-\s+3\/5\s+4\/5 1m05s\s+3\/5 1m30s\s+0\s+1\s+1/,
+    const frame = lines(initialState(), ctx);
+    expect(frame).toHaveLength(30);
+    for (const line of frame) expect(visibleLength(line)).toBe(160);
+    expect(frame[0]).toMatch(/^ ◆ REVIEW-RELAY {3}1 Jobs {3}2 Log\s+\/tmp\/relay-tui-\S+ · v0\.6\.0 $/);
+    expect(frame[1]).toContain(
+      '✓ daemon running  pid 4242 · up 2h05m · 1/2 forwarders  │  4 jobs · 1 running · 1 done · 1 failed · 1 skipped',
     );
-    expect(text).toMatch(/ {2}failed\s+.*acme\/lib\s+#12.*risky.*codex: timed out/);
-    expect(text).toContain(
-      '↑↓ move · enter open · l log · r re-run · o open PR · y copy url · / filter · s status · ? help · q quit',
+    expect(frame[2]).toMatch(/^╭─ Jobs ─+ 1 of 4 {2}\[\/] filter {3}\[s] status ─╮$/);
+    expect(frame[3]).toMatch(
+      /^│ {3}STATUS\s+STARTED\s+TIME\s+REPO\s+PR\s+COMMIT\s+SOURCE\s+ROUTE\s+SCORE\s+CODEX\s+CLAUDE.*│$/,
     );
-    expect(renderTui(initialState(), ctx, styles(false), '0.6.0')).toHaveLength(30);
+    expect(frame[4]).toMatch(/^│ ▌ running\s+10-02 \d\d:00\s+3m30s\s+acme\/app\s+#7\s+aaaaaaaa/);
+    expect(frame[5]).toMatch(
+      /^│ {3}done\s+.*acme\/app\s+#7\s+bbbbbbbb\s+github\s+-\s+3\/5\s+4\/5 1m05s\s+3\/5 1m30s\s+0\s+1\s+1/,
+    );
+    expect(frame[6]).toMatch(/^│ {3}failed\s+.*acme\/lib\s+#12.*risky.*codex: timed out/);
+    expect(frame[8]).toMatch(/^╰─+╯$/);
+    // The highlighted job's detail sits under the table.
+    expect(frame[9]).toMatch(/^╭─ Job · acme\/app #7 ─+ \[enter] expand ─╮$/);
+    expect(frame[10]).toContain('│ acme/app #7  aaaaaaaa  ! running');
+    expect(frame[28]).toBe(' '.repeat(160));
+    expect(frame[29]).toBe(
+      ' [↑↓] move   [enter] open   [l] log   [r] re-run   [o] open PR   [y] copy url   [/] filter   [s] status   [?] help   [q] quit'.padEnd(
+        160,
+      ),
+    );
+  });
+
+  test('in color, every row carries the page background and reopens it after each reset', () => {
+    const ctx = ctxFor();
+    const st = themeStyles(true);
+    const frame = renderTui(initialState(), ctx, st, '0.6.0');
+    const page = `\x1b[48;2;13;20;33;38;2;222;231;242m`;
+    for (const line of frame) {
+      expect(line.startsWith(page)).toBe(true);
+      expect(line.endsWith('\x1b[0m')).toBe(true);
+      expect(visibleLength(line)).toBe(160);
+      // Every reset is followed by some background again, so no cell shows the terminal's own color.
+      expect(line.replaceAll(`\x1b[0m\x1b[48;2;`, '').split('\x1b[0m').length).toBe(2);
+    }
+    expect(frame[4]).toContain(`\x1b[48;2;29;61;70;38;2;79;209;197m`);
+  });
+
+  test('asks for a bigger terminal under the minimum size', () => {
+    const ctx = ctxFor(undefined, { height: 10, width: 80 });
+    const frame = lines(initialState(), ctx);
+    expect(frame).toHaveLength(10);
+    expect(frame.join('\n')).toContain('REVIEW-RELAY');
+    expect(frame.join('\n')).toContain(`Resize to at least ${MIN_SIZE.width} × ${MIN_SIZE.height}.`);
+    expect(frame.join('\n')).toContain('Press q to exit.');
+    expect(frame.join('\n')).not.toContain('acme/app');
+    expect(lines(initialState(), ctxFor(undefined, { height: 30, width: 50 })).join('\n')).toContain('Resize');
+    expect(press(ctx, ['q']).done).toBe(true);
   });
 
   test('says so when the daemon is stopped and when there are no jobs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'relay-none-'));
     const ctx = ctxFor(dir, { daemon: { ...DAEMON, running: false, pid: null } });
     const text = render(initialState(), ctx);
-    expect(text).toContain('✗ daemon stopped  start it with review-relay start -d');
-    expect(text).toContain('no review jobs yet');
+    expect(text).toContain('✗ daemon stopped  start it with review-relay start -d  │  no review jobs yet');
     expect(text).toContain('Jobs appear here as the daemon reviews PRs');
-    expect(text).toContain('↑↓ move · / filter · s status · ? help · q quit');
+    expect(text).not.toContain('Job ·');
+    expect(text).toContain(' [↑↓] move   [/] filter   [s] status   [?] help   [q] quit');
     expect(render(initialState(), ctxFor(dir, { daemon: null }))).toContain('daemon …');
   });
+});
 
+describe('list view', () => {
   test('moves with the arrows, wraps, and jumps with g/G and the page keys', () => {
     const ctx = ctxFor();
-    const keys = (list: TuiState) => visible(list, ctx.store.jobs).findIndex((j) => j.key === list.selected);
+    const at = (list: TuiState) => visible(list, ctx.store.jobs).findIndex((j) => j.key === list.selected);
     expect(press(ctx, ['down']).selected).toBe(DONE.key);
-    expect(keys(press(ctx, ['down', 'down', 'j', 'j']))).toBe(0);
-    expect(keys(press(ctx, ['up']))).toBe(3);
-    expect(keys(press(ctx, ['G']))).toBe(3);
-    expect(keys(press(ctx, ['G', 'g']))).toBe(0);
-    expect(keys(press(ctx, ['pagedown']))).toBe(3);
-    expect(keys(press(ctx, ['pagedown', 'pageup']))).toBe(0);
-    expect(render(press(ctx, ['down']), ctx)).toMatch(/› done/);
+    expect(at(press(ctx, ['down', 'down', 'j', 'j']))).toBe(0);
+    expect(at(press(ctx, ['up']))).toBe(3);
+    expect(at(press(ctx, ['G']))).toBe(3);
+    expect(at(press(ctx, ['G', 'g']))).toBe(0);
+    expect(at(press(ctx, ['pagedown']))).toBe(3);
+    expect(at(press(ctx, ['pagedown', 'pageup']))).toBe(0);
+    const text = render(press(ctx, ['down']), ctx);
+    expect(text).toMatch(/▌ done/);
+    expect(text).toContain('2 of 4');
+    expect(text).toContain('Job · acme/app #7 ');
+    expect(text).toContain('│ acme/app #7  bbbbbbbb  ✓ done');
   });
 
   test('the cursor follows its job when newer jobs appear above it', () => {
@@ -220,19 +275,26 @@ describe('list view', () => {
     expect(onFailed.selected).toBe(FAILED.key);
     writeFileSync(join(dir, 'state.json'), JSON.stringify([RUNNING, DONE, FAILED]));
     ctx.store.refresh();
-    expect(render(onFailed, ctx)).toMatch(/› failed/);
+    expect(render(onFailed, ctx)).toMatch(/▌ failed/);
     // A selected job that vanished puts the cursor back on top.
     writeFileSync(join(dir, 'state.json'), JSON.stringify([RUNNING, DONE]));
     ctx.store.refresh();
-    expect(render(onFailed, ctx)).toMatch(/› running/);
+    expect(render(onFailed, ctx)).toMatch(/▌ running/);
   });
 
-  test('scrolls the table around the cursor on a short terminal', () => {
-    const ctx = ctxFor(undefined, { height: 9 });
-    const text = render(press(ctx, ['G']), ctx);
-    expect(text).toMatch(/↑ \d more/);
-    expect(text).toMatch(/› skipped/);
-    expect(renderTui(press(ctx, ['G']), ctx, styles(false), '0.6.0')).toHaveLength(9);
+  test('scrolls the table around the cursor when the jobs outgrow the panel, dropping the detail pane first', () => {
+    const ctx = ctxFor(dataDir(MANY), { height: 14 });
+    const frame = lines(press(ctx, ['G']), ctx);
+    expect(frame).toHaveLength(14);
+    const text = frame.join('\n');
+    expect(text).toMatch(/↑ \d+ more/);
+    expect(text).toMatch(/▌ done\s+.*#111/);
+    expect(text).toContain('12 of 12');
+    expect(text).not.toContain('Job ·');
+    // With room, the pane comes back and the table keeps the cursor in view.
+    const tall = render(press(ctx, ['G']), { ...ctx, height: 40 });
+    expect(tall).toContain('Job · acme/app #111');
+    expect(tall).not.toMatch(/more/);
   });
 
   test('/ filters by any column text, s cycles the status filter, esc clears them before quitting', () => {
@@ -242,13 +304,13 @@ describe('list view', () => {
     expect(typing.filter).toBe('lib');
     const text = render(typing, ctx);
     expect(text).toContain('showing 1  / lib▏');
-    expect(text).toContain('type to filter · ↑↓ move · enter keep filter · esc clear it');
+    expect(text).toContain(' [type] to filter   [↑↓] move   [enter] keep filter   [esc] clear it');
     expect(text).not.toContain('acme/app');
     expect(press(ctx, [...'q'], typing).done).toBeUndefined();
     const kept = press(ctx, ['enter'], typing);
     expect(kept.filtering).toBe(false);
-    expect(render(kept, ctx)).toContain('/ lib');
-    expect(render(kept, ctx)).toContain('esc clear filter');
+    expect(render(kept, ctx)).toContain('showing 1  / lib');
+    expect(render(kept, ctx)).toContain('[esc] clear filter');
     expect(press(ctx, ['escape'], kept).filter).toBeUndefined();
     expect(press(ctx, ['escape'], typing).filter).toBeUndefined();
     expect(visible(press(ctx, ['/', ...'risky', 'enter']), ctx.store.jobs)).toEqual([FAILED]);
@@ -275,9 +337,9 @@ describe('list view', () => {
     const help = press(ctx, ['?']);
     expect(help.view).toBe('help');
     const text = render(help, ctx);
-    expect(text).toContain('Keys');
+    expect(text).toMatch(/╭─ Keys ─+ \[any key] close ─╮/);
     expect(text).toContain('review the PR again (asks first)');
-    expect(text).toContain('any key closes help');
+    expect(text).toContain(' [any key] closes help');
     expect(press(ctx, ['x'], help).view).toBe('list');
   });
 });
@@ -288,7 +350,8 @@ describe('detail view', () => {
     const detail = press(ctx, ['down', 'enter']);
     expect(detail.view).toBe('detail');
     const text = render(detail, ctx);
-    expect(text).toContain('acme/app #7  bbbbbbbb  ✓ done');
+    expect(text).toMatch(/╭─ Job · acme\/app #7 ─+ \[n\/p] next\/prev {3}\[esc] back ─╮/);
+    expect(text).toContain('│ acme/app #7  bbbbbbbb  ✓ done');
     expect(text).toContain('url       https://github.com/acme/app/pull/7');
     expect(text).toMatch(/started {3}2026-10-02 \d\d:00:00 {2}2m05s/);
     expect(text).toContain('base      main');
@@ -301,12 +364,14 @@ describe('detail view', () => {
     expect(text).toContain('minor    Typo  src/a.ts:40');
     expect(text).toContain('Comment');
     expect(text).toContain('## review-relay: 3/5');
-    expect(text).toContain('↑↓ scroll · n/p next/prev · l log · r re-run · o open PR · y copy url · esc back');
+    expect(text).toContain(
+      ' [↑↓] scroll   [n/p] next/prev   [l] log   [r] re-run   [o] open PR   [y] copy url   [esc] back',
+    );
 
     const failed = press(ctx, ['n'], detail);
     expect(failed.selected).toBe(FAILED.key);
     const failedText = render(failed, ctx);
-    expect(failedText).toContain('acme/lib #12  cccccccc  ✗ failed');
+    expect(failedText).toContain('│ acme/lib #12  cccccccc  ✗ failed');
     expect(failedText).toContain('source    github · route risky');
     expect(failedText).toContain('error     codex: timed out after 1800s');
     expect(failedText).toContain('Log');
@@ -320,23 +385,26 @@ describe('detail view', () => {
   test('a running job shows its elapsed time and log so far; a skipped one says why it is empty', () => {
     const ctx = ctxFor();
     const text = render(press(ctx, ['enter']), ctx);
-    expect(text).toContain('acme/app #7  aaaaaaaa  ! running');
+    expect(text).toContain('│ acme/app #7  aaaaaaaa  ! running');
     expect(text).toContain('3m30s so far');
     expect(text).toContain('11:00:00 [acme/app] PR #7 @ aaaaaaaa: reviewing (opened)');
     expect(render(press(ctx, ['G', 'enter']), ctx)).toContain('a skip route matched, so no reviewer ran');
   });
 
-  test('scrolls with the arrows and page keys, clamped to the content', () => {
-    const ctx = ctxFor(undefined, { height: 12 });
+  test('scrolls with the arrows and page keys, clamped to the content, with the range in the border', () => {
+    const ctx = ctxFor(undefined, { height: 14 });
     const detail = press(ctx, ['down', 'enter']);
     const top = render(detail, ctx);
-    expect(top).toContain('acme/app #7');
+    expect(top).toContain('│ acme/app #7  bbbbbbbb');
+    expect(top).toContain(' 1-8 of 23 ');
     expect(top).not.toContain('## review-relay');
     const down = press(ctx, ['down', 'down', 'down'], detail);
     expect(down.scroll).toBe(3);
-    expect(render(down, ctx)).not.toContain('acme/app #7  bbbbbbbb');
+    expect(render(down, ctx)).not.toContain('│ acme/app #7  bbbbbbbb');
+    expect(render(down, ctx)).toContain(' 4-11 of 23 ');
     const bottom = press(ctx, ['G'], detail);
     expect(render(bottom, ctx)).toContain('Looks ok.');
+    expect(render(bottom, ctx)).toContain(' 16-23 of 23 ');
     expect(press(ctx, ['down'], bottom).scroll).toBe(bottom.scroll);
     expect(press(ctx, ['pageup', 'pageup', 'pageup'], bottom).scroll).toBe(0);
     expect(press(ctx, ['up'], detail).scroll).toBe(0);
@@ -345,29 +413,30 @@ describe('detail view', () => {
 
 describe('log view', () => {
   test('l shows the selected job’s log lines following the end; L switches to the whole log', () => {
-    const ctx = ctxFor(undefined, { height: 8 });
+    const ctx = ctxFor(undefined, { height: 14 });
     const log = press(ctx, ['down', 'down', 'l']);
     expect(log.view).toBe('log');
     const text = render(log, ctx);
-    expect(text).toContain('Log · acme/lib #12');
-    expect(text).toContain('following');
+    expect(text).toMatch(/╭─ Log · acme\/lib #12 ─+ following {2}\[L] whole log ─╮/);
     expect(text).toContain('09:30:00 [acme/lib] PR #12: failed');
     expect(text).not.toContain('server listening');
-    expect(text).toContain('↑↓ scroll · G follow · L whole log · esc back');
+    expect(text).toContain(' [↑↓] scroll   [G] follow   [L] whole log   [esc] back');
     const whole = press(ctx, ['L'], log);
     const wholeText = render(whole, ctx);
+    expect(wholeText).toContain('Log · /tmp/relay-tui-');
     expect(wholeText).toContain('daemon.log');
     expect(wholeText).toContain('server listening');
-    expect(wholeText).toContain('lines 3-4 of 4');
-    expect(wholeText).toContain('L this job only');
+    expect(wholeText).toContain('lines 5-12 of 12 · following  [L] this job only');
     // Scrolling up stops following; G resumes it.
     const up = press(ctx, ['up'], whole);
     expect(up.follow).toBe(false);
-    expect(render(up, ctx)).toContain('lines 2-3 of 4');
-    expect(press(ctx, ['up', 'up', 'up'], whole).scroll).toBe(0);
+    expect(render(up, ctx)).toContain('lines 4-11 of 12  [L]');
+    expect(press(ctx, ['up', 'up', 'up', 'up'], up).scroll).toBe(0);
     expect(press(ctx, ['G'], up).follow).toBe(true);
     expect(press(ctx, ['escape'], up).view).toBe('list');
     expect(render(press(ctx, ['G', 'l']), ctx)).toContain('nothing logged for this job yet');
+    // The Log tab lights up.
+    expect(lines(whole, ctx)[0]).toContain('1 Jobs   2 Log');
   });
 });
 
@@ -377,8 +446,8 @@ describe('actions', () => {
     const asked = press(ctx, ['down', 'r']);
     expect(asked.confirm).toBe('rerun');
     const text = render(asked, ctx);
-    expect(text).toContain('! review acme/app #7 again with the configured reviewers?');
-    expect(text).toContain('y re-run · any other key cancels');
+    expect(text).toContain(' ! review acme/app #7 again with the configured reviewers?');
+    expect(text).toContain(' [y] re-run   [any other key] cancel');
     const go = press(ctx, ['y'], asked);
     expect(go.confirm).toBeUndefined();
     expect(go.effect).toEqual({ kind: 'rerun', job: DONE });
@@ -387,10 +456,10 @@ describe('actions', () => {
     const no = press(ctx, ['n'], asked);
     expect(no.effect).toBeUndefined();
     expect(no.view).toBe('list');
-    expect(render(no, ctx)).toContain('cancelled');
+    expect(render(no, ctx)).toContain(' ○ cancelled');
     const busy = press(ctx, ['r']);
     expect(busy.confirm).toBeUndefined();
-    expect(render(busy, ctx)).toContain('acme/app #7 is being reviewed now');
+    expect(render(busy, ctx)).toContain(' ! acme/app #7 is being reviewed now');
     // The flash expires.
     expect(render(busy, { ...ctx, now: NOW + 5000 })).not.toContain('is being reviewed now');
     // r works from the detail view too.
@@ -415,6 +484,16 @@ describe('term helpers', () => {
     expect(clip('ab', 5)).toBe('ab');
     expect(clip('→→→→', 2)).toBe('→→');
     expect(clip('abc', 0)).toBe('');
+  });
+
+  test('fill pads to the width and, with a base, paints it and restores it after every reset', () => {
+    expect(fill('ab', 4)).toBe('ab  ');
+    expect(fill('abcdef', 4)).toBe('abcd');
+    expect(fill('\x1b[31mx\x1b[0my', 4, '48;2;1;2;3')).toBe(
+      '\x1b[48;2;1;2;3m\x1b[31mx\x1b[0m\x1b[48;2;1;2;3my  \x1b[0m',
+    );
+    expect(rgb(0x0d1421)).toBe('38;2;13;20;33');
+    expect(rgb(0xffffff, 'bg')).toBe('48;2;255;255;255');
   });
 
   test('moved wraps on the arrows and clamps on home, end, and the page keys', () => {

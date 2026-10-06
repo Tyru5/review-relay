@@ -15,8 +15,8 @@ import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState }
 import { reportDirFor } from './report.ts';
 import type { JobRecord, JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
-import { moved, runScreen, windowed } from './term.ts';
-import { fmtDuration, sanitize, styles, tildify, type Styles, type Tone } from './ui.ts';
+import { fill, moved, rgb, runScreen, windowed } from './term.ts';
+import { ANSI, fmtDuration, sanitize, styles, tildify, visibleLength, type Styles, type Tone } from './ui.ts';
 import { mergeFindings, type Finding, type MergedFinding, type Verdict } from './verdict.ts';
 
 const STATUSES: JobStatus[] = ['running', 'done', 'failed', 'skipped'];
@@ -235,10 +235,10 @@ const flash = (state: TuiState, text: string, ctx: TuiContext, tone: Tone = 'inf
   flash: { text, tone, until: ctx.now + FLASH_MS },
 });
 
-/** Lines above and below the body on every view: the two header lines and a blank, then a blank and the hint. */
-const HEAD = 3;
-const FOOT = 2;
-const room = (ctx: TuiContext, extra = 0) => Math.max(1, ctx.height - HEAD - FOOT - extra);
+/** Rows outside the body's panel: header, status, message, footer, and the panel's two borders. */
+const CHROME = 6;
+/** Lines a full-body panel shows. */
+const room = (ctx: TuiContext) => Math.max(1, ctx.height - CHROME);
 
 /** Keys that act on the highlighted job from the list and detail views. */
 function jobKeys(state: TuiState, key: string, ctx: TuiContext): TuiState | undefined {
@@ -301,7 +301,7 @@ function filtered(state: TuiState, key: string, ctx: TuiContext): TuiState {
 
 function listMove(state: TuiState, key: string, ctx: TuiContext): TuiState | undefined {
   const list = visible(state, ctx.store.jobs);
-  const at = moved(cursorOf(state, list), key, list.length, Math.max(1, room(ctx, 1) - 1));
+  const at = moved(cursorOf(state, list), key, list.length, Math.max(1, room(ctx) - 2));
   return at === undefined ? undefined : { ...state, selected: list[at]!.key };
 }
 
@@ -372,8 +372,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
 
   // Log view.
   const lines = ctx.store.log(state.wholeLog ? undefined : selectedJob(state, ctx));
-  // One body line is the log's title.
-  const scroll = scrolled(base, key, lines.length, room(ctx) - 1);
+  const scroll = scrolled(base, key, lines.length, room(ctx));
   if (scroll) return scroll;
   switch (key) {
     case 'L':
@@ -474,6 +473,87 @@ const HELP_LINES: [string, string][] = [
   ['q', 'quit'],
 ];
 
+/** The Model Router palette, so this TUI looks like the user's other terminal tools. */
+const PALETTE = {
+  bg: 0x0d1421,
+  panel: 0x131d2d,
+  fg: 0xdee7f2,
+  muted: 0x8da0b4,
+  accent: 0x4fd1c5,
+  line: 0x2e4156,
+  selectionBg: 0x1d3d46,
+  selectionFg: 0x4fd1c5,
+  success: 0x4fd1c5,
+  warn: 0xf6c15b,
+  red: 0xfa7e7e,
+  blue: 0x73b8ff,
+};
+type Swatch = keyof typeof PALETTE;
+const fg = (name: Swatch) => `\x1b[${rgb(PALETTE[name])}m`;
+/** SGR parameters painting a row's background and text, for `fill`. */
+const base = (bg: Swatch, text: Swatch = 'fg') => `${rgb(PALETTE[bg], 'bg')};${rgb(PALETTE[text])}`;
+
+/** The TUI's painter: the shared `Styles` shape on the palette's 24-bit colors instead of the 16 basic ones. */
+export function themeStyles(color: boolean): Styles {
+  const paint = (code: string, s: string) => (color && s ? `${code}${s}${ANSI.reset}` : s);
+  const tones: Record<Tone, string> = {
+    success: fg('success'),
+    warning: fg('warn'),
+    danger: fg('red'),
+    info: fg('blue'),
+    muted: fg('muted'),
+  };
+  const icons: Record<Tone, string> = { success: '✓', warning: '!', danger: '✗', info: '•', muted: '○' };
+  return {
+    color,
+    title: (s) => paint(ANSI.bold + fg('accent'), s),
+    section: (s) => paint(fg('accent'), s),
+    key: (s) => paint(fg('accent'), s),
+    command: (s) => paint(fg('accent'), s),
+    muted: (s) => paint(fg('muted'), s),
+    bold: (s) => paint(ANSI.bold, s),
+    tone: (tone, s) => paint(tones[tone], s),
+    badge: (tone, label) => paint(tones[tone], `${icons[tone]} ${label}`),
+    dot: (tone) => paint(tones[tone], '●'),
+    paint,
+  };
+}
+
+/** `[key] label   [key] label`, keys in the accent. */
+const hints = (st: Styles, pairs: [string, string][]) =>
+  pairs.map(([key, label]) => `${st.paint(ANSI.bold + fg('accent'), `[${key}]`)} ${st.muted(label)}`).join('   ');
+
+interface PanelOptions {
+  title: string;
+  /** Muted text in the top border, before the hints. */
+  note?: string;
+  hints?: [string, string][];
+  focused?: boolean;
+}
+
+/** `lines` inside a rounded border, exactly `height` rows by `width` columns, with the title and hints in the top edge. */
+function panel(st: Styles, width: number, height: number, lines: string[], opts: PanelOptions): string[] {
+  const inner = Math.max(1, width - 4);
+  const bg = st.color ? base('panel') : undefined;
+  const edge = (s: string) => st.paint(fg(opts.focused ? 'accent' : 'line'), s);
+  const left = `${edge('╭─')} ${st.bold(opts.title)} `;
+  const tail = [opts.note && st.muted(opts.note), opts.hints?.length && hints(st, opts.hints)]
+    .filter(Boolean)
+    .join('  ');
+  let right = tail ? ` ${tail} ${edge('─╮')}` : edge('─╮');
+  let dashes = width - visibleLength(left) - visibleLength(right);
+  if (dashes < 0) {
+    right = edge('─╮');
+    dashes = Math.max(0, width - visibleLength(left) - 2);
+  }
+  const top = fill(`${left}${edge('─'.repeat(dashes))}${right}`, width, bg);
+  const rows = Array.from({ length: Math.max(0, height - 2) }, (_, i) =>
+    fill(`${edge('│')} ${fill(lines[i] ?? '', inner, bg)} ${edge('│')}`, width, bg),
+  );
+  const bottom = fill(edge(`╰${'─'.repeat(Math.max(0, width - 2))}╯`), width, bg);
+  return [top, ...rows, bottom];
+}
+
 function daemonLine(ctx: TuiContext, st: Styles): string {
   const d = ctx.daemon;
   if (!d) return st.muted('daemon …');
@@ -485,30 +565,92 @@ function daemonLine(ctx: TuiContext, st: Styles): string {
   return `${st.badge('success', 'daemon running')}  ${st.muted(`pid ${d.pid}${up}${forwarders}`)}`;
 }
 
-function hint(state: TuiState, list: JobRecord[]): string {
-  if (state.confirm) return 'y re-run · any other key cancels';
-  if (state.filtering) return 'type to filter · ↑↓ move · enter keep filter · esc clear it';
+/** The footer's key hints for the current view. */
+function footer(state: TuiState, list: JobRecord[]): [string, string][] {
+  if (state.confirm)
+    return [
+      ['y', 're-run'],
+      ['any other key', 'cancel'],
+    ];
+  if (state.filtering) {
+    return [
+      ['type', 'to filter'],
+      ['↑↓', 'move'],
+      ['enter', 'keep filter'],
+      ['esc', 'clear it'],
+    ];
+  }
+  const job: [string, string][] = list.length
+    ? [
+        ['l', 'log'],
+        ['r', 're-run'],
+        ['o', 'open PR'],
+        ['y', 'copy url'],
+      ]
+    : [];
   switch (state.view) {
     case 'help':
-      return 'any key closes help';
+      return [['any key', 'closes help']];
     case 'detail':
-      return '↑↓ scroll · n/p next/prev · l log · r re-run · o open PR · y copy url · esc back';
+      return [['↑↓', 'scroll'], ['n/p', 'next/prev'], ...job, ['esc', 'back']];
     case 'log':
-      return `↑↓ scroll · G follow · L ${state.wholeLog ? 'this job only' : 'whole log'} · esc back`;
-    default: {
-      const back = state.filter || state.status ? 'esc clear filter' : 'q quit';
-      const job = list.length ? 'enter open · l log · r re-run · o open PR · y copy url · ' : '';
-      return `↑↓ move · ${job}/ filter · s status · ? help · ${back}`;
-    }
+      return [
+        ['↑↓', 'scroll'],
+        ['G', 'follow'],
+        ['L', state.wholeLog ? 'this job only' : 'whole log'],
+        ['esc', 'back'],
+      ];
+    default:
+      return [
+        ['↑↓', 'move'],
+        ...(list.length ? ([['enter', 'open']] as [string, string][]) : []),
+        ...job,
+        ['/', 'filter'],
+        ['s', 'status'],
+        ['?', 'help'],
+        state.filter || state.status ? ['esc', 'clear filter'] : ['q', 'quit'],
+      ];
   }
 }
 
-/** Draws the current view as `height` lines; the loop clips them to the terminal's width. */
+/** The smallest terminal the layout fits; below it the screen only asks for more room. */
+export const MIN_SIZE = { width: 60, height: 14 };
+
+/** Draws the current view as `height` rows of `width` columns, painted edge to edge. */
 export function renderTui(state: TuiState, ctx: TuiContext, st: Styles, version: string): string[] {
+  const { width, height } = ctx;
+  const page = st.color ? base('bg') : undefined;
+  const row = (line: string) => fill(line, width, page);
+  if (width < MIN_SIZE.width || height < MIN_SIZE.height) {
+    const center = (text: string) => ' '.repeat(Math.max(0, Math.floor((width - visibleLength(text)) / 2))) + text;
+    const top = Math.max(0, Math.floor((height - 3) / 2));
+    const lines = [
+      center(st.title('REVIEW-RELAY')),
+      center(`Resize to at least ${MIN_SIZE.width} × ${MIN_SIZE.height}.`),
+      center(st.muted('Press q to exit.')),
+    ];
+    return Array.from({ length: height }, (_, i) => row(lines[i - top] ?? ''));
+  }
+
   const jobs = ctx.store.jobs;
   const list = visible(state, jobs);
   const cursor = cursorOf(state, list);
   const job = list[cursor];
+
+  // Header: the name, the tabs, and the data folder on the right.
+  const tabs = (['Jobs', 'Log'] as const).map((name, i) => {
+    const active = (state.view === 'log') === (name === 'Log');
+    const label = ` ${i + 1} ${name} `;
+    return active
+      ? st.paint(`\x1b[${rgb(PALETTE.accent, 'bg')};${rgb(PALETTE.bg)}m${ANSI.bold}`, label)
+      : st.muted(label);
+  });
+  const left = ` ${st.tone('success', '◆')} ${st.bold('REVIEW-RELAY')}  ${tabs.join(' ')}`;
+  const right = st.muted(`${tildify(ctx.store.dataDir)} · v${version} `);
+  const gap = width - visibleLength(left) - visibleLength(right);
+  const header = gap >= 4 ? `${left}${' '.repeat(gap)}${right}` : left;
+
+  // Status: the daemon, the counts, and the active filters.
   const counts = STATUSES.map((s) => [s, jobs.filter((j) => j.status === s).length] as const)
     .filter(([, n]) => n > 0)
     .map(([s, n]) => st.tone(STATUS_TONES[s], `${n} ${s}`));
@@ -522,68 +664,110 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Styles, version:
       ? st.muted(`/ ${state.filter}`)
       : '';
   const statusText = state.status ? st.tone(STATUS_TONES[state.status], `[${state.status}]`) : '';
-  const head = [
-    `${st.title('review-relay')} ${st.muted(`v${version}`)}  ${daemonLine(ctx, st)}`,
-    `${summary}${narrowed}  ${[statusText, filterText].filter(Boolean).join(' ')}`.trimEnd(),
-    '',
-  ];
-  const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
-  const notice = state.confirm
-    ? `${st.badge('warning', `review ${job?.repo} #${job?.pr} again with the configured reviewers?`)}`
-    : live
-      ? st.badge(live.tone, live.text)
-      : undefined;
-  const foot = ['', ...(notice ? [notice] : []), st.muted(hint(state, list))];
-  const bodyRoom = Math.max(1, ctx.height - head.length - foot.length);
-  const paint = st.paint;
-  const paintCode = (code: string, text: string) => paint(`\x1b[${code}m`, text);
+  const status = ` ${daemonLine(ctx, st)}  ${st.muted('│')}  ${summary}${narrowed}  ${[statusText, filterText].filter(Boolean).join(' ')}`;
 
-  let body: string[];
+  // Message: a confirmation, a flash, or nothing.
+  const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
+  const message = state.confirm
+    ? ` ${st.badge('warning', `review ${job?.repo} #${job?.pr} again with the configured reviewers?`)}`
+    : live
+      ? ` ${st.badge(live.tone, live.text)}`
+      : '';
+
+  const body = height - 4;
+  const inner = Math.max(1, width - 4);
+  const paintCode = (code: string, text: string) => st.paint(`\x1b[${code}m`, text);
+  let panels: string[];
+
   if (state.view === 'help') {
-    const width = Math.max(...HELP_LINES.map(([k]) => k.length));
-    body = [st.section('Keys'), ...HELP_LINES.map(([k, what]) => `  ${st.key(k.padEnd(width))}  ${what}`)];
+    const w = Math.max(...HELP_LINES.map(([k]) => k.length));
+    const lines = HELP_LINES.map(([k, what]) => `${st.key(k.padEnd(w))}  ${what}`);
+    panels = panel(st, width, body, lines, { title: 'Keys', hints: [['any key', 'close']] });
   } else if (state.view === 'detail' && job) {
     const lines = detailLines(job, ctx, st);
-    const top = Math.min(state.scroll, Math.max(0, lines.length - bodyRoom));
-    body = lines.slice(top, top + bodyRoom);
+    const avail = body - 2;
+    const top = Math.min(state.scroll, Math.max(0, lines.length - avail));
+    const note =
+      lines.length > avail ? `${top + 1}-${Math.min(lines.length, top + avail)} of ${lines.length}` : undefined;
+    panels = panel(st, width, body, lines.slice(top, top + avail), {
+      title: `Job · ${job.repo} #${job.pr}`,
+      note,
+      hints: [
+        ['n/p', 'next/prev'],
+        ['esc', 'back'],
+      ],
+      focused: true,
+    });
   } else if (state.view === 'log') {
     const lines = ctx.store.log(state.wholeLog ? undefined : job);
-    const title = state.wholeLog ? tildify(logFilePath(ctx.store.dataDir)) : job ? `${job.repo} #${job.pr}` : 'log';
+    const title = state.wholeLog
+      ? `Log · ${tildify(logFilePath(ctx.store.dataDir))}`
+      : job
+        ? `Log · ${job.repo} #${job.pr}`
+        : 'Log';
     const shown = lines.length ? lines : [st.muted(state.wholeLog ? 'no log yet' : 'nothing logged for this job yet')];
-    const avail = bodyRoom - 1;
+    const avail = body - 2;
     const max = Math.max(0, shown.length - avail);
     const top = state.follow ? max : Math.min(state.scroll, max);
     const range =
-      shown.length > avail
-        ? st.muted(`  lines ${top + 1}-${Math.min(shown.length, top + avail)} of ${shown.length}`)
-        : '';
-    body = [
-      `${st.section(`Log · ${title}`)}${range}${state.follow ? st.muted('  following') : ''}`,
-      ...shown.slice(top, top + avail),
-    ];
-  } else if (list.length === 0) {
-    body = [
-      st.muted(
-        jobs.length === 0
-          ? 'Jobs appear here as the daemon reviews PRs, or run one with: review-relay run --repo owner/name --pr N'
-          : 'no job matches the filter',
-      ),
-    ];
-  } else {
-    const table = renderStatus(list, {
-      dataDir: ctx.store.dataDir,
-      reviewers: ctx.reviewers,
-      color: st.color,
-      now: ctx.now,
-      reports: list.map((j) => ctx.store.report(j)),
+      shown.length > avail ? `lines ${top + 1}-${Math.min(shown.length, top + avail)} of ${shown.length}` : '';
+    const note = [range, state.follow && 'following'].filter(Boolean).join(' · ') || undefined;
+    panels = panel(st, width, body, shown.slice(top, top + avail), {
+      title,
+      note,
+      hints: [['L', state.wholeLog ? 'this job only' : 'whole log']],
+      focused: true,
     });
-    const [header, ...rows] = table;
-    const marked = rows.map((row, i) => `${i === cursor ? st.tone('info', '›') : ' '} ${row}`);
-    body = [`  ${header}`, ...windowed(marked, cursor, bodyRoom - 1, paintCode)];
+  } else {
+    // Jobs on top; the highlighted job's detail below when there is room for both.
+    const detailMin = 8;
+    const wanted = Math.max(5, list.length + 3);
+    const split = job && body - detailMin >= 5;
+    const jobsH = split ? Math.min(body - detailMin, wanted) : body;
+    let lines: string[];
+    if (list.length === 0) {
+      lines = [
+        st.muted(
+          jobs.length === 0
+            ? 'Jobs appear here as the daemon reviews PRs, or run one with: review-relay run --repo owner/name --pr N'
+            : 'no job matches the filter',
+        ),
+      ];
+    } else {
+      const [head, ...rows] = renderStatus(list, {
+        dataDir: ctx.store.dataDir,
+        reviewers: ctx.reviewers,
+        color: st.color,
+        now: ctx.now,
+        reports: list.map((j) => ctx.store.report(j)),
+      });
+      const marked = rows.map((r, i) =>
+        i === cursor
+          ? fill(`${st.tone('success', '▌')} ${r}`, inner, st.color ? base('selectionBg', 'selectionFg') : undefined)
+          : `  ${r}`,
+      );
+      lines = [`  ${head}`, ...windowed(marked, cursor, jobsH - 3, paintCode)];
+    }
+    panels = panel(st, width, jobsH, lines, {
+      title: 'Jobs',
+      note: list.length > 1 ? `${cursor + 1} of ${list.length}` : undefined,
+      hints: [
+        ['/', 'filter'],
+        ['s', 'status'],
+      ],
+      focused: true,
+    });
+    if (split) {
+      panels.push(
+        ...panel(st, width, body - jobsH, detailLines(job!, ctx, st), {
+          title: `Job · ${job!.repo} #${job!.pr}`,
+          hints: [['enter', 'expand']],
+        }),
+      );
+    }
   }
-  return [...head, ...body, ...Array(Math.max(0, bodyRoom - body.length)).fill(''), ...foot].map((l) =>
-    l ? ` ${l}` : l,
-  );
+
+  return [row(header), row(status), ...panels.map(row), row(message), row(` ${hints(st, footer(state, list))}`)];
 }
 
 /** Opens `url` with the platform's opener; WSL goes through `wslview` when it is installed. */
@@ -633,7 +817,7 @@ const DAEMON_EVERY = 5;
 
 export async function tui(config: Config, configPath: string, version: string): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('tui needs an interactive terminal');
-  const st = styles(true);
+  const st = themeStyles(true);
   const store = new JobStore(config.dataDir);
   store.refresh();
   let daemon: DaemonState | null = await inspectDaemon(config.dataDir, config.port);
