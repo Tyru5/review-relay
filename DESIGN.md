@@ -237,7 +237,7 @@ Paper is the second material. It appears as score cards, the scoresheet, the com
 - Gold as the counting mark and the action color; red only as ink on paper.
 - One condensed broadcast voice for every heading; Doto LED only for result numerals.
 - Square broadcast graphics, softly rounded physical props.
-- One orchestrated motion moment on load; everything else is still.
+- One orchestrated motion moment on load; brief view transitions preserve navigation continuity.
 
 ## Colors
 
@@ -361,7 +361,9 @@ There is no site navigation. The top-left broadcast bug (a square Scoreboard tab
 ### Motion
 One orchestrated moment plays once on load. The cards rise from below the desk (900ms, expo-out, staggered 140ms from 250ms), the ring draws itself around the lowest card (700ms, expo-out, 650ms after the last card), and the result board's numeral lights in three steps (600ms, 450ms after the ring). Everything else only transitions color on hover. With reduced motion, all animation and transitions are off and the final state shows at once.
 
-**The One Moment Rule.** Only the judges' raise, the ring, and the board light animate. Nothing else on the page moves; hover only changes color.
+Route changes use native View Transitions: the outgoing page fades over 120ms, the incoming page over 280ms with expo-out easing. The header brand is a shared element, moving between its header positions over 280ms. Internal links use client-side routing, preserving history, scroll restoration, and documentation deep links. Section jumps do not animate. Reduced motion disables navigation animation, and unsupported browsers navigate normally. No motion library is required.
+
+**The One Moment Rule.** Only the judges' raise, the ring, and the board light perform an entrance sequence. Navigation transitions provide continuity, never additional choreography. No scroll reveals; hover only changes color.
 
 ## Do's and Don'ts
 
@@ -380,4 +382,4 @@ One orchestrated moment plays once on load. The cards rise from below the desk (
 - **Don't** round broadcast graphics (bands, tabs, nameplates, rows, chips); only physical props get corners.
 - **Don't** put gold on a score, step, or value that does not count.
 - **Don't** add a second display face or set Doto on words.
-- **Don't** animate anything beyond the one load moment of raise, ring, and light.
+- **Don't** add entrance or scroll animations beyond the one load moment of raise, ring, and light. Keep navigation transitions brief.

@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { GitHubMark } from '../components/GitHubMark';
 import { JudgesDesk, ResultBoard } from '../components/JudgesPanel';
@@ -66,21 +66,22 @@ function Home() {
     <>
       <section className="flex min-h-svh flex-col">
         <header className={`${CONTAINER} flex flex-wrap items-center justify-between gap-3 pt-5`}>
-          <a
-            href="/"
-            className="flex items-center gap-2.5 bg-board py-2 pr-4 pl-3 text-lg font-extrabold [font-stretch:85%]"
+          <Link
+            to="/"
+            viewTransition={false}
+            className="site-brand flex items-center gap-2.5 bg-board py-2 pr-4 pl-3 text-lg font-extrabold [font-stretch:85%]"
           >
             <Logo className="size-7" cue="var(--color-haze)" check="var(--color-gold)" />
             review-relay
-          </a>
+          </Link>
           <div className="flex items-center gap-2">
             {version && <span className="bg-board px-3 py-2 font-mono text-xs text-haze">v{version}</span>}
-            <a
-              href="/docs"
+            <Link
+              to="/docs"
               className="bg-board px-3 py-2 text-xs font-bold text-chalk transition-colors hover:text-gold"
             >
               Docs
-            </a>
+            </Link>
             <a
               href={REPO}
               className="flex items-center gap-2 bg-board px-3 py-2 text-xs font-bold text-haze transition-colors hover:text-chalk"
@@ -224,13 +225,14 @@ function Home() {
             </p>
             <nav aria-label="Documentation" className="mt-6 divide-y divide-rule border-y border-rule">
               {[
-                ['Quick start', '/docs#quick-start'],
-                ['Configuration reference', '/docs#configuration'],
-                ['Routing rules', '/docs#routing'],
-              ].map(([title, href]) => (
-                <a
-                  key={href}
-                  href={href}
+                ['Quick start', 'quick-start'],
+                ['Configuration reference', 'configuration'],
+                ['Routing rules', 'routing'],
+              ].map(([title, hash]) => (
+                <Link
+                  key={hash}
+                  to="/docs"
+                  hash={hash}
                   className="flex items-center justify-between py-4 font-semibold transition-colors hover:text-gold"
                 >
                   {title}
@@ -244,7 +246,7 @@ function Home() {
                   >
                     <path d="M3 10h13m-5-5 5 5-5 5" />
                   </svg>
-                </a>
+                </Link>
               ))}
             </nav>
           </div>

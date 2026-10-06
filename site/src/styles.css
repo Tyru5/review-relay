@@ -119,11 +119,54 @@
   animation: light 600ms steps(3, end) both;
 }
 
+/* Quiet navigation continuity, separate from the judges' one-time entrance. */
+.site-brand {
+  view-transition-name: site-brand;
+}
+
+@keyframes page-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+}
+
+::view-transition {
+  pointer-events: none;
+}
+::view-transition-group(root),
+::view-transition-group(site-brand) {
+  animation-duration: 280ms;
+  animation-timing-function: var(--ease-out-expo);
+}
+::view-transition-old(root) {
+  animation: page-out 120ms ease-out both;
+}
+::view-transition-new(root) {
+  animation: page-in 280ms var(--ease-out-expo) both;
+}
+::view-transition-old(site-brand),
+::view-transition-new(site-brand) {
+  height: 100%;
+  object-fit: contain;
+  animation-duration: 180ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation: none !important;
     transition: none !important;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }

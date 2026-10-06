@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Logo } from '../components/Logo';
 import { LowerThird } from '../components/LowerThird';
@@ -69,15 +69,15 @@ function Docs() {
       </a>
       <header className="docs-header">
         <div className="docs-header-inner">
-          <a href="/" className="docs-brand">
+          <Link to="/" className="site-brand docs-brand">
             <Logo className="size-7" cue="var(--color-haze)" check="var(--color-gold)" />
             review-relay
-          </a>
+          </Link>
           <nav aria-label="Site navigation">
-            <a href="/">Home</a>
-            <a href="/docs" aria-current="page">
+            <Link to="/">Home</Link>
+            <Link to="/docs" viewTransition={false} aria-current="page">
               Docs
-            </a>
+            </Link>
           </nav>
         </div>
       </header>
@@ -573,7 +573,7 @@ function Docs() {
             </details>
             <p className="docs-end">
               <a href="#quick-start">Back to quick start</a>
-              <a href="/">Back to the landing page</a>
+              <Link to="/">Back to the landing page</Link>
             </p>
           </Section>
         </main>

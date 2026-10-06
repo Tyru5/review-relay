@@ -1,4 +1,4 @@
-import { createFileRoute, notFound } from '@tanstack/react-router';
+import { createFileRoute, Link, notFound } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { CommandBlock, InlineCode } from '../components/Code';
 import { Install } from '../components/Install';
@@ -52,10 +52,10 @@ function SystemPage() {
   return (
     <div className="mx-auto max-w-6xl px-5 sm:px-8">
       <header className="flex items-center justify-between gap-4 py-6">
-        <a href="/" className="flex shrink-0 items-center gap-2.5 text-lg font-extrabold tracking-tight">
+        <Link to="/" className="site-brand flex shrink-0 items-center gap-2.5 text-lg font-extrabold tracking-tight">
           <Logo className="size-8" />
           review-relay
-        </a>
+        </Link>
         <span className="text-right text-xs text-muted">Dev only. Not served on reviewrelay.dev.</span>
       </header>
 
