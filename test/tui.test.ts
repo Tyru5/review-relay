@@ -363,7 +363,9 @@ describe('detail view', () => {
     expect(text).toContain('by codex, claude');
     expect(text).toContain('minor    Typo  src/a.ts:40');
     expect(text).toContain('Comment');
-    expect(text).toContain('## review-relay: 3/5');
+    // The comment's markdown is rendered: the heading loses its hashes.
+    expect(text).toContain('│   review-relay: 3/5');
+    expect(text).not.toContain('## review-relay');
     expect(text).toContain(
       ' [↑↓] scroll   [n/p] next/prev   [l] log   [r] re-run   [o] open PR   [y] copy url   [esc] back',
     );

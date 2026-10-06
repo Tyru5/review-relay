@@ -12,6 +12,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
+import { renderMarkdown } from './markdown.ts';
 import { reportDirFor } from './report.ts';
 import type { JobRecord, JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
@@ -450,7 +451,9 @@ export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string
   }
 
   if (detail.comment.length) {
-    lines.push('', st.section('Comment'), ...detail.comment.map((l) => `  ${l}`));
+    // Two for the panel's padding and border on each side, two for the section indent.
+    const width = Math.max(20, ctx.width - 6);
+    lines.push('', st.section('Comment'), ...renderMarkdown(detail.comment.join('\n'), width, st).map((l) => `  ${l}`));
   } else if (job.status === 'running' || job.status === 'failed') {
     const log = ctx.store.log(job);
     lines.push(
