@@ -128,12 +128,42 @@ export interface Screen {
  * Runs `screen` on the terminal's alternate screen until `key` says it is finished. Redraws after every key, tick,
  * and resize; restores the terminal before settling, so whatever prints next (an error too) stays visible.
  */
+/**
+ * The escape-sequence string that draws `lines` on a `rows` × `cols` terminal. Every row is positioned explicitly,
+ * and a row's leftovers are erased only when it is narrower than the terminal: after a full-width row the cursor
+ * sits on the last column, where erase-line would blank that cell. Rows below the frame are cleared the same way.
+ */
+export function frame(lines: string[], rows: number, cols: number): string {
+  const out = lines.slice(0, rows).map((line, i) => {
+    const cut = clip(line, cols);
+    return `\x1b[${i + 1};1H${cut}${visibleLength(cut) < cols ? '\x1b[K' : ''}`;
+  });
+  if (lines.length < rows) out.push(`\x1b[${lines.length + 1};1H\x1b[J`);
+  return out.join('');
+}
+
+/**
+ * How many colors the terminal takes: `COLORTERM` says so on most terminals; a few well-known ones are recognized
+ * by name when it is unset. `FORCE_COLOR=3` asks for 24-bit color outright.
+ */
+export function colorDepth(env: NodeJS.ProcessEnv = process.env): 'truecolor' | 'basic' {
+  if (env.FORCE_COLOR === '3') return 'truecolor';
+  if (/^(truecolor|24bit)$/i.test(env.COLORTERM ?? '')) return 'truecolor';
+  if (/-direct$|truecolor|24bit/i.test(env.TERM ?? '')) return 'truecolor';
+  if (/^(vscode|iTerm\.app|WezTerm|Hyper|ghostty|kitty|Alacritty|WarpTerminal|Tabby)$/i.test(env.TERM_PROGRAM ?? '')) {
+    return 'truecolor';
+  }
+  // Windows Terminal doesn't set COLORTERM but does set a session id.
+  if (env.WT_SESSION) return 'truecolor';
+  return 'basic';
+}
+
 export function runScreen(screen: Screen): Promise<void> {
   const { stdin, stdout } = process;
-  // Home the cursor and clear each line's leftovers instead of the whole screen, so redraws don't flicker.
+  // Redraw in place instead of clearing the whole screen, so redraws don't flicker.
   const draw = () => {
-    const lines = screen.render(stdout.rows || 24, stdout.columns || 80).map((l) => clip(l, stdout.columns || 80));
-    stdout.write(`\x1b[H${lines.join('\x1b[K\n')}\x1b[K\x1b[J`);
+    const [rows, cols] = [stdout.rows || 24, stdout.columns || 80];
+    stdout.write(frame(screen.render(rows, cols), rows, cols));
   };
   const restore = () => stdout.write('\x1b[?25h\x1b[?1049l');
   return new Promise((resolve, reject) => {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { DaemonState } from '../src/daemon.ts';
 import { reportDirFor } from '../src/report.ts';
 import type { JobRecord } from '../src/state.ts';
-import { clip, fill, moved, parseKeys, rgb } from '../src/term.ts';
+import { clip, colorDepth, fill, frame, moved, parseKeys, rgb } from '../src/term.ts';
 import {
   initialState,
   JobStore,
@@ -19,7 +19,7 @@ import {
   type TuiContext,
   type TuiState,
 } from '../src/tui.ts';
-import { styles, visibleLength } from '../src/ui.ts';
+import { visibleLength } from '../src/ui.ts';
 
 const job = (sha: string, patch: Partial<JobRecord> = {}): JobRecord => ({
   key: `acme/app@${sha}`,
@@ -141,7 +141,7 @@ function ctxFor(dir = dataDir(), patch: Partial<TuiContext> = {}): TuiContext {
 const press = (ctx: TuiContext, keys: string[], state: TuiState = initialState()) =>
   keys.reduce((s, key) => reduce(s, key, ctx), state);
 
-const lines = (state: TuiState, ctx: TuiContext) => renderTui(state, ctx, styles(false), '0.6.0');
+const lines = (state: TuiState, ctx: TuiContext) => renderTui(state, ctx, themeStyles(false), '0.6.0');
 const render = (state: TuiState, ctx: TuiContext) => lines(state, ctx).join('\n');
 
 describe('readJobs and JobStore', () => {
@@ -211,6 +211,14 @@ describe('readJobs and JobStore', () => {
     ]);
     expect(store.log()).toHaveLength(12);
     expect(store.log(SKIPPED)).toEqual([]);
+    // PR #12's view doesn't pick up PR #120 or #1.
+    writeFileSync(
+      join(store.dataDir, 'daemon.log'),
+      '09:40:00 [acme/lib] PR #120 @ ffffffff: reviewing (opened)\n09:41:00 [acme/lib] PR #1 @ 11111111: reviewing\n',
+      { flag: 'a' },
+    );
+    expect(store.log(FAILED)).toHaveLength(2);
+    expect(store.log({ ...FAILED, pr: 1 })).toEqual(['09:41:00 [acme/lib] PR #1 @ 11111111: reviewing']);
     expect(new JobStore(tempDir('relay-empty-')).log()).toEqual([]);
   });
 });
@@ -259,6 +267,46 @@ describe('frame', () => {
       expect(line.replaceAll(`\x1b[0m\x1b[48;2;`, '').split('\x1b[0m').length).toBe(2);
     }
     expect(frame[4]).toContain(`\x1b[48;2;29;61;70;38;2;79;209;197m`);
+  });
+
+  test('strips terminal escapes from reviewer-written paths and errors', () => {
+    const dir = dataDir([DONE, { ...FAILED, error: 'codex: \x1b]52;c;ZXZpbA==\x07timed out \x1b[31mred\x1b[0m' }]);
+    writeFileSync(
+      join(reportDirFor(dir, DONE), 'codex.json'),
+      JSON.stringify({
+        score: 4,
+        verdict: {
+          findings: [{ ...finding('major', 3, 'Null deref'), file: '\x1b]52;c;ZXZpbA==\x07src/\x1b[2Ja.ts' }],
+        },
+      }),
+    );
+    const ctx = ctxFor(dir);
+    const list = render(initialState(), ctx);
+    expect(list).toContain('codex: timed out red');
+    expect(list).not.toContain('\x1b');
+    const detail = render(press(ctx, ['enter']), ctx);
+    expect(detail).toContain('Null deref  src/a.ts:3');
+    expect(detail).not.toContain('\x1b');
+  });
+
+  test('without 24-bit color, the palette falls back to the basic colors and paints no backgrounds', () => {
+    const ctx = ctxFor();
+    const st = themeStyles(true, 'basic');
+    const text = renderTui(initialState(), ctx, st, '0.6.0').join('\n');
+    expect(text).not.toContain('48;2;');
+    expect(text).not.toContain('38;2;');
+    expect(text).toContain('\x1b[36m');
+    // The selected row shows as reverse video.
+    expect(text).toContain('\x1b[7m');
+    expect(renderTui(initialState(), ctx, themeStyles(false, 'basic'), '0.6.0').join('')).not.toContain('\x1b');
+    expect(colorDepth({ COLORTERM: 'truecolor' })).toBe('truecolor');
+    expect(colorDepth({ COLORTERM: '24bit' })).toBe('truecolor');
+    expect(colorDepth({ TERM: 'xterm-direct' })).toBe('truecolor');
+    expect(colorDepth({ TERM_PROGRAM: 'vscode' })).toBe('truecolor');
+    expect(colorDepth({ WT_SESSION: 'abc' })).toBe('truecolor');
+    expect(colorDepth({ FORCE_COLOR: '3' })).toBe('truecolor');
+    expect(colorDepth({ TERM: 'xterm-256color' })).toBe('basic');
+    expect(colorDepth({})).toBe('basic');
   });
 
   test('asks for a bigger terminal under the minimum size', () => {
@@ -499,7 +547,7 @@ describe('actions', () => {
   test('r asks before re-running, y confirms with an effect, anything else cancels; running jobs refuse', () => {
     const ctx = ctxFor();
     const asked = press(ctx, ['down', 'r']);
-    expect(asked.confirm).toBe('rerun');
+    expect(asked.confirm).toEqual({ action: 'rerun', key: DONE.key });
     const text = render(asked, ctx);
     expect(text).toContain(' ! review acme/app #7 again with the configured reviewers?');
     expect(text).toContain(' [y] re-run   [any other key] cancel');
@@ -519,6 +567,37 @@ describe('actions', () => {
     expect(render(busy, { ...ctx, now: NOW + 5000 })).not.toContain('is being reviewed now');
     // r works from the detail view too.
     expect(press(ctx, ['down', 'enter', 'r', 'y']).effect).toEqual({ kind: 'rerun', job: DONE });
+  });
+
+  test('acting on the top job pins it, and the confirmation stays bound to the job it asked about', () => {
+    const dir = dataDir([DONE, FAILED]);
+    const ctx = ctxFor(dir);
+    expect(initialState().selected).toBeUndefined();
+    expect(press(ctx, ['enter']).selected).toBe(DONE.key);
+    expect(press(ctx, ['l']).selected).toBe(DONE.key);
+    expect(press(ctx, ['2']).selected).toBe(DONE.key);
+    expect(press(ctx, ['o']).selected).toBe(DONE.key);
+    const asked = press(ctx, ['r']);
+    expect(asked.selected).toBe(DONE.key);
+    expect(render(asked, ctx)).toContain('review acme/app #7 again');
+    // A newer job lands on top while the question is open: the answer still applies to acme/app #7.
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([RUNNING, DONE, FAILED]));
+    ctx.store.refresh();
+    expect(render(asked, ctx)).toContain('review acme/app #7 again');
+    expect(press(ctx, ['y'], asked).effect).toEqual({ kind: 'rerun', job: DONE });
+    // The asked-about job started running meanwhile: no duplicate review.
+    const started = { ...DONE, status: 'running' as const, finishedAt: undefined };
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([started, FAILED]));
+    ctx.store.refresh();
+    const busy = press(ctx, ['y'], asked);
+    expect(busy.effect).toBeUndefined();
+    expect(render(busy, ctx)).toContain('acme/app #7 is being reviewed now');
+    // Or it vanished.
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([FAILED]));
+    ctx.store.refresh();
+    const gone = press(ctx, ['y'], asked);
+    expect(gone.effect).toBeUndefined();
+    expect(render(gone, ctx)).toContain('that job is no longer listed');
   });
 
   test('o and y hand the PR url to the loop', () => {
@@ -549,6 +628,14 @@ describe('term helpers', () => {
     );
     expect(rgb(0x0d1421)).toBe('38;2;13;20;33');
     expect(rgb(0xffffff, 'bg')).toBe('48;2;255;255;255');
+  });
+
+  test('frame positions every row, erases only after short rows, and clears below a short frame', () => {
+    expect(frame(['ab', 'c'], 3, 2)).toBe('\x1b[1;1Hab\x1b[2;1Hc\x1b[K\x1b[3;1H\x1b[J');
+    // A full frame of full-width rows writes no erase at all, so the last column stays painted.
+    expect(frame(['ab', 'cd'], 2, 2)).toBe('\x1b[1;1Hab\x1b[2;1Hcd');
+    expect(frame(['abcd'], 1, 2)).toBe('\x1b[1;1Hab');
+    expect(frame(['a', 'b', 'c'], 2, 3)).toBe('\x1b[1;1Ha\x1b[K\x1b[2;1Hb\x1b[K');
   });
 
   test('moved wraps on the arrows and clamps on home, end, and the page keys', () => {

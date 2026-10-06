@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
 import type { JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
-import { fmtDuration } from './ui.ts';
+import { fmtDuration, sanitize } from './ui.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
 
 export { fmtDuration };
@@ -134,7 +134,8 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
             countCell(rep.findings.minor, ''),
           ]
         : [none, none, none]),
-      { text: oneLine(r.error ?? failures.join('; '), 80), color: DIM },
+      // Reviewer errors quote CLI output, so they are untrusted.
+      { text: oneLine(sanitize(r.error ?? failures.join('; ')), 80), color: DIM },
     ];
   });
 

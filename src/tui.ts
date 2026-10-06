@@ -16,8 +16,18 @@ import { renderMarkdown } from './markdown.ts';
 import { reportDirFor } from './report.ts';
 import type { JobRecord, JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
-import { fill, moved, rgb, runScreen, windowed } from './term.ts';
-import { ANSI, fmtDuration, sanitize, styles, tildify, visibleLength, type Styles, type Tone } from './ui.ts';
+import { colorDepth, fill, moved, rgb, runScreen, windowed } from './term.ts';
+import {
+  ANSI,
+  fmtDuration,
+  sanitize,
+  styles,
+  supportsColor,
+  tildify,
+  visibleLength,
+  type Styles,
+  type Tone,
+} from './ui.ts';
 import { mergeFindings, type Finding, type MergedFinding, type Verdict } from './verdict.ts';
 
 const STATUSES: JobStatus[] = ['running', 'done', 'failed', 'skipped'];
@@ -86,10 +96,12 @@ const readJson = (path: string): any => {
 const isFinished = (job: JobRecord) => job.status !== 'running';
 
 /**
- * The cache key for a job's report folder reads. A re-run reuses the job's key (`repo@sha`) but moves it back to
- * `running` and then to a new `finishedAt`, so those are part of the key and a stale read can't survive a re-run.
+ * The cache key for a job's report folder reads. A re-run reuses the job's key (`repo@sha`) but starts again, moves
+ * back to `running`, and ends with a new `finishedAt`, so the run's identity is part of the key and a stale read
+ * can't survive a re-run.
  */
-const cacheKey = (job: JobRecord) => `${job.key}|${job.status}|${job.finishedAt ?? ''}`;
+const cacheKey = (job: JobRecord) =>
+  [job.key, job.status, job.startedAt, job.finishedAt ?? '', job.reportDir ?? ''].join('|');
 
 /** What the TUI reads from the data folder, cached where a job can no longer change. */
 export class JobStore {
@@ -173,8 +185,9 @@ export class JobStore {
     }
     if (job) {
       const tag = `[${job.repo}]`;
-      const pr = `PR #${job.pr}`;
-      lines = lines.filter((l) => l.includes(tag) && (l.includes(pr) || l.includes(job.key))).slice(-LOG_LINES);
+      // A digit boundary, so PR #12's view doesn't pick up PR #120.
+      const pr = new RegExp(`PR #${job.pr}(?!\\d)`);
+      lines = lines.filter((l) => l.includes(tag) && (pr.test(l) || l.includes(job.key))).slice(-LOG_LINES);
     }
     return lines.map(sanitize);
   }
@@ -199,7 +212,8 @@ export interface TuiState {
   wholeLog: boolean;
   /** The log view keeps its end in view as lines arrive. */
   follow: boolean;
-  confirm?: 'rerun';
+  /** A pending question, bound to the job it was asked about, so a list change can't retarget the answer. */
+  confirm?: { action: 'rerun'; key: string };
   flash?: { text: string; tone: Tone; until: number };
   /** A side effect for the loop to perform and clear. */
   effect?: Effect;
@@ -260,18 +274,21 @@ const room = (ctx: TuiContext) => Math.max(1, ctx.height - CHROME);
 function jobKeys(state: TuiState, key: string, ctx: TuiContext): TuiState | undefined {
   const job = selectedJob(state, ctx);
   if (!job) return undefined;
+  // Acting on the top job pins the selection to it, so a job arriving above can't change what the action means.
+  const pinned = { ...state, selected: job.key };
   switch (key) {
     case 'r':
-      if (job.status === 'running') return flash(state, `${job.repo} #${job.pr} is being reviewed now`, ctx, 'warning');
-      return { ...state, confirm: 'rerun' };
+      if (job.status === 'running')
+        return flash(pinned, `${job.repo} #${job.pr} is being reviewed now`, ctx, 'warning');
+      return { ...pinned, confirm: { action: 'rerun', key: job.key } };
     case 'o':
-      return { ...state, effect: { kind: 'open', url: prUrl(job) } };
+      return { ...pinned, effect: { kind: 'open', url: prUrl(job) } };
     case 'y':
-      return { ...state, effect: { kind: 'copy', text: prUrl(job) } };
+      return { ...pinned, effect: { kind: 'copy', text: prUrl(job) } };
     case 'l':
-      return { ...state, view: 'log', wholeLog: false, follow: true, scroll: 0 };
+      return { ...pinned, view: 'log', wholeLog: false, follow: true, scroll: 0 };
     case 'L':
-      return { ...state, view: 'log', wholeLog: true, follow: true, scroll: 0 };
+      return { ...pinned, view: 'log', wholeLog: true, follow: true, scroll: 0 };
     default:
       return undefined;
   }
@@ -326,10 +343,13 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
   if (key === 'ctrl-c') return { ...state, done: true };
   const base: TuiState = { ...state, effect: undefined };
   if (state.confirm) {
-    const job = selectedJob(state, ctx);
     const next = { ...base, confirm: undefined };
-    if (key === 'y' && job) return { ...next, effect: { kind: 'rerun', job } };
-    return flash(next, 'cancelled', ctx, 'muted');
+    if (key !== 'y') return flash(next, 'cancelled', ctx, 'muted');
+    // The job as it is now, not as it was when asked: it may have gone, or a review of it may have started since.
+    const job = ctx.store.jobs.find((j) => j.key === state.confirm!.key);
+    if (!job) return flash(next, 'that job is no longer listed', ctx, 'warning');
+    if (job.status === 'running') return flash(next, `${job.repo} #${job.pr} is being reviewed now`, ctx, 'warning');
+    return { ...next, effect: { kind: 'rerun', job } };
   }
   if (state.view === 'help') return { ...base, view: 'list' };
   if (state.filtering) return filtered(base, key, ctx);
@@ -337,7 +357,8 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
   const onLog = state.view === 'log';
   if (key === '1' || (key === 'tab' && onLog)) return onLog ? { ...base, view: 'list' } : base;
   if (key === '2' || (key === 'tab' && !onLog)) {
-    return onLog ? base : { ...base, view: 'log', follow: true, scroll: 0 };
+    const job = selectedJob(state, ctx);
+    return onLog ? base : { ...base, selected: job?.key ?? state.selected, view: 'log', follow: true, scroll: 0 };
   }
 
   if (state.view === 'list') {
@@ -353,7 +374,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
       }
       case 'enter':
       case 'right':
-        return list.length ? { ...base, view: 'detail', scroll: 0 } : base;
+        return list.length ? { ...base, selected: list[cursorOf(state, list)]!.key, view: 'detail', scroll: 0 } : base;
       case '?':
         return { ...base, view: 'help' };
       case 'escape':
@@ -456,7 +477,9 @@ export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string
   if (detail.findings.length) {
     lines.push('', st.section(`Findings (${detail.findings.length})`));
     for (const f of detail.findings) {
-      const where = f.file ? (f.line ? `${f.file}:${f.line}` : f.file) : 'general';
+      // Every finding field is reviewer output, paths included.
+      const file = sanitize(f.file ?? '');
+      const where = file ? (f.line ? `${file}:${f.line}` : file) : 'general';
       lines.push(
         `  ${st.tone(SEVERITY_TONES[f.severity] ?? 'muted', f.severity.padEnd(8))} ${st.bold(sanitize(f.title))}  ${st.muted(where)}`,
         `           ${st.muted(sanitize(f.detail).replace(/\s+/g, ' '))}`,
@@ -514,39 +537,82 @@ const PALETTE = {
   blue: 0x73b8ff,
 };
 type Swatch = keyof typeof PALETTE;
-const fg = (name: Swatch) => `\x1b[${rgb(PALETTE[name])}m`;
-/** SGR parameters painting a row's background and text, for `fill`. */
-const base = (bg: Swatch, text: Swatch = 'fg') => `${rgb(PALETTE[bg], 'bg')};${rgb(PALETTE[text])}`;
 
-/** The TUI's painter: the shared `Styles` shape on the palette's 24-bit colors instead of the 16 basic ones. */
-export function themeStyles(color: boolean): Styles {
+/** The nearest of the 16 basic colors to each swatch, for terminals without 24-bit color. */
+const BASIC: Record<Swatch, string> = {
+  bg: '49',
+  panel: '49',
+  fg: '39',
+  muted: '90',
+  accent: '36',
+  line: '90',
+  selectionBg: '7',
+  selectionFg: '36',
+  success: '32',
+  warn: '33',
+  red: '31',
+  blue: '34',
+};
+
+export type ColorDepth = 'truecolor' | 'basic';
+
+/** The shared `Styles` shape plus the palette, so the renderer never names a color code itself. */
+export interface Theme extends Styles {
+  /** SGR open sequence for a swatch as text color. */
+  swatch(name: Swatch): string;
+  /** `fill`'s base for a row painted with `bg` behind `text`; undefined when colors are off or backgrounds can't be painted. */
+  base(bg: Swatch, text?: Swatch): string | undefined;
+  /** SGR open sequence for the active tab pill. */
+  tabOn: string;
+}
+
+/**
+ * The TUI's painter on the Model Router palette: 24-bit colors where the terminal takes them, else the nearest
+ * basic colors with no painted backgrounds, else plain text.
+ */
+export function themeStyles(color: boolean, depth: ColorDepth = 'truecolor'): Theme {
   const paint = (code: string, s: string) => (color && s ? `${code}${s}${ANSI.reset}` : s);
+  const swatch = (name: Swatch) => `\x1b[${depth === 'truecolor' ? rgb(PALETTE[name]) : BASIC[name]}m`;
+  const base = (bg: Swatch, text: Swatch = 'fg') => {
+    if (!color) return undefined;
+    if (depth === 'truecolor') return `${rgb(PALETTE[bg], 'bg')};${rgb(PALETTE[text])}`;
+    // Basic colors can't paint a background that matches the panels; the selection shows as reverse video.
+    return bg === 'selectionBg' ? '7' : undefined;
+  };
   const tones: Record<Tone, string> = {
-    success: fg('success'),
-    warning: fg('warn'),
-    danger: fg('red'),
-    info: fg('blue'),
-    muted: fg('muted'),
+    success: swatch('success'),
+    warning: swatch('warn'),
+    danger: swatch('red'),
+    info: swatch('blue'),
+    muted: swatch('muted'),
   };
   const icons: Record<Tone, string> = { success: '✓', warning: '!', danger: '✗', info: '•', muted: '○' };
   return {
     color,
-    title: (s) => paint(ANSI.bold + fg('accent'), s),
-    section: (s) => paint(fg('accent'), s),
-    key: (s) => paint(fg('accent'), s),
-    command: (s) => paint(fg('accent'), s),
-    muted: (s) => paint(fg('muted'), s),
+    title: (s) => paint(ANSI.bold + swatch('accent'), s),
+    section: (s) => paint(swatch('accent'), s),
+    key: (s) => paint(swatch('accent'), s),
+    command: (s) => paint(swatch('accent'), s),
+    muted: (s) => paint(swatch('muted'), s),
     bold: (s) => paint(ANSI.bold, s),
     tone: (tone, s) => paint(tones[tone], s),
     badge: (tone, label) => paint(tones[tone], `${icons[tone]} ${label}`),
     dot: (tone) => paint(tones[tone], '●'),
     paint,
+    swatch,
+    base,
+    tabOn:
+      depth === 'truecolor'
+        ? `\x1b[${rgb(PALETTE.accent, 'bg')};${rgb(PALETTE.bg)}m${ANSI.bold}`
+        : `\x1b[7;36m${ANSI.bold}`,
   };
 }
 
 /** `[key] label   [key] label`, keys in the accent. */
-const hints = (st: Styles, pairs: [string, string][]) =>
-  pairs.map(([key, label]) => `${st.paint(ANSI.bold + fg('accent'), `[${key}]`)} ${st.muted(label)}`).join('   ');
+const hints = (st: Theme, pairs: [string, string][]) =>
+  pairs
+    .map(([key, label]) => `${st.paint(ANSI.bold + st.swatch('accent'), `[${key}]`)} ${st.muted(label)}`)
+    .join('   ');
 
 interface PanelOptions {
   title: string;
@@ -557,10 +623,10 @@ interface PanelOptions {
 }
 
 /** `lines` inside a rounded border, exactly `height` rows by `width` columns, with the title and hints in the top edge. */
-function panel(st: Styles, width: number, height: number, lines: string[], opts: PanelOptions): string[] {
+function panel(st: Theme, width: number, height: number, lines: string[], opts: PanelOptions): string[] {
   const inner = Math.max(1, width - 4);
-  const bg = st.color ? base('panel') : undefined;
-  const edge = (s: string) => st.paint(fg(opts.focused ? 'accent' : 'line'), s);
+  const bg = st.base('panel');
+  const edge = (s: string) => st.paint(st.swatch(opts.focused ? 'accent' : 'line'), s);
   const left = `${edge('╭─')} ${st.bold(opts.title)} `;
   const tail = [opts.note && st.muted(opts.note), opts.hints?.length && hints(st, opts.hints)]
     .filter(Boolean)
@@ -642,9 +708,9 @@ function footer(state: TuiState, list: JobRecord[]): [string, string][] {
 export const MIN_SIZE = { width: 60, height: 14 };
 
 /** Draws the current view as `height` rows of `width` columns, painted edge to edge. */
-export function renderTui(state: TuiState, ctx: TuiContext, st: Styles, version: string): string[] {
+export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: string): string[] {
   const { width, height } = ctx;
-  const page = st.color ? base('bg') : undefined;
+  const page = st.base('bg');
   const row = (line: string) => fill(line, width, page);
   if (width < MIN_SIZE.width || height < MIN_SIZE.height) {
     const center = (text: string) => ' '.repeat(Math.max(0, Math.floor((width - visibleLength(text)) / 2))) + text;
@@ -666,9 +732,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Styles, version:
   const tabs = (['Jobs', 'Log'] as const).map((name, i) => {
     const active = (state.view === 'log') === (name === 'Log');
     const label = ` ${i + 1} ${name} `;
-    return active
-      ? st.paint(`\x1b[${rgb(PALETTE.accent, 'bg')};${rgb(PALETTE.bg)}m${ANSI.bold}`, label)
-      : st.muted(label);
+    return active ? st.paint(st.tabOn, label) : st.muted(label);
   });
   const left = ` ${st.tone('success', '◆')} ${st.bold('REVIEW-RELAY')}  ${tabs.join(' ')}`;
   const right = st.muted(`${tildify(ctx.store.dataDir)} · v${version} `);
@@ -693,8 +757,9 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Styles, version:
 
   // Message: a confirmation, a flash, or nothing.
   const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
-  const message = state.confirm
-    ? ` ${st.badge('warning', `review ${job?.repo} #${job?.pr} again with the configured reviewers?`)}`
+  const asked = state.confirm && jobs.find((j) => j.key === state.confirm!.key);
+  const message = asked
+    ? ` ${st.badge('warning', `review ${asked.repo} #${asked.pr} again with the configured reviewers?`)}`
     : live
       ? ` ${st.badge(live.tone, live.text)}`
       : '';
@@ -767,9 +832,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Styles, version:
         reports: list.map((j) => ctx.store.report(j)),
       });
       const marked = rows.map((r, i) =>
-        i === cursor
-          ? fill(`${st.tone('success', '▌')} ${r}`, inner, st.color ? base('selectionBg', 'selectionFg') : undefined)
-          : `  ${r}`,
+        i === cursor ? fill(`${st.tone('success', '▌')} ${r}`, inner, st.base('selectionBg', 'selectionFg')) : `  ${r}`,
       );
       lines = [`  ${head}`, ...windowed(marked, cursor, jobsH - 3, paintCode)];
     }
@@ -842,7 +905,7 @@ const DAEMON_EVERY = 5;
 
 export async function tui(config: Config, configPath: string, version: string): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('tui needs an interactive terminal');
-  const st = themeStyles(true);
+  const st = themeStyles(supportsColor(), colorDepth());
   const store = new JobStore(config.dataDir);
   store.refresh();
   let daemon: DaemonState | null = await inspectDaemon(config.dataDir, config.port);
