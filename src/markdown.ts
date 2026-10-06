@@ -155,9 +155,21 @@ function table(rows: string[], width: number, st: Styles): string[] {
   return [render(cells[0]!, true), rule, ...cells.slice(1).map((row) => render(row, false))];
 }
 
-/** `md` as terminal lines no wider than `width`. */
+export interface MarkdownDetails {
+  /** Source line numbers, stable when an earlier section is collapsed or the terminal is resized. */
+  collapsed?: readonly number[];
+  selected?: number;
+}
+
+/** `md` as terminal lines no wider than `width`, with details expanded. */
 export function renderMarkdown(md: string, width: number, st: Styles): string[] {
+  return renderMarkdownView(md, width, st).lines;
+}
+
+/** Rendered lines and the visible disclosure headers, for keyboard navigation. */
+export function renderMarkdownView(md: string, width: number, st: Styles, details: MarkdownDetails = {}) {
   const out: string[] = [];
+  const sections: { id: number; line: number }[] = [];
   const blank = () => {
     if (out.length && out.at(-1) !== '') out.push('');
   };
@@ -207,16 +219,34 @@ export function renderMarkdown(md: string, width: number, st: Styles): string[] 
       continue;
     }
     const indent = raw.length - raw.trimStart().length;
-    // <details>/<summary> wrappers: the summary becomes a muted label, the content shows expanded.
+    // The summary's source line identifies it independently of wrapping and hidden content.
     const summary = /<summary>(.*?)<\/summary>/i.exec(line);
     if (summary) {
       blank();
+      const collapsed = details.collapsed?.includes(i);
+      const selected = details.selected === i;
+      sections.push({ id: i, line: out.length });
       const lead = ' '.repeat(indent);
-      out.push(...wrapSpans(inline(`▸ ${summary[1]}`, { muted: true }), width, st, lead, lead));
+      const label = `${selected ? '› ' : ''}${collapsed ? '▸' : '▾'} ${summary[1]}`;
+      out.push(...wrapSpans(inline(label, { muted: !selected, bold: selected }), width, st, lead, lead));
       i++;
+      if (collapsed) {
+        let depth = 1;
+        let fenced = false;
+        // Count nested wrappers, but not examples inside code fences.
+        while (i < src.length && depth > 0) {
+          const next = src[i++]!.trim();
+          if (next.startsWith('```')) fenced = !fenced;
+          if (fenced) continue;
+          for (const tag of next.matchAll(/<\/?details(?:\s[^>]*)?>/gi)) {
+            depth += tag[0].startsWith('</') ? -1 : 1;
+          }
+        }
+        blank();
+      }
       continue;
     }
-    if (/^<\/?details>$/i.test(line)) {
+    if (/^<\/?details(?:\s[^>]*)?>$/i.test(line)) {
       blank();
       i++;
       continue;
@@ -251,5 +281,5 @@ export function renderMarkdown(md: string, width: number, st: Styles): string[] 
     i++;
   }
   while (out.length && out.at(-1) === '') out.pop();
-  return out;
+  return { lines: out, sections };
 }

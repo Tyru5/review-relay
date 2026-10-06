@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { inline, renderMarkdown, wrapSpans } from '../src/markdown.ts';
+import { inline, renderMarkdown, renderMarkdownView, wrapSpans } from '../src/markdown.ts';
 import { styles, visibleLength } from '../src/ui.ts';
 
 const plain = styles(false);
@@ -115,19 +115,68 @@ describe('renderMarkdown', () => {
     // Links show their text, the escaped pipe is literal, and nested details show expanded under a label.
     expect(text).toContain('• Minor .github/workflows/ci.yml:39: Publish not gated on CI | really (Claude)');
     expect(text).not.toContain('https://');
-    expect(text).toContain('  ▸ Details');
+    expect(text).toContain('  ▾ Details');
     expect(text).toContain('  The release PR is opened by a bot token, so pull_request workflows never start and the');
     expect(text).toContain('  merge publishes with zero checks run against it.');
     expect(text).toContain('  Suggested fix: Pass an app token to the action.');
     expect(text).not.toContain('<details>');
     expect(text).not.toContain('</details>');
-    expect(text).toContain('▸ Dimension notes');
+    expect(text).toContain('▾ Dimension notes');
     expect(text).toContain('• Correctness (5/5): Manifest and changelog agree.');
     expect(text).toContain('▎ Gemini review failed: timed out after 1800s');
     expect(lines.at(-1)).toBe('Scores are 1-5 merge confidence.');
     // No run of blank lines, nothing wider than asked.
     expect(text).not.toContain('\n\n\n');
     for (const line of lines) expect(visibleLength(line)).toBeLessThanOrEqual(90);
+  });
+
+  test('collapsed details skip nested content and code examples, keeping stable source IDs', () => {
+    const md = [
+      '<details>',
+      '<summary>Outer</summary>',
+      '',
+      '```html',
+      '</details>',
+      '```',
+      '<details><summary>Inner</summary>',
+      '',
+      'Hidden inner body.',
+      '</details>',
+      'Hidden outer tail.',
+      '</details>',
+      '<details><summary>Last section with a long label</summary>',
+      '',
+      'Visible last body.',
+      '</details>',
+      'Visible footer.',
+    ].join('\n');
+    const collapsed = renderMarkdownView(md, 24, plain, { collapsed: [1], selected: 12 });
+    expect(collapsed.sections).toEqual([
+      { id: 1, line: 0 },
+      { id: 12, line: 2 },
+    ]);
+    expect(collapsed.lines).toEqual([
+      '▸ Outer',
+      '',
+      '› ▾ Last section with a',
+      'long label',
+      '',
+      'Visible last body.',
+      '',
+      'Visible footer.',
+    ]);
+    const expanded = renderMarkdownView(md, 80, plain, { collapsed: [6], selected: 12 });
+    expect(expanded.sections.map((s) => s.id)).toEqual([1, 6, 12]);
+    expect(expanded.lines.join('\n')).not.toContain('Hidden inner body.');
+    expect(expanded.lines.join('\n')).toContain('Hidden outer tail.');
+    expect(expanded.lines.join('\n')).toContain('› ▾ Last section with a long label');
+    expect(renderMarkdownView(md, 80, plain, { collapsed: [1, 12] }).lines).toEqual([
+      '▸ Outer',
+      '',
+      '▸ Last section with a long label',
+      '',
+      'Visible footer.',
+    ]);
   });
 
   test('in color, headings take the title style, code the key color, sub text gray, and links underline', () => {

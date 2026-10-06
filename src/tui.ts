@@ -12,7 +12,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
-import { renderMarkdown } from './markdown.ts';
+import { renderMarkdownView, type MarkdownDetails } from './markdown.ts';
 import { reportDirFor } from './report.ts';
 import { activeJob, type JobRecord, type JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
@@ -214,6 +214,8 @@ export interface TuiState {
   status?: JobStatus;
   /** Top line shown in the detail and log views. */
   scroll: number;
+  /** Disclosure state belongs to one review run, not another job or a later re-run. */
+  details?: MarkdownDetails & { job: string };
   /** The log view shows the whole daemon log instead of the selected job's lines. */
   wholeLog: boolean;
   /** The log view keeps its end in view as lines arrive. */
@@ -379,7 +381,9 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
       }
       case 'enter':
       case 'right':
-        return list.length ? { ...base, selected: list[cursorOf(state, list)]!.key, view: 'detail', scroll: 0 } : base;
+        return list.length
+          ? { ...base, selected: list[cursorOf(state, list)]!.key, view: 'detail', scroll: 0, details: undefined }
+          : base;
       case '?':
         return { ...base, view: 'help' };
       case 'escape':
@@ -395,17 +399,45 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
 
   if (state.view === 'detail') {
     const job = selectedJob(state, ctx);
-    const total = job ? detailLines(job, ctx, styles(false)).length : 0;
-    const scroll = scrolled(base, key, total, room(ctx));
+    const content = job ? detailContent(job, ctx, styles(false), state.details) : { lines: [], sections: [] };
+    if (job && content.sections.length && ['[', ']', 'enter', 'space'].includes(key)) {
+      const details = state.details?.job === cacheKey(job) ? state.details : { job: cacheKey(job) };
+      const sections = content.sections;
+      const at = sections.findIndex((s) => s.id === details.selected);
+      const toggle = key === 'enter' || key === 'space';
+      const index =
+        at < 0
+          ? key === '['
+            ? sections.length - 1
+            : Math.max(
+                0,
+                sections.findIndex((s) => s.line >= state.scroll),
+              )
+          : toggle
+            ? at
+            : (at + (key === ']' ? 1 : -1) + sections.length) % sections.length;
+      const section = sections[index]!;
+      let collapsed = details.collapsed ?? [];
+      if (toggle) {
+        collapsed = collapsed.includes(section.id)
+          ? collapsed.filter((id) => id !== section.id)
+          : [...collapsed, section.id];
+      }
+      const next = { ...base, details: { ...details, selected: section.id, collapsed } };
+      const updated = detailContent(job, ctx, styles(false), next.details);
+      // Put the selected header near the top so its body is visible after expansion.
+      return { ...next, scroll: Math.max(0, Math.min(section.line - 1, updated.lines.length - room(ctx))) };
+    }
+    const scroll = scrolled(base, key, content.lines.length, room(ctx));
     if (scroll) return scroll;
     const list = visible(state, ctx.store.jobs);
     const at = cursorOf(state, list);
     switch (key) {
       case 'n':
       case 'right':
-        return at < list.length - 1 ? { ...base, selected: list[at + 1]!.key, scroll: 0 } : base;
+        return at < list.length - 1 ? { ...base, selected: list[at + 1]!.key, scroll: 0, details: undefined } : base;
       case 'p':
-        return at > 0 ? { ...base, selected: list[at - 1]!.key, scroll: 0 } : base;
+        return at > 0 ? { ...base, selected: list[at - 1]!.key, scroll: 0, details: undefined } : base;
       case 'escape':
       case 'q':
       case 'left':
@@ -447,8 +479,9 @@ const scoreTone = (n: number): Tone => (n >= 4 ? 'success' : n === 3 ? 'warning'
 const SEVERITY_TONES: Record<string, Tone> = { critical: 'danger', major: 'warning', minor: 'muted' };
 
 /** The detail view's body: the job, its reviewers, the merged findings, then the posted comment or the log so far. */
-export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string[] {
+function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: TuiState['details']) {
   const detail = ctx.store.detail(job);
+  let sections: { id: number; line: number }[] = [];
   const end = job.finishedAt ? Date.parse(job.finishedAt) : ctx.now;
   const took = fmtDuration(end - Date.parse(job.startedAt));
   const field = (label: string, value: string) => `  ${st.muted(label.padEnd(10))}${value}`;
@@ -501,7 +534,15 @@ export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string
     // Two for the panel's padding and border on each side, two for the section indent.
     const width = Math.max(20, ctx.width - 6);
     const title = job.status === 'superseded' ? 'Comment (not posted)' : 'Comment';
-    lines.push('', st.section(title), ...renderMarkdown(detail.comment.join('\n'), width, st).map((l) => `  ${l}`));
+    const comment = renderMarkdownView(
+      detail.comment.join('\n'),
+      width,
+      st,
+      details?.job === cacheKey(job) ? details : undefined,
+    );
+    lines.push('', st.section(title));
+    sections = comment.sections.map((s) => ({ ...s, line: s.line + lines.length }));
+    lines.push(...comment.lines.map((l) => `  ${l}`));
   } else if (activeJob(job) || job.status === 'failed') {
     const log = ctx.store.log(job);
     lines.push(
@@ -512,12 +553,14 @@ export function detailLines(job: JobRecord, ctx: TuiContext, st: Styles): string
   } else if (job.status === 'skipped') {
     lines.push('', st.muted('  a skip route matched, so no reviewer ran'));
   }
-  return lines;
+  return { lines, sections };
 }
 
 const HELP_LINES: [string, string][] = [
   ['↑↓ j k', 'move · g/G top and bottom · pgup/pgdn page'],
   ['enter', 'open the job: scores, findings, and the posted comment'],
+  ['[ ]', 'previous/next Details or Dimension notes section in the comment'],
+  ['enter space', 'expand/collapse the selected section while viewing a job'],
   ['n p', 'next and previous job while viewing one'],
   ['l', "the job's lines from the daemon log, following as they arrive"],
   ['L', 'the whole daemon log'],
@@ -693,7 +736,7 @@ function footer(state: TuiState, list: JobRecord[]): [string, string][] {
     case 'help':
       return [['any key', 'closes help']];
     case 'detail':
-      return [['↑↓', 'scroll'], ['n/p', 'next/prev'], ...job, ['esc', 'back']];
+      return [['[/]', 'details'], ['enter', 'toggle'], ['↑↓', 'scroll'], ['n/p', 'next/prev'], ...job, ['esc', 'back']];
     case 'log':
       return [
         ['↑↓', 'scroll'],
@@ -784,7 +827,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const lines = HELP_LINES.map(([k, what]) => `${st.key(k.padEnd(w))}  ${what}`);
     panels = panel(st, width, body, lines, { title: 'Keys', hints: [['any key', 'close']] });
   } else if (state.view === 'detail' && job) {
-    const lines = detailLines(job, ctx, st);
+    const { lines } = detailContent(job, ctx, st, state.details);
     const avail = body - 2;
     const top = Math.min(state.scroll, Math.max(0, lines.length - avail));
     const note =
@@ -857,7 +900,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     });
     if (split) {
       panels.push(
-        ...panel(st, width, body - jobsH, detailLines(job!, ctx, st), {
+        ...panel(st, width, body - jobsH, detailContent(job!, ctx, st).lines, {
           title: `Job · ${job!.repo} #${job!.pr}`,
           hints: [['enter', 'expand']],
         }),
