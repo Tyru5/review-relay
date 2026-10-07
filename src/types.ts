@@ -39,6 +39,8 @@ export interface ReviewJob {
   route?: string;
   /** Who asked for the review, for mentions. */
   requestedBy?: string;
+  /** The PR author's login, when the event named it. */
+  author?: string;
 }
 
 export interface ResolvedJob extends ReviewJob {

@@ -56,6 +56,11 @@ export const REPO_OPTIONS: ReferenceRow[] = [
     '@review-relay',
     'Case-insensitive text that requests a review in a new PR comment. Use a non-empty mention.',
   ],
+  [
+    'authors',
+    '[]',
+    'GitHub logins whose PRs get reviewed, case-insensitive; write apps as dependabot[bot]. Empty reviews every author. Mentions and run review any PR.',
+  ],
 ];
 
 export const MODEL_OPTIONS: ReferenceRow[] = [

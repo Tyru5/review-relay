@@ -13,6 +13,7 @@ const repoWith = (trigger: TriggerMode): RepoConfig => ({
   trigger,
   postToPr: false,
   github: { onPush: false, mention: '@review-relay' },
+  authors: [],
 });
 
 const job = (source: ReviewJob['source'], sha = SHA): ReviewJob => ({
@@ -44,6 +45,7 @@ function setup(graceMs = 120_000, overrides: Partial<SchedulerDeps> = {}) {
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
     findPr: async () => null,
     prHead: async (j) => j.headSha,
+    prAuthor: async () => 'tyru5',
     run: async (j) => {
       runs.push(j);
       return {};
@@ -111,6 +113,92 @@ describe('auto mode', () => {
     scheduler.handle(repo, greptileStart('ffffffffffffffffffffffffffffffffffffffff'));
     await scheduler.idle();
     expect(runs).toHaveLength(2);
+  });
+});
+
+describe('authors', () => {
+  const only = (trigger: TriggerMode, authors: string[]): RepoConfig => ({ ...repoWith(trigger), authors });
+  const OTHER = 'ffffffffffffffffffffffffffffffffffffffff';
+  const byAuthor = (author: string, sha = SHA): Classified => ({
+    kind: 'prEvent',
+    job: { ...job('github', sha), author },
+  });
+
+  test('a PR event from a listed author runs, matching case-insensitively, without a lookup', async () => {
+    const lookups: number[] = [];
+    const { scheduler, runs } = setup(0, { prAuthor: async (_r, pr) => (lookups.push(pr), 'x') });
+    scheduler.handle(only('github', ['tyru5']), byAuthor('Tyru5'));
+    await scheduler.idle();
+    expect(runs).toHaveLength(1);
+    expect(lookups).toEqual([]);
+  });
+
+  test('a PR event from anyone else is ignored', async () => {
+    const { scheduler, runs } = setup();
+    const repo = only('github', ['tyru5']);
+    scheduler.handle(repo, byAuthor('mallory'));
+    await scheduler.idle();
+    expect(runs).toHaveLength(0);
+  });
+
+  test('a bot start, which names no author, looks the author up', async () => {
+    const lookups: number[] = [];
+    const { scheduler, runs } = setup(0, { prAuthor: async (_r, pr) => (lookups.push(pr), 'app/dependabot') });
+    scheduler.handle(only('greptile', ['tyru5']), greptileStart());
+    scheduler.handle(only('greptile', ['dependabot[bot]']), greptileStart('ffffffffffffffffffffffffffffffffffffffff'));
+    await scheduler.idle();
+    expect(lookups).toEqual([223, 223]);
+    expect(runs.map((r) => r.headSha)).toEqual(['ffffffffffffffffffffffffffffffffffffffff']);
+  });
+
+  const noLookup: Partial<SchedulerDeps> = {
+    prAuthor: async () => {
+      throw new Error('lookup failed');
+    },
+  };
+
+  test('a bot start that replaces the fallback keeps the author its PR event named', async () => {
+    const { scheduler, runs } = setup(120_000, noLookup);
+    const repo = only('auto', ['tyru5']);
+    scheduler.handle(repo, byAuthor('Tyru5'));
+    scheduler.handle(repo, greptileStart());
+    scheduler.handle(repo, byAuthor('Tyru5', OTHER));
+    scheduler.handle(repo, coderabbitStatus(OTHER));
+    await scheduler.idle();
+    expect(runs.map((r) => [r.source, r.author])).toEqual([
+      ['greptile', 'Tyru5'],
+      ['coderabbit', 'Tyru5'],
+    ]);
+  });
+
+  test('a PR event during a commit status lookup gives the found PR its author', async () => {
+    const { findPr } = onePr();
+    const { scheduler, runs } = setup(120_000, { ...noLookup, findPr });
+    const repo = only('auto', ['tyru5']);
+    scheduler.handle(repo, coderabbitStatus());
+    scheduler.handle(repo, { kind: 'prEvent', job: { ...job('github'), pr: 224, author: 'tyru5' } });
+    await scheduler.idle();
+    expect(runs.map((r) => [r.pr, r.author])).toEqual([[224, 'tyru5']]);
+  });
+
+  test('an excluded PR does not hold a commit an allowed PR shares', async () => {
+    const { scheduler, runs, fireTimers } = setup();
+    const repo = only('auto', ['alice']);
+    scheduler.handle(repo, { kind: 'prEvent', job: { ...job('github'), pr: 1, author: 'bob' } });
+    scheduler.handle(repo, { kind: 'prEvent', job: { ...job('github'), pr: 2, author: 'alice' } });
+    fireTimers();
+    await scheduler.idle();
+    expect(runs.map((r) => r.pr)).toEqual([2]);
+  });
+
+  test('mentions and manual runs review any author', async () => {
+    const { scheduler, runs } = setup(0, { prAuthor: async () => 'mallory' });
+    const repo = only('github', ['tyru5']);
+    scheduler.handle(repo, mention);
+    await scheduler.idle();
+    scheduler.runNow(repo, { ...job('manual', 'ffffffffffffffffffffffffffffffffffffffff'), author: 'mallory' });
+    await scheduler.idle();
+    expect(runs.map((r) => r.source)).toEqual(['mention', 'manual']);
   });
 });
 
@@ -467,6 +555,7 @@ test('a failed run can be retried by the next trigger', async () => {
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
     findPr: async () => null,
     prHead: async (j) => j.headSha,
+    prAuthor: async () => 'tyru5',
     run: async () => {
       calls += 1;
       if (calls === 1) throw new Error('boom');
@@ -495,6 +584,7 @@ test('a skip route records the commit as skipped and handled, with its route', a
     resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
     findPr: async () => null,
     prHead: async (j) => j.headSha,
+    prAuthor: async () => 'tyru5',
     run: async () => {
       calls += 1;
       return calls === 1 ? { route, skipped: true } : { reportDir: '/tmp/r', route };
@@ -535,6 +625,7 @@ describe('stale commits and the queue', () => {
       resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
       findPr: async () => null,
       prHead: async (j) => heads.get(j.pr) ?? j.headSha,
+      prAuthor: async () => 'tyru5',
       run: (j, _repo, signal) => {
         runs.push(j);
         signals.set(j.headSha, signal);
@@ -604,6 +695,7 @@ describe('stale commits and the queue', () => {
       resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
       findPr: async () => null,
       prHead: async (j) => j.headSha,
+      prAuthor: async () => 'tyru5',
       run: async () => ({ reportDir: '/tmp/r', supersededBy: NEWER }),
       log: () => {},
     });

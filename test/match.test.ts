@@ -185,6 +185,11 @@ describe('pull_request', () => {
     }
   });
 
+  test('names the PR author', () => {
+    const result = classify('pull_request', withAction('opened', { user: { login: 'Tyru5' } }), github);
+    expect(result.kind === 'prEvent' && result.job.author).toBe('Tyru5');
+  });
+
   test('drafts and closed PRs are skipped', () => {
     expect(classify('pull_request', withAction('opened', { draft: true }), github).kind).toBe('ignore');
     expect(classify('pull_request', withAction('reopened', { state: 'closed' }), github).kind).toBe('ignore');

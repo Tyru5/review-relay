@@ -20,7 +20,7 @@ import {
 } from './daemon.ts';
 import { diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
-import { openPrForCommit, prHead, resolveJob } from './github.ts';
+import { openPrForCommit, prAuthor, prHead, resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
@@ -62,6 +62,7 @@ function makeScheduler(config: Config, state: StateStore, overrides: Partial<Sch
     resolve: resolveJob,
     findPr: openPrForCommit,
     prHead: (job) => prHead(job.repo, job.pr),
+    prAuthor,
     run: (job, repo, signal) => runReview(job, repo, config, RUNNER_DEPS, signal),
     log,
     ...overrides,
@@ -354,6 +355,11 @@ async function replay(config: Config, file: string | undefined, dryRun: boolean,
           },
           // Offline: every replayed commit counts as its PR's head.
           prHead: async (job) => job.headSha,
+          // Offline: an author the event didn't name stays unknown, so a repo with `authors` ignores it.
+          prAuthor: async (repo, pr) => {
+            log(`[dry-run] would look up the author of ${repo} PR #${pr}`);
+            return 'unresolved';
+          },
           run: async (job) => {
             log(`[dry-run] would review ${job.repo} PR #${job.pr} @ ${job.headSha.slice(0, 8)} (source=${job.source})`);
             return {};

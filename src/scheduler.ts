@@ -1,4 +1,4 @@
-import type { RepoConfig } from './config.ts';
+import { normalizeLogin, type RepoConfig } from './config.ts';
 import { BOT_NAMES, type BotStartJob, type Classified } from './match.ts';
 import type { ReviewOutcome } from './runner.ts';
 import type { StateStore } from './state.ts';
@@ -12,13 +12,17 @@ export interface CommitPr {
 }
 
 /** The PR a pull_request event named for a commit. A missing ref is resolved later, like any other job's. */
-type KnownPr = Pick<ReviewJob, 'pr' | 'headRef' | 'baseRef'>;
+type KnownPr = Pick<ReviewJob, 'pr' | 'headRef' | 'baseRef' | 'author'>;
 
 interface Claim {
   known?: KnownPr;
 }
 
-const prOf = ({ pr, headRef, baseRef }: ReviewJob): KnownPr => ({ pr, headRef, baseRef });
+const prOf = ({ pr, headRef, baseRef, author }: ReviewJob): KnownPr => ({ pr, headRef, baseRef, author });
+
+/** True when the repo lists authors and `author` isn't one of them. */
+const excludes = (repo: RepoConfig, author: string) =>
+  repo.authors.length > 0 && !repo.authors.includes(normalizeLogin(author));
 
 /** The review bots whose start each trigger mode follows. */
 export const BOTS_BY_MODE: Record<TriggerMode, Bot[]> = {
@@ -39,6 +43,8 @@ export interface SchedulerDeps {
   run: (job: ResolvedJob, repo: RepoConfig, signal: AbortSignal) => Promise<ReviewOutcome>;
   /** The PR's head commit on GitHub now. A job whose commit is no longer the head is stale and doesn't run. */
   prHead: (job: ResolvedJob) => Promise<string>;
+  /** The PR author's login, for a repo with `authors` when the event didn't name it. */
+  prAuthor: (repo: string, pr: number) => Promise<string>;
   /** Reviews that run at once; later ones wait as `queued`, oldest first. Unlimited when unset. */
   maxConcurrent?: number;
   log?: (message: string) => void;
@@ -53,7 +59,7 @@ export interface SchedulerDeps {
  * - `github`: only pull_request events.
  * - `auto`: a Greptile or CodeRabbit start runs at once; a pull_request event waits `graceMs` for one, then runs as the
  *   fallback.
- * Mentions and manual runs always run and bypass the per-commit dedupe.
+ * Mentions and manual runs always run and bypass the per-commit dedupe and the repo's `authors` list.
  *
  * At most `maxConcurrent` reviews run at once. When a job's turn comes, it runs only if its commit is still the PR's
  * head, and then stops any review of an older commit on the same PR.
@@ -94,6 +100,8 @@ export class Scheduler {
         return this.startBot(repo, event.job);
       }
       case 'prEvent': {
+        // Before any fallback or claim bookkeeping, so an excluded PR can't hold a commit another PR shares.
+        if (event.job.author && excludes(repo, event.job.author)) return this.ignoreAuthor(repo, event.job);
         if (repo.trigger === 'github') return this.dispatch(repo, event.job, false);
         if (repo.trigger !== 'auto') {
           return this.log(`[${repo.fullName}] ${event.job.reason} ignored (trigger=${repo.trigger})`);
@@ -135,7 +143,10 @@ export class Scheduler {
   private startBot(repo: RepoConfig, start: BotStartJob): void {
     const key = jobKey({ repo: repo.fullName, headSha: start.headSha });
     const fallback = this.takePending(key);
-    if (start.pr !== undefined) return this.dispatch(repo, start as ReviewJob, false);
+    if (start.pr !== undefined) {
+      const author = fallback?.pr === start.pr ? fallback.author : undefined;
+      return this.dispatch(repo, { ...(start as ReviewJob), ...(author ? { author } : {}) }, false);
+    }
     if (this.claims.has(key)) return this.log(`[${repo.fullName}] ${key} already started by a bot`);
     if (!fallback) {
       if (this.deps.state.isActive(key)) return this.log(`[${repo.fullName}] ${key} already queued or running`);
@@ -150,7 +161,11 @@ export class Scheduler {
   private async runClaimed(repo: RepoConfig, start: BotStartJob, key: string, claim: Claim, lookUp: boolean) {
     try {
       const found = lookUp ? await this.lookUpPr(repo, start) : null;
-      const pr: KnownPr | undefined = found ?? claim.known;
+      const known = claim.known;
+      // A pull_request event for the same PR already named its author, which saves a lookup.
+      const pr: KnownPr | undefined = found
+        ? { ...found, ...(known?.pr === found.pr && { author: known.author }) }
+        : known;
       if (!pr) return;
       if (lookUp && !found) {
         this.log(`[${repo.fullName}] ${start.headSha.slice(0, 8)}: using PR #${pr.pr} from its pull_request event`);
@@ -217,6 +232,10 @@ export class Scheduler {
   }
 
   private async execute(repo: RepoConfig, job: ReviewJob, force: boolean): Promise<void> {
+    if (!force && repo.authors.length > 0) {
+      const author = job.author ?? (await this.deps.prAuthor(job.repo, job.pr));
+      if (excludes(repo, author)) return this.ignoreAuthor(repo, { ...job, author });
+    }
     const resolved = job.headSha && job.baseRef ? (job as ResolvedJob) : await this.deps.resolve(job);
     // Resolving missing refs must not move a commit-bound trigger to the PR's newer head.
     // Mentions and manual requests without a SHA still adopt the head returned by resolve.
@@ -287,6 +306,10 @@ export class Scheduler {
     } finally {
       this.inflight.delete(key);
     }
+  }
+
+  private ignoreAuthor(repo: RepoConfig, job: ReviewJob): void {
+    this.log(`[${repo.fullName}] PR #${job.pr} ${job.reason} ignored (author ${job.author} not in authors)`);
   }
 
   /** Resolves when this job may run; slots pass straight to the oldest waiting job as they free up. */

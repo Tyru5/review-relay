@@ -54,6 +54,11 @@ export async function prHead(repo: string, pr: number): Promise<string> {
   return (await execOrThrow(['gh', 'api', `repos/${repo}/pulls/${pr}`, '--jq', '.head.sha'])).trim();
 }
 
+/** The PR author's login, as webhooks write it (`dependabot[bot]` for an app). */
+export async function prAuthor(repo: string, pr: number): Promise<string> {
+  return (await execOrThrow(['gh', 'api', `repos/${repo}/pulls/${pr}`, '--jq', '.user.login'])).trim();
+}
+
 /** Keeps one relay comment per PR: edits the signed-in user's marked comment, or creates it. */
 export async function upsertComment(repo: string, pr: number, body: string): Promise<void> {
   const login = (await execOrThrow(['gh', 'api', 'user', '--jq', '.login'])).trim();

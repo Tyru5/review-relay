@@ -160,6 +160,7 @@ function classifyPullRequest(repo: string, payload: any, github: GithubTriggerCo
       headSha: pr.head?.sha,
       headRef: pr.head?.ref,
       baseRef: pr.base?.ref,
+      ...(pr.user?.login ? { author: pr.user.login } : {}),
     },
   };
 }

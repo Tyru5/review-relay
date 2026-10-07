@@ -145,3 +145,21 @@ describe('reviewers', () => {
     expect(parse({ reviewers: ['mini'], models }).config.reviewers).toEqual(['mini']);
   });
 });
+
+describe('repo authors', () => {
+  const withAuthors = (authors: unknown) => ({ repos: [{ ...REPOS[0], authors }] });
+
+  test('defaults to every author and normalizes logins', () => {
+    expect(parseConfig({ repos: REPOS }).repos[0]!.authors).toEqual([]);
+    expect(parseConfig(withAuthors(['Tyru5', 'app/dependabot', 'tyru5'])).repos[0]!.authors).toEqual([
+      'tyru5',
+      'dependabot[bot]',
+    ]);
+  });
+
+  test('rejects anything but a list of logins', () => {
+    expect(() => parseConfig(withAuthors('tyru5'))).toThrow('repos[0].authors');
+    expect(() => parseConfig(withAuthors(['']))).toThrow('repos[0].authors');
+    expect(() => parseConfig(withAuthors([7]))).toThrow('repos[0].authors');
+  });
+});

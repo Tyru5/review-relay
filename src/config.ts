@@ -17,7 +17,16 @@ export interface RepoConfig {
   trigger: TriggerMode;
   postToPr: boolean;
   github: GithubTriggerConfig;
+  /** PR author logins to review, normalized by `normalizeLogin`; empty reviews every author. */
+  authors: string[];
 }
+
+/** Lowercases a login and writes `gh`'s `app/<slug>` bot form as GitHub's `<slug>[bot]`. */
+export const normalizeLogin = (login: string) =>
+  login
+    .trim()
+    .toLowerCase()
+    .replace(/^app\/(.+)$/, '$1[bot]');
 
 export interface ModelConfig {
   /** Unset uses the CLI's own default model. */
@@ -203,12 +212,17 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     if (typeof r.localPath !== 'string') throw new Error(`repos[${i}].localPath is required`);
     const trigger: TriggerMode = r.trigger ?? 'auto';
     if (!TRIGGERS.includes(trigger)) throw new Error(`repos[${i}].trigger must be one of ${TRIGGERS.join(', ')}`);
+    const authors = r.authors ?? [];
+    if (!Array.isArray(authors) || authors.some((a) => typeof a !== 'string' || !a.trim())) {
+      throw new Error(`repos[${i}].authors must be a list of GitHub logins`);
+    }
     return {
       fullName: r.fullName,
       localPath: resolve(r.localPath.replace(/^~(?=\/|$)/, homedir())),
       trigger,
       postToPr: r.postToPr ?? true,
       github: { onPush: r.github?.onPush ?? false, mention: r.github?.mention ?? '@review-relay' },
+      authors: [...new Set(authors.map(normalizeLogin))],
     };
   });
 

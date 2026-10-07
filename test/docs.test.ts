@@ -31,7 +31,8 @@ describe('published documentation', () => {
     expect(REPO_OPTIONS.map(([key]) => key).toSorted()).toEqual(Object.keys(fields).toSorted());
     for (const [key, value] of REPO_OPTIONS) {
       if (value === 'Required') continue;
-      expect(String(fields[key as keyof typeof fields])).toBe(value);
+      const actual = fields[key as keyof typeof fields];
+      expect(Array.isArray(actual) ? JSON.stringify(actual) : String(actual)).toBe(value);
     }
   });
 

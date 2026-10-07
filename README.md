@@ -69,6 +69,7 @@ bun src/cli.ts start
 | `repos[].postToPr` | `true` | Post the scored review as one PR comment (edited in place on later reviews) |
 | `repos[].github.onPush` | `false` | Review new commits pushed to an open PR (`synchronize`) |
 | `repos[].github.mention` | `@review-relay` | Comment text that requests a review |
+| `repos[].authors` | `[]` | GitHub logins whose PRs get reviewed, ignoring case, such as `["tyru5", "dependabot[bot]"]`. Empty reviews every author. Mentions and `run` review any PR. |
 
 ### Custom reviewers
 

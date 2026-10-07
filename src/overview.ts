@@ -163,6 +163,7 @@ export function renderInfo(config: Config, opts: InfoOptions, st: Styles): strin
       `post ${repo.postToPr ? 'on' : 'off'}`,
       `onPush ${repo.github.onPush ? 'on' : 'off'}`,
       `mention ${repo.github.mention}`,
+      ...(repo.authors.length > 0 ? [`authors ${repo.authors.join(',')}`] : []),
     ];
     lines.push(`      ${st.muted(flags.join('  '))}`);
     lines.push(`      ${tildify(repo.localPath)}${exists ? '' : `  ${st.tone('danger', 'no clone here')}`}`);
