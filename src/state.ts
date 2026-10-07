@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { JobSource } from './types.ts';
+import { isAlive } from './daemon.ts';
+import { isLocal, type JobSource } from './types.ts';
 
 /**
  * `queued`: waiting for a free review slot. `skipped`: a skip route matched, so nothing ran. `superseded`: the PR moved
@@ -26,29 +27,90 @@ export interface JobRecord {
   error?: string;
   /** The PR's newer head, for a superseded job. */
   supersededBy?: string;
+  /** The process that queued the job, so other processes can tell a live job from one whose process died. */
+  pid?: number;
+  /** A local review's branch (or short SHA when detached), the ref its base was, and the checkout it ran in. */
+  branch?: string;
+  base?: string;
+  localPath?: string;
 }
+
+/**
+ * True for a queued or running record whose process is gone, so it will never finish. A record without a pid was
+ * written by an older version; it counts as stopped when `noPid` says so.
+ */
+export function orphaned(record: JobRecord, noPid: boolean, alive: (pid: number) => boolean = isAlive): boolean {
+  if (!activeJob(record)) return false;
+  if (record.pid === undefined) return noPid;
+  return record.pid === process.pid || !alive(record.pid);
+}
+
+/** How long a lock on state.json may be held before it counts as left by a process that died holding it. */
+const LOCK_STALE_MS = 5_000;
+
+/** Runs `fn` holding `<path>.lock`, so processes that share state.json read and write it one at a time. */
+function withLock<T>(path: string, fn: () => T): T {
+  const lock = `${path}.lock`;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, 'wx'));
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) rmSync(lock, { force: true });
+      } catch {
+        // Released between the open and the stat.
+      }
+      Bun.sleepSync(5);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
+function readRecords(path: string): JobRecord[] {
+  try {
+    const saved = JSON.parse(readFileSync(path, 'utf8'));
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    // Missing or unreadable state starts fresh.
+    return [];
+  }
+}
+
+/** What a job reviewed: `#12` for a PR, the branch name for a local review. */
+export const jobTarget = (job: Pick<JobRecord, 'pr' | 'source' | 'branch'>) =>
+  isLocal(job) ? (job.branch ?? 'local') : `#${job.pr}`;
 
 /** Jobs kept in state.json. Older ones are dropped, so a commit that old can be reviewed again if an event names it. */
 export const MAX_RECORDS = 1000;
 
-/** Job history persisted as one JSON file; `null` path keeps it in memory (tests, dry runs). */
+/**
+ * Job history persisted as one JSON file; `null` path keeps it in memory (tests, dry runs). The daemon, `run`, and
+ * local reviews each hold a store on the same file, so a save writes only the records this store changed, merged
+ * into what is on disk under a lock.
+ */
 export class StateStore {
   private records = new Map<string, JobRecord>();
+  /** Keys this store changed since its last save. */
+  private readonly dirty = new Set<string>();
 
   constructor(
     private readonly path: string | null,
     private readonly max = MAX_RECORDS,
   ) {
     if (!path) return;
-    try {
-      const saved = JSON.parse(readFileSync(path, 'utf8')) as JobRecord[];
-      for (const r of saved) {
-        // A record left `queued` or `running` means the daemon died before it finished; allow a retry.
-        if (activeJob(r)) r.status = 'failed';
-        this.records.set(r.key, r);
+    for (const r of readRecords(path)) {
+      // A record left `queued` or `running` by a process that died never finishes; allow a retry.
+      if (orphaned(r, true)) {
+        r.status = 'failed';
+        this.dirty.add(r.key);
       }
-    } catch {
-      // Missing or unreadable state starts fresh.
+      this.records.set(r.key, r);
     }
   }
 
@@ -68,9 +130,14 @@ export class StateStore {
   }
 
   /** Records a review waiting for a slot. A re-review replaces the commit's earlier record. */
-  queue(record: Omit<JobRecord, 'status' | 'startedAt'>): void {
-    this.records.set(record.key, { ...record, status: 'queued', startedAt: new Date().toISOString() });
-    this.save();
+  queue(record: Omit<JobRecord, 'status' | 'startedAt' | 'pid'>): void {
+    this.records.set(record.key, {
+      ...record,
+      status: 'queued',
+      startedAt: new Date().toISOString(),
+      pid: process.pid,
+    });
+    this.save(record.key);
   }
 
   /** Marks a queued review as running from now. */
@@ -78,14 +145,14 @@ export class StateStore {
     const record = this.records.get(key);
     if (!record) return;
     Object.assign(record, { status: 'running', startedAt: new Date().toISOString() });
-    this.save();
+    this.save(key);
   }
 
   finish(key: string, patch: Pick<JobRecord, 'status'> & Partial<JobRecord>): void {
     const record = this.records.get(key);
     if (!record) return;
     Object.assign(record, patch, { finishedAt: new Date().toISOString() });
-    this.save();
+    this.save(key);
   }
 
   list(): JobRecord[] {
@@ -104,12 +171,24 @@ export class StateStore {
     }
   }
 
-  private save(): void {
-    this.prune();
-    if (!this.path) return;
-    mkdirSync(dirname(this.path), { recursive: true });
-    const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.list(), null, 2));
-    renameSync(tmp, this.path);
+  /** Writes this store's changed records over the ones on disk, keeping every other process's records. */
+  private save(key: string): void {
+    this.dirty.add(key);
+    const path = this.path;
+    if (!path) return this.prune();
+    mkdirSync(dirname(path), { recursive: true });
+    withLock(path, () => {
+      const merged = new Map(readRecords(path).map((r) => [r.key, r]));
+      for (const changed of this.dirty) {
+        const record = this.records.get(changed);
+        if (record) merged.set(changed, record);
+      }
+      this.records = merged;
+      this.dirty.clear();
+      this.prune();
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(this.list(), null, 2));
+      renameSync(tmp, path);
+    });
   }
 }

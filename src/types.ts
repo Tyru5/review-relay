@@ -5,7 +5,8 @@ export type TriggerMode = 'auto' | 'greptile' | 'coderabbit' | 'github';
 /** An AI review bot whose start triggers a review. */
 export type Bot = 'greptile' | 'coderabbit';
 
-export type JobSource = Bot | 'github' | 'mention' | 'manual';
+/** `local`: `review-relay review` on a branch in a checkout, before any PR exists. */
+export type JobSource = Bot | 'github' | 'mention' | 'manual' | 'local';
 
 /** A supported agent CLI. */
 export type HarnessName =
@@ -41,6 +42,8 @@ export interface ReviewJob {
   requestedBy?: string;
   /** The PR author's login, when the event named it. */
   author?: string;
+  /** The ref a local review diffs against, such as `origin/main`; PR reviews use `origin/<baseRef>`. */
+  base?: string;
 }
 
 export interface ResolvedJob extends ReviewJob {
@@ -69,4 +72,9 @@ export interface ReviewerResult {
   durationMs: number;
 }
 
-export const jobKey = (job: { repo: string; headSha: string }) => `${job.repo}@${job.headSha}`;
+/** A review of a branch in a checkout rather than a PR: `pr` is 0, and nothing is fetched or posted. */
+export const isLocal = (job: { source?: JobSource }) => job.source === 'local';
+
+/** One record per commit; a local review of a commit is its own record, apart from any PR review of it. */
+export const jobKey = (job: { repo: string; headSha: string; source?: JobSource }) =>
+  `${job.repo}@${job.headSha}${isLocal(job) ? ':local' : ''}`;

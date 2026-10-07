@@ -308,12 +308,12 @@ export function selfCommand(args: string[]): string[] {
   return compiled ? [process.execPath, ...args] : [process.execPath, script, ...args];
 }
 
-/** Starts `review-relay start` in the background with its output appended to the log file. */
-export function spawnDetached(dataDir: string, args: string[]): number {
+/** Starts this CLI with `args` in the background, in `cwd` when given, with its output appended to the log file. */
+export function spawnDetached(dataDir: string, args: string[], cwd?: string): number {
   mkdirSync(dataDir, { recursive: true });
   const log = openSync(logFilePath(dataDir), 'a');
   const [cmd, ...rest] = selfCommand(args);
-  const child = spawn(cmd!, rest, { detached: true, stdio: ['ignore', log, log], env: process.env });
+  const child = spawn(cmd!, rest, { detached: true, stdio: ['ignore', log, log], env: process.env, cwd });
   child.unref();
   return child.pid ?? 0;
 }

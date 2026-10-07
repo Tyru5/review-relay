@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 import { randomBytes } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
-import { defaultConfigPath, findRepo, loadConfig, type Config } from './config.ts';
+import { checkLabels, defaultConfigPath, findRepo, loadConfig, type Config } from './config.ts';
 import {
   clearDaemonInfo,
   inspectDaemon,
@@ -18,13 +18,16 @@ import {
   writeDaemonInfo,
   type DaemonState,
 } from './daemon.ts';
-import { diffStats } from './diffstats.ts';
+import { describeStats, diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
 import { openPrForCommit, prAuthor, prHead, resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
+import { localTag, localTarget, reviewLocal } from './local.ts';
+import { renderMarkdown } from './markdown.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
-import { explainRoutes, SOURCES } from './routes.ts';
+import { COMMENT_MARKER, combinedScore } from './report.ts';
+import { explainRoutes, pickRoute, SOURCES } from './routes.ts';
 import { RUNNER_DEPS, runReview } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
@@ -34,14 +37,23 @@ import { paginate, renderStatus } from './status.ts';
 import { tui } from './tui.ts';
 import type { JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
+import { mergeFindings } from './verdict.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
 
 const st = styles();
 const err = styles(process.stderr.isTTY && st.color);
 
+const logTime = () => new Date().toISOString().slice(11, 19);
+
+/** Appends timestamped lines to daemon.log, for a foreground command whose own output is the terminal. */
+const appendLog = (dataDir: string) => (message: string) => {
+  mkdirSync(dataDir, { recursive: true });
+  appendFileSync(logFilePath(dataDir), `${logTime()} ${message}\n`);
+};
+
 /** Timestamped log line; the tag `[owner/repo]` and the time are colored on a terminal only. */
 const log = (message: string) => {
-  const time = new Date().toISOString().slice(11, 19);
+  const time = logTime();
   const tagged = st.color ? message.replace(/^\[([^\]]+)\]/, (_, tag) => st.paint(ANSI.cyan, `[${tag}]`)) : message;
   console.log(`${st.muted(time)} ${tagged}`);
 };
@@ -79,6 +91,12 @@ interface Options {
   page?: string;
   route?: string;
   source?: string;
+  base?: string;
+  head?: string;
+  reviewers?: string;
+  minScore?: string;
+  headName?: string;
+  worker: boolean;
   detach: boolean;
   follow: boolean;
   json: boolean;
@@ -297,16 +315,19 @@ async function logs(config: Config, count: string | undefined, follow: boolean) 
 const unknownRepo = (config: Config, name: string) =>
   `no configured repo named "${name}" (configured: ${config.repos.map((r) => r.fullName).join(', ') || 'none'})`;
 
+/** Fails unless `route` names a route that reviews, so a typo never falls through to normal routing. */
+function checkRoute(config: Config, route: string, command: string) {
+  const named = config.routes.find((r) => r.name === route);
+  const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
+  if (!named) fail(`no route named "${route}" (routes: ${names})`);
+  if (named!.skip) fail(`route "${route}" skips the review, so ${command} can't use it`);
+}
+
 async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined, route?: string) {
   const repo = findRepo(config, repoName);
   if (!repoName || !pr) fail('run needs --repo <configured owner/name> and --pr <number>');
   if (!repo) fail(unknownRepo(config, repoName!));
-  if (route !== undefined) {
-    const named = config.routes.find((r) => r.name === route);
-    const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
-    if (!named) return fail(`no route named "${route}" (routes: ${names})`);
-    if (named.skip) return fail(`route "${route}" skips the review, so run can't use it`);
-  }
+  if (route !== undefined) checkRoute(config, route, 'run');
   const state = new StateStore(join(config.dataDir, 'state.json'));
   const scheduler = makeScheduler(config, state);
   scheduler.runNow(repo!, {
@@ -317,6 +338,159 @@ async function runOnce(config: Config, repoName: string | undefined, pr: string 
     ...(route ? { route } : {}),
   });
   await scheduler.idle();
+}
+
+/** The config a `review --reviewers` list runs with: those reviewers, and no routes to override them. */
+function withReviewers(config: Config, list: string): Config {
+  const ids = [...new Set(list.split(',').map((id) => id.trim()))].filter(Boolean);
+  if (ids.length === 0) fail('--reviewers takes reviewer ids separated by commas, such as codex,claude');
+  const unknown = ids.filter((id) => !config.models[id]);
+  if (unknown.length > 0) {
+    fail(`no reviewer named ${unknown.join(', ')} (reviewers: ${Object.keys(config.models).join(', ')})`);
+  }
+  checkLabels(ids, config.models);
+  return { ...config, reviewers: ids, routes: [] };
+}
+
+/**
+ * Aborts on ctrl-c or SIGTERM, so the reviewers stop and the worktree is removed; a second ctrl-c quits at once.
+ * `release` removes the handlers.
+ */
+function stopOnSignal(onStop: () => void) {
+  const controller = new AbortController();
+  const handle = () => {
+    if (controller.signal.aborted) process.exit(130);
+    onStop();
+    controller.abort('interrupted');
+  };
+  const signals = ['SIGINT', 'SIGTERM'] as const;
+  for (const sig of signals) process.on(sig, handle);
+  return { signal: controller.signal, release: () => signals.forEach((sig) => process.off(sig, handle)) };
+}
+
+/**
+ * Reviews the current branch against a base in this checkout, before any PR exists: the same reviewers, rubric, and
+ * score as a PR review. In the foreground it prints the review and exits 1 under `--min-score`; with -d a background
+ * worker runs it. Either way the job is recorded, so `status` and the TUI list it.
+ */
+async function reviewBranch(config: Config, configPath: string, opts: Options) {
+  const minScore = opts.minScore === undefined ? undefined : positiveInt('--min-score', opts.minScore, 1);
+  if (minScore !== undefined && minScore > 5) fail(`--min-score takes 1 to 5, got ${minScore}`);
+  if (opts.detach && (opts.json || minScore !== undefined)) {
+    fail('--json and --min-score report in the foreground; drop -d to use them');
+  }
+  if (opts.route !== undefined && opts.reviewers !== undefined) fail('pass --route or --reviewers, not both');
+  if (opts.route !== undefined) checkRoute(config, opts.route, 'review');
+  const reviewConfig = opts.reviewers === undefined ? config : withReviewers(config, opts.reviewers);
+
+  const target = await localTarget(reviewConfig, process.cwd(), {
+    base: opts.base,
+    head: opts.head,
+    headName: opts.headName,
+    route: opts.route,
+  });
+  const { job, repo, commits, dirty } = target;
+  const state = new StateStore(join(config.dataDir, 'state.json'));
+
+  if (opts.worker) {
+    // Spawned by -d or the TUI, with stdout in daemon.log.
+    const { signal, release } = stopOnSignal(() => log(`${localTag({ ...job, branch: job.headRef })}: stopping`));
+    await reviewLocal(target, reviewConfig, { state, log, signal }).finally(release);
+    return;
+  }
+
+  const stats = await diffStats(repo.localPath, baseRemoteRef(job), job.headSha);
+  const pick = pickRoute(reviewConfig, job, stats);
+  const note = (line: string) => console.error(line);
+  note(
+    `${err.title('review-relay')} ${job.repo} ${err.command(job.headRef!)} ${err.muted(`@ ${job.headSha.slice(0, 8)}`)} against ${job.base}`,
+  );
+  note(row(err, 'change', `${commits} ${commits === 1 ? 'commit' : 'commits'}; ${describeStats(stats)}`));
+  note(
+    row(
+      err,
+      'reviewers',
+      pick.reviewers.join(', '),
+      pick.route ? `route ${pick.route.name} (${pick.route.reason})` : undefined,
+    ),
+  );
+  if (dirty) note(err.badge('warning', 'uncommitted changes are left out; commit them to include them'));
+
+  if (opts.detach) {
+    // The worker reviews the SHA resolved here, so a commit made right after this returns isn't picked up.
+    const pid = spawnDetached(
+      config.dataDir,
+      [
+        'review',
+        '--worker',
+        '--config',
+        configPath,
+        '--base',
+        job.base!,
+        '--head',
+        job.headSha,
+        '--head-name',
+        job.headRef!,
+        ...(opts.route ? ['--route', opts.route] : []),
+        ...(opts.reviewers ? ['--reviewers', opts.reviewers] : []),
+      ],
+      repo.localPath,
+    );
+    note(err.badge('success', `reviewing in the background (pid ${pid})`));
+    note(
+      `  ${err.muted('follow it with')} ${err.command('review-relay tui')} ${err.muted('or')} ${err.command('review-relay logs -f')}`,
+    );
+    return;
+  }
+
+  note(err.muted(`reviewing; this can take several minutes (ctrl-c stops)`));
+  const { signal, release } = stopOnSignal(() =>
+    note(err.muted('stopping reviewers... (ctrl-c again to quit at once)')),
+  );
+  // Logged to daemon.log as well, so the TUI's log view shows this job like any other.
+  const outcome = await reviewLocal(target, reviewConfig, { state, log: appendLog(config.dataDir), signal }).finally(
+    release,
+  );
+  if (signal.aborted) {
+    note(err.badge('warning', 'interrupted; no report written'));
+    process.exit(130);
+  }
+
+  const results = outcome.results ?? [];
+  const confidence = combinedScore(results);
+  if (opts.json) {
+    const passed = results.filter((r) => r.ok && r.verdict);
+    console.log(
+      JSON.stringify(
+        {
+          repo: job.repo,
+          branch: job.headRef,
+          headSha: job.headSha,
+          base: job.base,
+          commits,
+          score: confidence,
+          route: outcome.route ?? null,
+          reportDir: outcome.reportDir,
+          // The raw output and verdicts stay in the report files; findings below merge the verdicts.
+          reviewers: results.map(({ output: _output, verdict: _verdict, ...reviewer }) => reviewer),
+          findings: mergeFindings(passed.map((r) => ({ reviewer: r.name, findings: r.verdict!.findings }))),
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    const width = Math.min(process.stdout.columns || 100, 120);
+    console.log();
+    // The marker only finds the comment on GitHub.
+    print(renderMarkdown((outcome.comment ?? '').replace(`${COMMENT_MARKER}\n`, ''), width, st));
+    console.log();
+    console.log(row(st, 'report', tildify(outcome.reportDir ?? '')));
+  }
+  if (minScore !== undefined && (confidence === null || confidence < minScore)) {
+    note(err.badge('danger', `confidence ${confidence ?? '?'}/5 is under --min-score ${minScore}`));
+    process.exitCode = 1;
+  }
 }
 
 /** Fetches the PR and prints how every route judges it, without running a reviewer or touching job state. */
@@ -389,6 +563,13 @@ export function parse(argv: string[]) {
       page: { type: 'string' },
       route: { type: 'string' },
       source: { type: 'string' },
+      base: { type: 'string' },
+      head: { type: 'string' },
+      reviewers: { type: 'string' },
+      'min-score': { type: 'string' },
+      // Internal: how -d and the TUI start a background review.
+      'head-name': { type: 'string' },
+      worker: { type: 'boolean', default: false },
       detach: { type: 'boolean', short: 'd', default: false },
       follow: { type: 'boolean', short: 'f', default: false },
       json: { type: 'boolean', default: false },
@@ -406,6 +587,12 @@ export function parse(argv: string[]) {
     page: values.page,
     route: values.route,
     source: values.source,
+    base: values.base,
+    head: values.head,
+    reviewers: values.reviewers,
+    minScore: values['min-score'],
+    headName: values['head-name'],
+    worker: values.worker,
     detach: values.detach,
     follow: values.follow,
     json: values.json,
@@ -421,6 +608,7 @@ const COMMANDS = [
   'tui',
   'logs',
   'run',
+  'review',
   'route',
   'replay',
   'setup',
@@ -471,6 +659,8 @@ async function main() {
       return logs(config, arg, opts.follow);
     case 'run':
       return runOnce(config, opts.repo, opts.pr, opts.route);
+    case 'review':
+      return reviewBranch(config, configPath, opts);
     case 'route':
       return explain(config, opts.repo, opts.pr, opts.source);
     case 'replay':

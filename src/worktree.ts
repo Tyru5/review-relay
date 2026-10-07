@@ -2,9 +2,19 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RepoConfig } from './config.ts';
 import { exec, execOrThrow } from './exec.ts';
-import type { ResolvedJob } from './types.ts';
+import { isLocal, type ResolvedJob } from './types.ts';
 
-export const baseRemoteRef = (job: ResolvedJob) => `origin/${job.baseRef}`;
+export const baseRemoteRef = (job: ResolvedJob) => job.base ?? `origin/${job.baseRef}`;
+
+/**
+ * Names a review's worktree and scratch folders. A local review adds the pid, so two runs on one commit, or one next
+ * to the daemon's review of the same commit, never share or remove each other's folders.
+ */
+export const workName = (job: ResolvedJob) =>
+  `${job.repo.replace('/', '__')}-${isLocal(job) ? `local${process.pid}` : `pr${job.pr}`}-${job.headSha.slice(0, 8)}`.replace(
+    /[^\w.-]+/g,
+    '_',
+  );
 
 /** Fetches the base branch and the PR head into the local clone, so the diff can be read before any checkout. */
 export async function fetchPr(repo: RepoConfig, job: ResolvedJob): Promise<void> {
@@ -30,7 +40,7 @@ export async function withCheckout<T>(
 ): Promise<T> {
   const root = join(dataDir, 'worktrees');
   mkdirSync(root, { recursive: true });
-  const dir = join(root, `${job.repo.replace('/', '__')}-pr${job.pr}-${job.headSha.slice(0, 8)}`);
+  const dir = join(root, workName(job));
   await exec(['git', '-C', repo.localPath, 'worktree', 'remove', '--force', dir]);
   await execOrThrow(['git', '-C', repo.localPath, 'worktree', 'add', '--detach', '--quiet', dir, job.headSha]);
   try {

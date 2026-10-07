@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../src/state.ts';
@@ -55,4 +55,34 @@ test('a queued or running job left by a daemon that died becomes failed, so it c
     ['waiting', 'failed'],
   ]);
   expect(['waiting', 'busy', 'stale'].map((key) => reloaded.isHandled(key))).toEqual([false, false, false]);
+});
+
+test('stores on one file keep each other’s records, and a job whose process is alive stays running', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const daemon = new StateStore(path);
+  const local = new StateStore(path);
+  daemon.queue(job('pr'));
+  daemon.begin('pr');
+  local.queue(job('branch'));
+  local.finish('branch', { status: 'done' });
+  daemon.finish('pr', { status: 'done' });
+  const saved = JSON.parse(readFileSync(path, 'utf8')) as { key: string; status: string; pid: number }[];
+  expect(saved.map((r) => [r.key, r.status]).toSorted()).toEqual([
+    ['branch', 'done'],
+    ['pr', 'done'],
+  ]);
+  expect(saved.every((r) => r.pid === process.pid)).toBe(true);
+  expect(existsSync(`${path}.lock`)).toBe(false);
+
+  // Another live process's job is left running; a dead process's job is failed.
+  const gone = Bun.spawnSync(['true']).pid;
+  writeFileSync(
+    path,
+    JSON.stringify([
+      { ...job('live'), status: 'running', startedAt: '2026-10-02T10:00:00Z', pid: process.ppid },
+      { ...job('dead'), status: 'running', startedAt: '2026-10-02T10:00:00Z', pid: gone },
+    ]),
+  );
+  const loaded = new StateStore(path);
+  expect([loaded.isActive('live'), loaded.isActive('dead')]).toEqual([true, false]);
 });

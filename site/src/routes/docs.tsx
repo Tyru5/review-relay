@@ -7,6 +7,7 @@ import {
   DOC_SECTIONS,
   ENVIRONMENT,
   GLOBAL_OPTIONS,
+  LOCAL_OPTIONS,
   MODEL_OPTIONS,
   QUICK_CONFIG,
   REPO_OPTIONS,
@@ -112,6 +113,7 @@ function Docs() {
             <p>Install the relay, choose your reviewers, and get a scored review on your next pull request.</p>
             <div className="docs-shortcuts">
               <a href="#quick-start">Set up the relay</a>
+              <a href="#local">Review before a PR</a>
               <a href="#configuration">Config reference</a>
               <a href="#troubleshooting">Something not working?</a>
             </div>
@@ -148,6 +150,10 @@ function Docs() {
               agents still use their providers. Replace the example repo and PR below with your own.
             </Note>
             <Snippet label="Review an open PR" code="review-relay run --repo acme/widget --pr 42" />
+            <p>
+              No pull request yet? Run <code>review-relay review</code> inside the clone to score the checked-out branch
+              without GitHub or the daemon. See <a href="#local">Review before a PR</a>.
+            </p>
             <p>
               Use <code>start</code> without <code>-d</code> for foreground logs. The machine and daemon must stay
               running to receive events.
@@ -272,8 +278,8 @@ function Docs() {
             />
             <Note title="Skip rules have limits">
               Skip routes may use only <code>onlyPaths</code>, <code>repos</code>, <code>baseBranches</code>, and{' '}
-              <code>sources</code>. Mentions and manual runs never skip. Changes to recognized agent instructions or
-              agent config files also prevent a skip, even when a docs glob matches.
+              <code>sources</code>. Mentions, manual runs, and local reviews never skip. Changes to recognized agent
+              instructions or agent config files also prevent a skip, even when a docs glob matches.
             </Note>
             <p>
               Size conditions exclude recognized lockfiles; path conditions still see them. Binary files count as files
@@ -376,6 +382,68 @@ function Docs() {
             </Note>
           </Section>
 
+          <Section id="local" title="Review before a PR">
+            <p>
+              <code>review-relay review</code> scores the branch you have checked out, so you can rate a change before
+              opening a pull request. It runs in your own clone, needs no PR, no GitHub access, and no running daemon,
+              and posts nothing.
+            </p>
+            <ul>
+              <li>
+                <strong>Foreground</strong>, the default, waits for the reviewers and prints the score, findings, and
+                dimension notes. Use it in scripts and hooks.
+              </li>
+              <li>
+                <strong>Background</strong>, with <code>-d</code>, returns at once. A background process reviews the
+                commit <code>HEAD</code> was at, so you can keep working while it runs. Follow it in{' '}
+                <code>review-relay tui</code> or <code>review-relay logs -f</code>.
+              </li>
+            </ul>
+            <Snippet
+              label="Score the current branch"
+              code={
+                'review-relay review\nreview-relay review -d\nreview-relay review --base origin/main --min-score 4\nreview-relay review --reviewers claude,codex --json'
+              }
+            />
+            <ul>
+              <li>
+                <strong>Same range as the PR.</strong> It reviews the commits on <code>--head</code> (default{' '}
+                <code>HEAD</code>) that <code>--base</code> lacks. The base defaults to the remote&rsquo;s default
+                branch as the clone recorded it (<code>origin/HEAD</code>), else <code>origin/main</code>.
+              </li>
+              <li>
+                <strong>Same panel and score.</strong> The reviewers, rubric, lockdown, caps, and lowest-score headline
+                match a PR review. Linked worktrees work too.
+              </li>
+              <li>
+                <strong>Committed work only.</strong> Uncommitted changes are left out with a warning. Nothing is
+                fetched, so run <code>git fetch</code> first for an up-to-date base.
+              </li>
+              <li>
+                <strong>Any clone.</strong> The repo&rsquo;s config entry applies when one names the clone. Any other
+                clone still works, named from its origin remote or its folder.
+              </li>
+            </ul>
+            <Reference rows={LOCAL_OPTIONS} label="review options" headings={['Option', 'Default', 'What it does']} />
+            <p>
+              Routes pick the reviewers as they would for a PR, with source <code>local</code> and the base&rsquo;s
+              branch name (<code>main</code> for <code>origin/main</code>). A skip route never applies, and{' '}
+              <code>{'"sources": ["local"]'}</code> sends local reviews to a panel of their own.
+            </p>
+            <Note title="Gate a push on the score">
+              <code>--min-score</code> exits 1 when the confidence is under the threshold, and a review where every
+              reviewer failed exits 1 too, so a pre-push hook or script can stop on it. It and <code>--json</code> need
+              the foreground. Ctrl-C stops the reviewers, removes the worktree, and records the job as failed.
+            </Note>
+            <p>
+              Both ways record the job, so <code>status</code> and <code>tui</code> list it with its branch in the PR
+              column and <code>local</code> as its source, and save the report under{' '}
+              <code>&lt;dataDir&gt;/reports/&lt;owner__repo&gt;/local/&lt;sha8&gt;/</code>. In <code>tui</code>,{' '}
+              <code>r</code> reviews the branch&rsquo;s current head again in the background, in the checkout it ran in.
+              Each local review is its own process, so <code>maxConcurrent</code> does not limit them.
+            </p>
+          </Section>
+
           <Section id="commands" title="CLI commands">
             <p>
               Run <code>review-relay help &lt;command&gt;</code> or <code>review-relay &lt;command&gt; --help</code> for
@@ -399,8 +467,9 @@ function Docs() {
               opens it in the browser, <code>y</code> copies its URL, <code>l</code> follows the job’s log and{' '}
               <code>L</code> the whole log. <code>?</code> lists every key. It reads <code>state.json</code>, the report
               directories, and <code>daemon.log</code> directly, so it works whether or not the daemon is running.
-              Unlike <code>status</code>, it shows an in-flight job as queued or running; <code>status</code> treats a
-              queued or running record as a failed run so it can retry.
+              <code>r</code> on a <a href="#local">local review</a> reviews its branch again. A queued or running job
+              whose process has exited shows as failed in both <code>tui</code> and <code>status</code>, so it can
+              retry.
             </p>
             <h3>Preview or force a route</h3>
             <Snippet
@@ -410,8 +479,8 @@ function Docs() {
             <p>
               <code>run --route sensitive</code> forces that non-skip route. Unlike mentions, an unknown or skip route
               is rejected. <code>route --source</code> accepts <code>github</code>, <code>greptile</code>,{' '}
-              <code>coderabbit</code>, <code>mention</code>, or <code>manual</code>. Route inspection also works on
-              closed PRs.
+              <code>coderabbit</code>, <code>mention</code>, <code>manual</code>, or <code>local</code>. Route
+              inspection also works on closed PRs.
             </p>
             <h3>Replay recorded deliveries</h3>
             <p>
@@ -460,7 +529,7 @@ function Docs() {
             <Snippet
               label="Report directory"
               code={
-                '<dataDir>/reports/<owner__repo>/pr-<number>/<sha8>/\n  comment.md\n  <reviewer-id>.json\n  meta.json'
+                '<dataDir>/reports/<owner__repo>/pr-<number>/<sha8>/\n  comment.md\n  <reviewer-id>.json\n  meta.json\n<dataDir>/reports/<owner__repo>/local/<sha8>/   # review, before a PR'
               }
             />
             <p>

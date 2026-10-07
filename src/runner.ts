@@ -8,9 +8,9 @@ import { commentBody, routeLine, writeReport } from './report.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import type { Harness, ReviewerInput } from './reviewers/types.ts';
 import { pickRoute, type RouteChoice } from './routes.ts';
-import { jobKey, type HarnessName, type ResolvedJob, type ReviewerId, type ReviewerResult } from './types.ts';
+import { isLocal, type HarnessName, type ResolvedJob, type ReviewerId, type ReviewerResult } from './types.ts';
 import { finalScore, VERDICT_SCHEMA } from './verdict.ts';
-import { baseRemoteRef, fetchPr, withCheckout } from './worktree.ts';
+import { baseRemoteRef, fetchPr, withCheckout, workName } from './worktree.ts';
 
 /** What a review touches outside its own logic: the CLIs, git, and GitHub. Tests stand in for them. */
 export interface RunnerDeps {
@@ -105,6 +105,10 @@ export interface ReviewOutcome {
   skipped?: boolean;
   /** The PR's newer head when one made this review stale, so nothing was posted. */
   supersededBy?: string;
+  /** Each reviewer's result, once the reviewers ran. */
+  results?: ReviewerResult[];
+  /** The comment the review wrote, posted or not. */
+  comment?: string;
 }
 
 /** The tail of each PR's chain of posts, so two reviews of one PR never post at once. */
@@ -153,7 +157,7 @@ export async function runReview(
   if (pick.skip) return { route: pick.route, skipped: true };
   if (signal?.aborted) return { route: pick.route, supersededBy: String(signal.reason) };
 
-  const scratchRoot = join(config.dataDir, 'tmp', jobKey(job).replace(/[^\w.-]+/g, '_'));
+  const scratchRoot = join(config.dataDir, 'tmp', workName(job));
   const schemaPath = join(config.dataDir, 'verdict-schema.json');
   await Bun.write(schemaPath, JSON.stringify(VERDICT_SCHEMA, null, 2));
   const reviewers = pick.reviewers.map((name) => ({ name, entry: config.models[name]! }));
@@ -204,9 +208,11 @@ export async function runReview(
   if (results.every((r) => !r.ok)) {
     throw new Error(`all reviewers failed (${results.map((r) => `${r.name}: ${r.error}`).join('; ')})`);
   }
-  if (repo.postToPr) {
+  const outcome = { reportDir, route: pick.route, results, comment: body };
+  // A local review has no PR to post to.
+  if (repo.postToPr && !isLocal(job)) {
     const supersededBy = await postIfCurrent(job, body, deps);
-    if (supersededBy) return { reportDir, route: pick.route, supersededBy };
+    if (supersededBy) return { ...outcome, supersededBy };
   }
-  return { reportDir, route: pick.route };
+  return outcome;
 }

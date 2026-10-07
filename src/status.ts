@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
-import { activeJob, type JobRecord } from './state.ts';
+import { activeJob, jobTarget, type JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
 import { fmtDuration, sanitize } from './ui.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
@@ -128,7 +128,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
       { text: fmtStarted(r.startedAt) },
       end === null ? none : { text: fmtDuration(end - Date.parse(r.startedAt)) },
       { text: r.repo },
-      { text: `#${r.pr}` },
+      { text: jobTarget(r) },
       { text: r.headSha.slice(0, 8) },
       { text: r.source, color: DIM },
       r.route ? { text: r.route } : none,

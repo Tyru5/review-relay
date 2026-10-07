@@ -2,13 +2,18 @@ import { basename } from 'node:path';
 import type { Config } from './config.ts';
 import { LOCKFILES, pathsOf, type DiffStats } from './diffstats.ts';
 import { HARNESS_NAMES, HARNESSES } from './reviewers/index.ts';
-import type { JobSource, ResolvedJob, ReviewerId } from './types.ts';
+import { isLocal, type JobSource, type ResolvedJob, type ReviewerId } from './types.ts';
 import { fmtDuration } from './ui.ts';
 
 /** Route names, like reviewer ids, so a mention can name one. */
 export const ROUTE_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-export const SOURCES: JobSource[] = ['greptile', 'coderabbit', 'github', 'mention', 'manual'];
+export const SOURCES: JobSource[] = ['greptile', 'coderabbit', 'github', 'mention', 'manual', 'local'];
+
+/** Sources a person asked for by hand, which skip routes never apply to. */
+const EXPLICIT: JobSource[] = ['mention', 'manual', 'local'];
+
+const COMMAND: Partial<Record<JobSource, string>> = { mention: 'a mention', manual: 'run', local: 'review' };
 
 const GLOB_CONDITIONS = ['repos', 'baseBranches', 'paths', 'onlyPaths'] as const;
 const COUNT_CONDITIONS = ['minLines', 'maxLines', 'minFiles', 'maxFiles'] as const;
@@ -181,8 +186,8 @@ export function parseRoutes(raw: unknown, known: { reviewers: ReviewerId[]; repo
           `${at}: skip can't use ${unsafe.join(' or ')}; it may only use ${SKIP_CONDITIONS.join(', ')}, so send small PRs to a cheap route instead`,
         );
       }
-      if (when.sources?.every((source) => source === 'mention' || source === 'manual')) {
-        throw new Error(`${at}: never skips anything, because mentions and run always review`);
+      if (when.sources?.every((source) => EXPLICIT.includes(source))) {
+        throw new Error(`${at}: never skips anything, because mentions, run, and review always review`);
       }
       return { name, when, skip: true };
     }
@@ -311,7 +316,7 @@ export interface RouteVerdict {
 
 /** Checks every route against the PR, for picking one and for `review-relay route`. */
 export function traceRoutes(routes: Route[], facts: RouteFacts): RouteVerdict[] {
-  const explicit = facts.source === 'mention' || facts.source === 'manual';
+  const explicit = EXPLICIT.includes(facts.source);
   const agentFile = facts.stats.changed.flatMap(pathsOf).find(isAgentFile);
   return routes.map((route) => {
     const checks = CONDITIONS.filter((condition) => route.when[condition] !== undefined).map((condition) =>
@@ -321,7 +326,7 @@ export function traceRoutes(routes: Route[], facts: RouteFacts): RouteVerdict[] 
     if (failed) return { route, matched: false, detail: failed.why };
     const verdict: RouteVerdict = { route, matched: true, detail: checks.map((result) => result.why).join('; ') };
     if (route.skip && explicit) {
-      return { ...verdict, passedOver: `${facts.source === 'mention' ? 'a mention' : 'run'} never skips` };
+      return { ...verdict, passedOver: `${COMMAND[facts.source]} never skips` };
     }
     if (route.skip && agentFile) return { ...verdict, passedOver: `${agentFile} is an agent file` };
     return verdict;
@@ -354,7 +359,9 @@ export function pickRoute(
 ): RoutePick {
   const named = job.route ? config.routes.find((route) => route.name === job.route && !route.skip) : undefined;
   if (named) {
-    const reason = job.requestedBy ? `requested by @${job.requestedBy}` : 'requested with run --route';
+    const reason = job.requestedBy
+      ? `requested by @${job.requestedBy}`
+      : `requested with ${isLocal(job) ? 'review' : 'run'} --route`;
     return {
       route: { name: named.name, reason, forced: true },
       skip: false,

@@ -421,7 +421,7 @@ describe('list view', () => {
     expect(help.view).toBe('help');
     const text = render(help, ctx);
     expect(text).toMatch(/╭─ Keys ─+ \[any key] close ─╮/);
-    expect(text).toContain('review the PR again (asks first)');
+    expect(text).toContain('review the PR or local branch again (asks first)');
     expect(text).toContain(' [any key] closes help');
     expect(press(ctx, ['x'], help).view).toBe('list');
   });
@@ -757,6 +757,61 @@ describe('term helpers', () => {
       'home',
       'end',
       'home',
+    ]);
+  });
+});
+
+describe('local reviews', () => {
+  const LOCAL = job('ffffffff5', {
+    key: 'acme/app@ffffffff5:local',
+    pr: 0,
+    source: 'local',
+    branch: 'feat/login',
+    base: 'origin/main',
+    localPath: '/work/app',
+    startedAt: '2026-10-02T11:01:00.000Z',
+    finishedAt: '2026-10-02T11:03:05.000Z',
+  });
+
+  test('list and detail name the branch, base, and checkout instead of a PR', () => {
+    const dir = dataDir([LOCAL, DONE]);
+    writeFileSync(
+      join(dir, 'daemon.log'),
+      [
+        '11:01:00 [acme/app] branch feat/login @ ffffffff: reviewing (local review of feat/login against origin/main)',
+        '11:01:01 [acme/app] PR #7 @ bbbbbbbb: reviewing (opened)',
+        '11:04:00 [acme/app] branch feat/login @ ffffffff: done -> /tmp/x',
+      ].join('\n') + '\n',
+    );
+    const ctx = ctxFor(dir);
+    const list = render(initialState(), ctx);
+    expect(list).toMatch(/done +10-02 \d\d:\d\d +2m05s +acme\/app +feat\/login +ffffffff +local/);
+    expect(list).toContain('Job · acme/app feat/login');
+    const detail = render(press(ctx, ['enter']), ctx);
+    expect(detail).toContain('branch    feat/login against origin/main');
+    expect(detail).toContain('checkout  /work/app');
+    expect(detail).not.toContain('https://github.com');
+    expect(ctx.store.log(LOCAL)).toEqual([
+      '11:01:00 [acme/app] branch feat/login @ ffffffff: reviewing (local review of feat/login against origin/main)',
+      '11:04:00 [acme/app] branch feat/login @ ffffffff: done -> /tmp/x',
+    ]);
+  });
+
+  test('o and y say there is no PR yet; r asks, then re-runs the branch', () => {
+    const ctx = ctxFor(dataDir([LOCAL]));
+    expect(press(ctx, ['o']).flash?.text).toContain('a local review has no PR');
+    expect(press(ctx, ['y']).effect).toBeUndefined();
+    const asked = press(ctx, ['r']);
+    expect(render(asked, ctx)).toContain('review acme/app feat/login again with the configured reviewers?');
+    expect(press(ctx, ['y'], asked).effect).toEqual({ kind: 'rerun', job: LOCAL });
+  });
+
+  test('a job whose process is gone shows as failed; one without a pid stays running', () => {
+    const gone = Bun.spawnSync(['true']).pid;
+    const dir = dataDir([{ ...LOCAL, status: 'running', finishedAt: undefined, pid: gone }, RUNNING]);
+    expect(readJobs(join(dir, 'state.json')).map((j) => [j.status, j.error])).toEqual([
+      ['failed', 'stopped before finishing'],
+      ['running', undefined],
     ]);
   });
 });

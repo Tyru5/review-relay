@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describeStats, type DiffStats } from './diffstats.ts';
 import type { RouteChoice } from './routes.ts';
-import type { ResolvedJob, ReviewerResult } from './types.ts';
+import { isLocal, type JobSource, type ResolvedJob, type ReviewerResult } from './types.ts';
 import { DIMENSION_LABELS, DIMENSIONS, mergeFindings, type MergedFinding, type Severity } from './verdict.ts';
 
 export const COMMENT_MARKER = '<!-- review-relay -->';
@@ -19,6 +19,8 @@ export function combinedScore(results: ReviewerResult[]): number | null {
 const location = (job: ResolvedJob, f: MergedFinding) => {
   if (!f.file) return 'general';
   const label = f.line ? `${f.file}:${f.line}` : f.file;
+  // A local commit may not be on GitHub yet, so it gets no link.
+  if (isLocal(job)) return `\`${label}\``;
   const anchor = f.line ? `#L${f.line}` : '';
   return `[\`${label}\`](https://github.com/${job.repo}/blob/${job.headSha}/${f.file}${anchor})`;
 };
@@ -101,8 +103,14 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   return body.length > GITHUB_COMMENT_LIMIT ? `${body.slice(0, GITHUB_COMMENT_LIMIT - 40)}\n\n_(truncated)_` : body;
 }
 
-export const reportDirFor = (dataDir: string, job: { repo: string; pr: number; headSha: string }) =>
-  join(dataDir, 'reports', job.repo.replace('/', '__'), `pr-${job.pr}`, job.headSha.slice(0, 8));
+export const reportDirFor = (dataDir: string, job: { repo: string; pr: number; headSha: string; source?: JobSource }) =>
+  join(
+    dataDir,
+    'reports',
+    job.repo.replace('/', '__'),
+    isLocal(job) ? 'local' : `pr-${job.pr}`,
+    job.headSha.slice(0, 8),
+  );
 
 export async function writeReport(
   dataDir: string,

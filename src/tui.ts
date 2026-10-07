@@ -8,13 +8,14 @@
  * (spawning a run, opening a browser) come back as an `effect` the loop performs.
  */
 import { spawn } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
 import { renderMarkdownView, type MarkdownDetails } from './markdown.ts';
 import { reportDirFor } from './report.ts';
-import { activeJob, type JobRecord, type JobStatus } from './state.ts';
+import { localTag } from './local.ts';
+import { activeJob, jobTarget, orphaned, type JobRecord, type JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
 import { colorDepth, fill, moved, rgb, runScreen, windowed } from './term.ts';
 import {
@@ -28,6 +29,7 @@ import {
   type Styles,
   type Tone,
 } from './ui.ts';
+import { isLocal } from './types.ts';
 import { mergeFindings, type Finding, type MergedFinding, type Verdict } from './verdict.ts';
 
 const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded'];
@@ -45,9 +47,17 @@ const FLASH_MS = 4000;
 
 export const prUrl = (job: { repo: string; pr: number }) => `https://github.com/${job.repo}/pull/${job.pr}`;
 
+/** The job's repo and what it reviewed: `owner/name #12`, or `owner/name feat` for a local review. */
+const jobTitle = (job: JobRecord) => `${job.repo} ${jobTarget(job)}`;
+
+/** A job queued or running when its process is gone, as a failure, the way `StateStore` loads it. */
+const settled = (job: JobRecord): JobRecord =>
+  orphaned(job, false) ? { ...job, status: 'failed', error: job.error ?? 'stopped before finishing' } : job;
+
 /**
- * The jobs in `state.json` as they are on disk. Unlike `StateStore`, this keeps `running` records as running (the
- * store rewrites them as failed for crash recovery), since the TUI shows in-flight reviews.
+ * The jobs in `state.json` as they are on disk. Unlike `StateStore`, this keeps a `running` record without a pid as
+ * running (the store rewrites those as failed for crash recovery), since the TUI shows in-flight reviews. A record
+ * whose process is gone shows as failed.
  */
 export function readJobs(path: string): JobRecord[] {
   let saved: unknown;
@@ -66,6 +76,7 @@ export function readJobs(path: string): JobRecord[] {
         typeof r.repo === 'string' &&
         STATUSES.includes(r.status),
     )
+    .map(settled)
     .toSorted((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
 }
 
@@ -99,7 +110,7 @@ const isFinished = (job: JobRecord) => !activeJob(job);
 
 /** Why a queued or running job can't be re-reviewed yet. */
 const busyText = (job: JobRecord) =>
-  `${job.repo} #${job.pr} ${job.status === 'queued' ? 'is queued for review' : 'is being reviewed now'}`;
+  `${jobTitle(job)} ${job.status === 'queued' ? 'is queued for review' : 'is being reviewed now'}`;
 
 /**
  * The cache key for a job's report folder reads. A re-run reuses the job's key (`repo@sha`) but starts again, moves
@@ -189,7 +200,10 @@ export class JobStore {
     } catch {
       return [];
     }
-    if (job) {
+    if (job && isLocal(job)) {
+      const tag = localTag(job);
+      lines = lines.filter((l) => l.includes(tag)).slice(-LOG_LINES);
+    } else if (job) {
       const tag = `[${job.repo}]`;
       // A digit boundary, so PR #12's view doesn't pick up PR #120.
       const pr = new RegExp(`PR #${job.pr}(?!\\d)`);
@@ -202,6 +216,8 @@ export class JobStore {
 export type View = 'list' | 'detail' | 'log' | 'help';
 
 export type Effect = { kind: 'rerun'; job: JobRecord } | { kind: 'open'; url: string } | { kind: 'copy'; text: string };
+
+const NO_PR = 'a local review has no PR; open one from the branch first';
 
 export interface TuiState {
   view: View;
@@ -246,7 +262,7 @@ export const initialState = (): TuiState => ({
 });
 
 const rowText = (job: JobRecord) =>
-  [job.status, job.repo, `#${job.pr}`, job.headSha, job.source, job.route ?? '', job.error ?? '']
+  [job.status, job.repo, jobTarget(job), job.headSha, job.source, job.route ?? '', job.error ?? '']
     .join(' ')
     .toLowerCase();
 
@@ -289,8 +305,10 @@ function jobKeys(state: TuiState, key: string, ctx: TuiContext): TuiState | unde
       if (activeJob(job)) return flash(pinned, busyText(job), ctx, 'warning');
       return { ...pinned, confirm: { action: 'rerun', key: job.key } };
     case 'o':
+      if (isLocal(job)) return flash(pinned, NO_PR, ctx, 'warning');
       return { ...pinned, effect: { kind: 'open', url: prUrl(job) } };
     case 'y':
+      if (isLocal(job)) return flash(pinned, NO_PR, ctx, 'warning');
       return { ...pinned, effect: { kind: 'copy', text: prUrl(job) } };
     case 'l':
       return { ...pinned, view: 'log', wholeLog: false, follow: true, scroll: 0 };
@@ -484,12 +502,14 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
   const took = fmtDuration(end - Date.parse(job.startedAt));
   const field = (label: string, value: string) => `  ${st.muted(label.padEnd(10))}${value}`;
   const lines = [
-    `${st.bold(`${job.repo} #${job.pr}`)}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[job.status], job.status)}`,
-    field('url', prUrl(job)),
+    `${st.bold(jobTitle(job))}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[job.status], job.status)}`,
+    ...(isLocal(job)
+      ? [field('branch', `${job.branch} against ${job.base}`), field('checkout', tildify(job.localPath ?? ''))]
+      : [field('url', prUrl(job))]),
     field('started', `${fmtTime(job.startedAt)}  ${st.muted(activeJob(job) ? `${took} so far` : took)}`),
     field('source', [job.source, job.route && `route ${job.route}`].filter(Boolean).join(' · ')),
   ];
-  if (detail.meta?.baseRef) lines.push(field('base', detail.meta.baseRef));
+  if (detail.meta?.baseRef && !isLocal(job)) lines.push(field('base', detail.meta.baseRef));
   if (job.error) lines.push(field('error', st.tone('danger', sanitize(job.error))));
   const score = detail.summary?.score;
   if (score) lines.push(field('score', st.tone(scoreTone(score), `${score}/5`)));
@@ -531,14 +551,14 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
   if (detail.comment.length) {
     // Two for the panel's padding and border on each side, two for the section indent.
     const width = Math.max(20, ctx.width - 6);
-    const title = job.status === 'superseded' ? 'Comment (not posted)' : 'Comment';
+    const heading = isLocal(job) ? 'Review' : job.status === 'superseded' ? 'Comment (not posted)' : 'Comment';
     const comment = renderMarkdownView(
       detail.comment.join('\n'),
       width,
       st,
       details?.job === cacheKey(job) ? details : undefined,
     );
-    lines.push('', st.section(title));
+    lines.push('', st.section(heading));
     sections = comment.sections.map((s) => ({ ...s, line: s.line + lines.length }));
     lines.push(...comment.lines.map((l) => `  ${l}`));
   } else if (activeJob(job) || job.status === 'failed') {
@@ -563,7 +583,7 @@ const HELP_LINES: [string, string][] = [
   ['l', "the job's lines from the daemon log, following as they arrive"],
   ['L', 'the whole daemon log'],
   ['1 2 tab', 'switch between the Jobs and Log tabs'],
-  ['r', 'review the PR again (asks first); runs in the background and logs to daemon.log'],
+  ['r', 'review the PR or local branch again (asks first); runs in the background and logs to daemon.log'],
   ['o', 'open the PR in the browser'],
   ['y', "copy the PR's URL to the clipboard"],
   ['/', 'filter by repo, PR, commit, status, source, route, or error text'],
@@ -708,7 +728,7 @@ function daemonLine(ctx: TuiContext, st: Styles): string {
 }
 
 /** The footer's key hints for the current view. */
-function footer(state: TuiState, list: JobRecord[]): [string, string][] {
+function footer(state: TuiState, list: JobRecord[], selected?: JobRecord): [string, string][] {
   if (state.confirm)
     return [
       ['y', 're-run'],
@@ -726,8 +746,13 @@ function footer(state: TuiState, list: JobRecord[]): [string, string][] {
     ? [
         ['l', 'log'],
         ['r', 're-run'],
-        ['o', 'open PR'],
-        ['y', 'copy url'],
+        // A local review has no PR to open or link.
+        ...(selected && isLocal(selected)
+          ? []
+          : ([
+              ['o', 'open PR'],
+              ['y', 'copy url'],
+            ] as [string, string][])),
       ]
     : [];
   switch (state.view) {
@@ -810,7 +835,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
   const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
   const asked = state.confirm && jobs.find((j) => j.key === state.confirm!.key);
   const message = asked
-    ? ` ${st.badge('warning', `review ${asked.repo} #${asked.pr} again with the configured reviewers?`)}`
+    ? ` ${st.badge('warning', `review ${jobTitle(asked)} again with the configured reviewers?`)}`
     : live
       ? ` ${st.badge(live.tone, live.text)}`
       : '';
@@ -831,7 +856,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const note =
       lines.length > avail ? `${top + 1}-${Math.min(lines.length, top + avail)} of ${lines.length}` : undefined;
     panels = panel(st, width, body, lines.slice(top, top + avail), {
-      title: `Job · ${job.repo} #${job.pr}`,
+      title: `Job · ${jobTitle(job)}`,
       note,
       hints: [
         ['n/p', 'next/prev'],
@@ -844,7 +869,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const title = state.wholeLog
       ? `Log · ${tildify(logFilePath(ctx.store.dataDir))}`
       : job
-        ? `Log · ${job.repo} #${job.pr}`
+        ? `Log · ${jobTitle(job)}`
         : 'Log';
     const shown = lines.length ? lines : [st.muted(state.wholeLog ? 'no log yet' : 'nothing logged for this job yet')];
     const avail = body - 2;
@@ -870,7 +895,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
       lines = [
         st.muted(
           jobs.length === 0
-            ? 'Jobs appear here as the daemon reviews PRs, or run one with: review-relay run --repo owner/name --pr N'
+            ? 'Jobs appear here as the daemon reviews PRs, or run one with: review-relay run --repo owner/name --pr N, or review a branch with: review-relay review -d'
             : 'no job matches the filter',
         ),
       ];
@@ -899,14 +924,14 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     if (split) {
       panels.push(
         ...panel(st, width, body - jobsH, detailContent(job!, ctx, st).lines, {
-          title: `Job · ${job!.repo} #${job!.pr}`,
+          title: `Job · ${jobTitle(job!)}`,
           hints: [['enter', 'expand']],
         }),
       );
     }
   }
 
-  return [row(header), row(status), ...panels.map(row), row(message), row(` ${hints(st, footer(state, list))}`)];
+  return [row(header), row(status), ...panels.map(row), row(message), row(` ${hints(st, footer(state, list, job))}`)];
 }
 
 /** Opens `url` with the platform's opener; WSL goes through `wslview` when it is installed. */
@@ -922,11 +947,25 @@ function openInBrowser(url: string): void {
   child.unref();
 }
 
+/**
+ * Reviews a local job's branch again in the background, in the checkout it ran in. The branch's current head is
+ * reviewed, so commits made since are included.
+ */
+function rerunLocal(job: JobRecord, config: Config, configPath: string): { text: string; tone: Tone } {
+  if (!job.localPath || !job.branch || !job.base)
+    return { text: 'this job lacks its branch or checkout', tone: 'danger' };
+  if (!existsSync(job.localPath)) return { text: `${tildify(job.localPath)} no longer exists`, tone: 'danger' };
+  const args = ['review', '--worker', '--config', configPath, '--base', job.base, '--head', job.branch];
+  const pid = spawnDetached(config.dataDir, args, job.localPath);
+  return { text: `re-reviewing ${jobTitle(job)} in the background (pid ${pid}); press l to follow`, tone: 'success' };
+}
+
 /** Performs `effect` and says what happened, for the flash line. */
 export function perform(effect: Effect, config: Config, configPath: string): { text: string; tone: Tone } {
   switch (effect.kind) {
     case 'rerun': {
       const { job } = effect;
+      if (isLocal(job)) return rerunLocal(job, config, configPath);
       const pid = spawnDetached(config.dataDir, [
         'run',
         '--config',
