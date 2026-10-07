@@ -30,6 +30,7 @@ export interface LocalTarget {
 /** Bases tried in order when `origin/HEAD` isn't set, as in a clone made with `git init` and `git remote add`. */
 const FALLBACK_BASES = ['origin/main', 'origin/master', 'main', 'master'];
 
+/** The path with symlinks resolved, so two spellings of one clone compare equal. */
 const real = (path: string) => {
   try {
     return realpathSync(path);
@@ -122,10 +123,15 @@ async function branchOf(dir: string, base: string): Promise<string> {
   return remote ? base.slice(remote.length + 1) : base;
 }
 
+/** `owner/name` from the clone's origin remote, when it is on GitHub. */
 async function originName(dir: string): Promise<string | undefined> {
   const url = await exec(['git', '-C', dir, 'remote', 'get-url', 'origin']);
   return url.code === 0 ? parseGithubRemote(url.stdout) : undefined;
 }
+
+/** Why a local review can't start: another process is reviewing the same commit. */
+export const busyLocal = (job: { headRef?: string; headSha: string }) =>
+  `${job.headRef} @ ${job.headSha.slice(0, 8)} is already being reviewed`;
 
 /** The prefix of a local review's log lines, which the TUI also uses to find them. */
 export const localTag = (job: { repo: string; branch?: string; headSha: string }) =>
@@ -144,13 +150,14 @@ export interface LocalRun {
 
 /**
  * Runs a local review and records it in job state as it goes, so `status` and the TUI list it whether it runs in the
- * foreground or the background. Throws, after recording the failure, when the review fails.
+ * foreground or the background. Throws, after recording the failure, when the review fails, and without touching
+ * the record when another live process is already reviewing the same commit.
  */
 export async function reviewLocal(target: LocalTarget, config: Config, run: LocalRun): Promise<ReviewOutcome> {
   const { job, repo } = target;
   const key = jobKey(job);
   const tag = localTag({ ...job, branch: job.headRef });
-  run.state.queue({
+  const claimed = run.state.claim({
     key,
     repo: job.repo,
     pr: job.pr,
@@ -160,6 +167,8 @@ export async function reviewLocal(target: LocalTarget, config: Config, run: Loca
     base: job.base,
     localPath: repo.localPath,
   });
+  // Another review of this commit would write the same report folder, so it waits its turn.
+  if (!claimed) throw new Error(`${busyLocal(job)}; wait for it to finish or follow it in review-relay tui`);
   run.state.begin(key);
   run.log(`${tag}: reviewing (${job.reason})`);
   try {

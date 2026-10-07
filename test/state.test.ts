@@ -86,3 +86,35 @@ test('stores on one file keep each other’s records, and a job whose process is
   const loaded = new StateStore(path);
   expect([loaded.isActive('live'), loaded.isActive('dead')]).toEqual([true, false]);
 });
+
+test('claim refuses a key a live process holds and takes one that finished or whose process died', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const gone = Bun.spawnSync(['true']).pid;
+  const held = (key: string, pid: number, status = 'running') => ({
+    ...job(key),
+    status,
+    startedAt: '2026-10-02T10:00:00Z',
+    pid,
+  });
+  writeFileSync(
+    path,
+    JSON.stringify([held('live', process.ppid), held('dead', gone), held('done', process.ppid, 'done')]),
+  );
+  // Each store loaded before the other wrote, so only the file under the lock can tell them apart.
+  const first = new StateStore(path);
+  const second = new StateStore(path);
+  expect(first.claim(job('live'))).toBe(false);
+  expect(first.claim(job('dead'))).toBe(true);
+  expect(first.claim(job('done'))).toBe(true);
+  expect(second.claim(job('fresh'))).toBe(true);
+  expect(first.claim(job('fresh'))).toBe(false);
+
+  const saved = JSON.parse(readFileSync(path, 'utf8')) as { key: string; status: string; pid: number }[];
+  const byKey = Object.fromEntries(saved.map((r) => [r.key, [r.status, r.pid]]));
+  expect(byKey).toEqual({
+    live: ['running', process.ppid],
+    dead: ['queued', process.pid],
+    done: ['queued', process.pid],
+    fresh: ['queued', process.pid],
+  });
+});

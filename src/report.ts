@@ -103,6 +103,7 @@ export function commentBody(job: ResolvedJob, results: ReviewerResult[], stats: 
   return body.length > GITHUB_COMMENT_LIMIT ? `${body.slice(0, GITHUB_COMMENT_LIMIT - 40)}\n\n_(truncated)_` : body;
 }
 
+/** Where a job's report lives: one folder per PR commit, or under `local/` for a local review. */
 export const reportDirFor = (dataDir: string, job: { repo: string; pr: number; headSha: string; source?: JobSource }) =>
   join(
     dataDir,

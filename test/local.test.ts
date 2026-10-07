@@ -136,6 +136,18 @@ describe('reviewLocal', () => {
       `[acme/widget] branch feature @ ${sha.slice(0, 8)}: done -> ${outcome.reportDir}`,
     ]);
 
+    // A live process holding the commit keeps it: no second review, and its record is left alone.
+    const holder = new StateStore(join(root, 'state.json'));
+    writeFileSync(
+      join(root, 'state.json'),
+      JSON.stringify([{ ...holder.list()[0], status: 'running', pid: process.ppid }]),
+    );
+    await expect(reviewLocal(target, c, { state, log: () => {}, deps: deps(true) })).rejects.toThrow(
+      `feature @ ${sha.slice(0, 8)} is already being reviewed`,
+    );
+    expect(new StateStore(join(root, 'state.json')).list()[0]).toMatchObject({ status: 'running', pid: process.ppid });
+    writeFileSync(join(root, 'state.json'), '[]');
+
     await expect(reviewLocal(target, c, { state, log: () => {}, deps: deps(false) })).rejects.toThrow(
       'all reviewers failed',
     );

@@ -22,7 +22,7 @@ import { describeStats, diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
 import { openPrForCommit, prAuthor, prHead, resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
-import { localTag, localTarget, reviewLocal } from './local.ts';
+import { busyLocal, localTag, localTarget, reviewLocal } from './local.ts';
 import { renderMarkdown } from './markdown.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
@@ -35,7 +35,7 @@ import { setup } from './setup.ts';
 import { StateStore } from './state.ts';
 import { paginate, renderStatus } from './status.ts';
 import { tui } from './tui.ts';
-import type { JobSource } from './types.ts';
+import { jobKey, type JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
 import { mergeFindings } from './verdict.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
@@ -43,6 +43,7 @@ import { baseRemoteRef, fetchPr } from './worktree.ts';
 const st = styles();
 const err = styles(process.stderr.isTTY && st.color);
 
+/** The UTC time of day that starts each log line. */
 const logTime = () => new Date().toISOString().slice(11, 19);
 
 /** Appends timestamped lines to daemon.log, for a foreground command whose own output is the terminal. */
@@ -398,6 +399,9 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
     await reviewLocal(target, reviewConfig, { state, log, signal }).finally(release);
     return;
   }
+
+  // A fast answer for the common case; the review's own claim is what keeps two runs apart.
+  if (state.isActive(jobKey(job))) fail(`${busyLocal(job)}; follow it in review-relay tui`);
 
   const stats = await diffStats(repo.localPath, baseRemoteRef(job), job.headSha);
   const pick = pickRoute(reviewConfig, job, stats);
