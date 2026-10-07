@@ -428,6 +428,103 @@ describe('list view', () => {
 });
 
 describe('detail view', () => {
+  test('selects the next header at the scroll position, or the last section past all headers', () => {
+    const dir = dataDir();
+    writeFileSync(
+      join(reportDirFor(dir, DONE), 'comment.md'),
+      [
+        '<details><summary>First</summary>',
+        'First body.',
+        '</details>',
+        '<details><summary>Middle</summary>',
+        'Middle body.',
+        '</details>',
+        '<details><summary>Last</summary>',
+        ...Array.from({ length: 20 }, (_, i) => `- Last body ${i}`),
+        '</details>',
+      ].join('\n'),
+    );
+    const ctx = ctxFor(dir, { height: 14 });
+    const detail = press(ctx, ['down', 'enter']);
+    let middle = detail;
+    for (let i = 0; i < 100 && !lines(middle, ctx)[3]!.includes('▾ Middle'); i++) {
+      middle = press(ctx, ['down'], middle);
+    }
+    expect(lines(middle, ctx)[3]).toContain('▾ Middle');
+    const bottom = press(ctx, ['G'], detail);
+    expect(render(bottom, ctx)).not.toContain('▾');
+    for (const key of [']', 'enter', 'space']) {
+      for (const [state, expected] of [
+        [detail, 0],
+        [middle, 3],
+        [press(ctx, ['down'], middle), 6],
+        [bottom, 6],
+      ] as const) {
+        const next = press(ctx, [key], state);
+        expect(next.details?.selected).toBe(expected);
+        expect(next.details?.collapsed).toEqual(key === ']' ? [] : [expected]);
+      }
+    }
+  });
+
+  test('selects and toggles individual comment details without hiding adjacent content', () => {
+    const dir = dataDir();
+    writeFileSync(
+      join(reportDirFor(dir, DONE), 'comment.md'),
+      [
+        '- **Minor** First finding',
+        '  <details><summary>Details</summary>',
+        '',
+        '  First explanation.',
+        '',
+        '  **Suggested fix:** First fix.',
+        '',
+        '  </details>',
+        '- **Major** Second finding',
+        '  <details><summary>Details</summary>',
+        '',
+        '  Second explanation.',
+        '',
+        '  </details>',
+        '<details><summary>Dimension notes</summary>',
+        '',
+        'Dimension explanation.',
+        '',
+        '</details>',
+        'After all details.',
+      ].join('\n'),
+    );
+    const ctx = ctxFor(dir, { height: 70 });
+    const detail = press(ctx, ['down', 'enter']);
+    expect(render(detail, ctx)).toContain('▾ Details');
+    expect(render(detail, ctx)).toContain('First explanation.');
+    const first = press(ctx, [']', 'enter'], detail);
+    const collapsed = render(first, ctx);
+    expect(collapsed).toContain('▸ Details');
+    expect(collapsed).not.toContain('First explanation.');
+    expect(collapsed).not.toContain('First fix.');
+    expect(collapsed).toContain('Second explanation.');
+    expect(collapsed).toContain('Dimension explanation.');
+    expect(collapsed).toContain('After all details.');
+    const second = press(ctx, [']', 'space'], first);
+    expect(render(second, ctx)).not.toContain('Second explanation.');
+    const reopened = press(ctx, ['[', 'enter'], second);
+    expect(render(reopened, ctx)).toContain('First explanation.');
+    expect(render(reopened, ctx)).toContain('First fix.');
+    expect(render(reopened, ctx)).not.toContain('Second explanation.');
+    expect(render(press(ctx, ['n', 'p'], second), ctx)).toContain('Second explanation.');
+
+    // Selection reveals off-screen summaries; collapse and resize keep the viewport in range.
+    const small = { ...ctx, height: 14, width: 65 };
+    const selected = press(small, [']'], detail);
+    expect(render(selected, small)).toContain('▾ Details');
+    expect(render(selected, small)).toContain('[enter] toggle');
+    const toggled = press(small, ['enter'], selected);
+    expect(render(toggled, small)).toContain('▸ Details');
+    expect(render(press(small, ['enter'], toggled), small)).toContain('First explanation.');
+    expect(render(press(ctx, ['G', 'enter'], selected), ctx)).toContain('▸ Details');
+  });
+
   test('shows the job, its reviewers, the merged findings, and the comment; n/p walk the list', () => {
     const ctx = ctxFor();
     const detail = press(ctx, ['down', 'enter']);
@@ -450,7 +547,7 @@ describe('detail view', () => {
     expect(text).toContain('│   review-relay: 3/5');
     expect(text).not.toContain('## review-relay');
     expect(text).toContain(
-      ' [↑↓] scroll   [n/p] next/prev   [l] log   [r] re-run   [o] open PR   [y] copy url   [esc] back',
+      ' [[/]] details   [enter] toggle   [↑↓] scroll   [n/p] next/prev   [l] log   [r] re-run   [o] open PR   [y] copy url   [esc] back',
     );
 
     const failed = press(ctx, ['n'], detail);

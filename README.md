@@ -234,6 +234,8 @@ Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `revi
 
 `review-relay tui` takes over the terminal with the job table in a panel on top, the highlighted job's detail in a panel below it, and the daemon's state in the status line, refreshing as the daemon writes `state.json`. Enter expands a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
 
+Within a job, `[` and `]` select the previous or next Details or Dimension notes section and scroll it into view. Enter or Space toggles the selected section. Sections start expanded, with `▾` for expanded and `▸` for collapsed.
+
 ## Development
 
 ```sh
