@@ -14,6 +14,8 @@ export interface LocalOptions {
   head?: string;
   /** The name to show for `head`, when the caller already resolved a branch to its SHA. */
   headName?: string;
+  /** The name to show and route by for `base`, when the caller already resolved it to its SHA. */
+  baseName?: string;
   route?: string;
 }
 
@@ -63,19 +65,23 @@ export async function localTarget(config: Config, cwd: string, opts: LocalOption
       ? (await git('symbolic-ref', '--quiet', '--short', 'HEAD')).stdout.trim() || headSha.slice(0, 8)
       : head);
 
-  const base = opts.base ?? (await defaultBase(dir));
-  if (!(await commitOf(base))) {
+  const requested = opts.base ?? (await defaultBase(dir));
+  // Pinned here: in the review's worktree HEAD is the head commit, so `HEAD~2` would name another commit there, and a
+  // base branch can move while a background review runs.
+  const base = await commitOf(requested);
+  if (!base) {
     throw new Error(
       opts.base
-        ? `no commit named "${base}"`
+        ? `no commit named "${requested}"`
         : `found no base branch (tried ${FALLBACK_BASES.join(', ')}); pass --base`,
     );
   }
+  const baseName = opts.baseName ?? requested;
   if ((await git('merge-base', base, headSha)).code !== 0) {
-    throw new Error(`${headRef} and ${base} share no history`);
+    throw new Error(`${headRef} and ${baseName} share no history`);
   }
   const commits = Number((await execOrThrow(['git', '-C', dir, 'rev-list', '--count', `${base}..${headSha}`])).trim());
-  if (commits === 0) throw new Error(`nothing to review: ${headRef} has no commits that ${base} lacks`);
+  if (commits === 0) throw new Error(`nothing to review: ${headRef} has no commits that ${baseName} lacks`);
   const dirty =
     head === 'HEAD' && (await git('status', '--porcelain', '--untracked-files=no')).stdout.trim().length > 0;
 
@@ -95,11 +101,12 @@ export async function localTarget(config: Config, cwd: string, opts: LocalOption
     repo: fullName,
     pr: 0,
     source: 'local',
-    reason: `local review of ${headRef} against ${base}`,
+    reason: `local review of ${headRef} against ${baseName}`,
     headSha,
     headRef,
-    baseRef: await branchOf(dir, base),
+    baseRef: await branchOf(dir, baseName),
     base,
+    baseName,
     ...(opts.route ? { route: opts.route } : {}),
   };
   return { job, repo, commits, dirty };
@@ -164,7 +171,8 @@ export async function reviewLocal(target: LocalTarget, config: Config, run: Loca
     headSha: job.headSha,
     source: job.source,
     branch: job.headRef,
-    base: job.base,
+    // The name, so a re-run diffs against where the base is then.
+    base: job.baseName,
     localPath: repo.localPath,
   });
   // Another review of this commit would write the same report folder, so it waits its turn.

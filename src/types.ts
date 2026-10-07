@@ -42,8 +42,10 @@ export interface ReviewJob {
   requestedBy?: string;
   /** The PR author's login, when the event named it. */
   author?: string;
-  /** The ref a local review diffs against, such as `origin/main`; PR reviews use `origin/<baseRef>`. */
+  /** The commit a local review diffs against, pinned when it started; PR reviews use `origin/<baseRef>`. */
   base?: string;
+  /** What a local review's base was called, such as `origin/main`, for display and re-runs. */
+  baseName?: string;
 }
 
 export interface ResolvedJob extends ReviewJob {

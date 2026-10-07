@@ -248,7 +248,7 @@ review-relay review --route risky                    # use a route's reviewers a
 ```
 
 - It reviews the commits on `--head` (default `HEAD`) that `--base` lacks, the same range a PR from this branch would show, with the same reviewers, rubric, lockdown, and score as a PR review. It runs in the checkout you call it from, including a linked worktree.
-- The base is whatever the clone last fetched; nothing is fetched. Run `git fetch` first for an up-to-date base.
+- The base is whatever the clone last fetched; nothing is fetched. Run `git fetch` first for an up-to-date base. Both refs are resolved to commits when the review starts, so `--base HEAD~2` means what it means in your checkout, and a fetch during a background review doesn't change what it reviews.
 - Uncommitted changes are left out, with a warning. Commit them to include them.
 - Both ways record the job, so `status` and the TUI list it with its branch in the PR column and `local` as its source, and write the report to `<dataDir>/reports/<owner>__<repo>/local/<sha>/`. It posts nothing. In the TUI, `r` reviews the branch's current head again in the background, in the checkout it ran in; `o` and `y` have no PR to open.
 - The repo's config entry applies when one names the clone. Any other clone still works, named from its origin remote or its folder.
@@ -260,7 +260,7 @@ Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `revi
 
 `review-relay tui` takes over the terminal with the job table in a panel on top, the highlighted job's detail in a panel below it, and the daemon's state in the status line, refreshing as the daemon writes `state.json`. Enter expands a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), or a [local review](#reviewing-before-a-pr)'s branch, `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
 
-The daemon, `run`, and local reviews all record jobs in `state.json`. Each saves only the records it changed, under a lock, and records its pid with each job. A queued or running job whose process has exited shows as failed.
+The daemon, `run`, and local reviews all record jobs in `state.json`. Each saves only the records it changed, under a lock, and records its pid with each job. A queued or running job whose process has exited, or that started before the machine last booted, shows as failed. A local review killed before it could clean up leaves its worktree behind; the next local review of that clone removes it.
 
 Within a job, `[` and `]` select the previous or next Details or Dimension notes section and scroll it into view. Enter or Space toggles the selected section. Sections start expanded, with `▾` for expanded and `▸` for collapsed.
 

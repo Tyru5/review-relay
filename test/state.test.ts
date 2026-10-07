@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { uptime } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../src/state.ts';
@@ -35,14 +36,21 @@ test('never drops a queued or running job', () => {
   expect(store.list().map((r) => r.key)).toEqual(['y', 'old']);
 });
 
+/** A pid no process has now: one that just exited. */
+const gonePid = () => Bun.spawnSync(['true']).pid;
+const now = () => new Date().toISOString();
+
 test('a queued or running job left by a daemon that died becomes failed, so it can retry', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
-  const store = new StateStore(path);
-  store.queue(job('waiting'));
-  store.queue(job('busy'));
-  store.begin('busy');
-  store.queue(job('stale'));
-  store.finish('stale', { status: 'superseded', supersededBy: 'newer' });
+  const pid = gonePid();
+  writeFileSync(
+    path,
+    JSON.stringify([
+      { ...job('waiting'), status: 'queued', startedAt: now(), pid },
+      { ...job('busy'), status: 'running', startedAt: now(), pid },
+      { ...job('stale'), status: 'superseded', startedAt: now(), pid, supersededBy: 'newer' },
+    ]),
+  );
   const reloaded = new StateStore(path);
   expect(
     reloaded
@@ -75,12 +83,12 @@ test('stores on one file keep each other’s records, and a job whose process is
   expect(existsSync(`${path}.lock`)).toBe(false);
 
   // Another live process's job is left running; a dead process's job is failed.
-  const gone = Bun.spawnSync(['true']).pid;
+  const gone = gonePid();
   writeFileSync(
     path,
     JSON.stringify([
-      { ...job('live'), status: 'running', startedAt: '2026-10-02T10:00:00Z', pid: process.ppid },
-      { ...job('dead'), status: 'running', startedAt: '2026-10-02T10:00:00Z', pid: gone },
+      { ...job('live'), status: 'running', startedAt: now(), pid: process.ppid },
+      { ...job('dead'), status: 'running', startedAt: now(), pid: gone },
     ]),
   );
   const loaded = new StateStore(path);
@@ -89,11 +97,11 @@ test('stores on one file keep each other’s records, and a job whose process is
 
 test('claim refuses a key a live process holds and takes one that finished or whose process died', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
-  const gone = Bun.spawnSync(['true']).pid;
+  const gone = gonePid();
   const held = (key: string, pid: number, status = 'running') => ({
     ...job(key),
     status,
-    startedAt: '2026-10-02T10:00:00Z',
+    startedAt: now(),
     pid,
   });
   writeFileSync(
@@ -117,4 +125,61 @@ test('claim refuses a key a live process holds and takes one that finished or wh
     done: ['queued', process.pid],
     fresh: ['queued', process.pid],
   });
+});
+
+test('a job this process queued stays live, one with its pid it never queued is a reused pid’s, and so is one from before boot', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const store = new StateStore(path);
+  store.queue(job('ours'));
+  const booted = new Date(Date.now() - uptime() * 1000 - 60_000).toISOString();
+  const saved = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(
+    path,
+    JSON.stringify([
+      ...saved,
+      { ...job('reused'), status: 'running', startedAt: now(), pid: process.pid },
+      { ...job('rebooted'), status: 'running', startedAt: booted, pid: process.ppid },
+    ]),
+  );
+  const reloaded = new StateStore(path);
+  expect(['ours', 'reused', 'rebooted'].map((key) => reloaded.isActive(key))).toEqual([true, false, false]);
+});
+
+test('isActive and isHandled read the file, so another process finishing or dying counts before any write', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const daemon = new StateStore(path);
+  writeFileSync(path, JSON.stringify([{ ...job('run'), status: 'running', startedAt: now(), pid: process.ppid }]));
+  expect(daemon.isActive('run')).toBe(true);
+  writeFileSync(path, JSON.stringify([{ ...job('run'), status: 'done', startedAt: now(), pid: process.ppid }]));
+  expect([daemon.isActive('run'), daemon.isHandled('run')]).toEqual([false, true]);
+  writeFileSync(path, JSON.stringify([{ ...job('run'), status: 'running', startedAt: now(), pid: gonePid() }]));
+  expect([daemon.isActive('run'), daemon.isHandled('run')]).toEqual([false, false]);
+});
+
+test('a lock whose owner is gone is taken over; a live owner’s lock is waited on', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  writeFileSync(`${path}.lock`, `${gonePid()} dead-owner`);
+  const store = new StateStore(path);
+  store.queue(job('a'));
+  expect(existsSync(`${path}.lock`)).toBe(false);
+  expect(store.isActive('a')).toBe(true);
+
+  // A live owner (the parent) holds it: another process's write waits until it is released.
+  writeFileSync(`${path}.lock`, `${process.ppid} live-owner`);
+  const child = Bun.spawn([
+    process.execPath,
+    '-e',
+    `const { StateStore } = await import(${JSON.stringify(join(import.meta.dir, '../src/state.ts'))});
+     new StateStore(${JSON.stringify(path)}).queue({ key: 'b', repo: 'o/r', pr: 1, headSha: 'b', source: 'github' });`,
+  ]);
+  await Bun.sleep(300);
+  expect(store.isHandled('b')).toBe(false);
+  rmSync(`${path}.lock`);
+  expect(await child.exited).toBe(0);
+  expect(
+    new StateStore(path)
+      .list()
+      .map((r) => r.key)
+      .toSorted(),
+  ).toEqual(['a', 'b']);
 });

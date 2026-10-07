@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
 import { checkLabels, defaultConfigPath, findRepo, loadConfig, type Config } from './config.ts';
@@ -97,6 +97,7 @@ interface Options {
   reviewers?: string;
   minScore?: string;
   headName?: string;
+  baseName?: string;
   worker: boolean;
   detach: boolean;
   follow: boolean;
@@ -388,6 +389,7 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
     base: opts.base,
     head: opts.head,
     headName: opts.headName,
+    baseName: opts.baseName,
     route: opts.route,
   });
   const { job, repo, commits, dirty } = target;
@@ -407,7 +409,7 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
   const pick = pickRoute(reviewConfig, job, stats);
   const note = (line: string) => console.error(line);
   note(
-    `${err.title('review-relay')} ${job.repo} ${err.command(job.headRef!)} ${err.muted(`@ ${job.headSha.slice(0, 8)}`)} against ${job.base}`,
+    `${err.title('review-relay')} ${job.repo} ${err.command(job.headRef!)} ${err.muted(`@ ${job.headSha.slice(0, 8)}`)} against ${job.baseName}`,
   );
   note(row(err, 'change', `${commits} ${commits === 1 ? 'commit' : 'commits'}; ${describeStats(stats)}`));
   note(
@@ -431,6 +433,8 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
         configPath,
         '--base',
         job.base!,
+        '--base-name',
+        job.baseName!,
         '--head',
         job.headSha,
         '--head-name',
@@ -470,7 +474,8 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
           repo: job.repo,
           branch: job.headRef,
           headSha: job.headSha,
-          base: job.base,
+          base: job.baseName,
+          baseSha: job.base,
           commits,
           score: confidence,
           route: outcome.route ?? null,
@@ -487,7 +492,8 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
     const width = Math.min(process.stdout.columns || 100, 120);
     console.log();
     // The marker only finds the comment on GitHub.
-    print(renderMarkdown((outcome.comment ?? '').replace(`${COMMENT_MARKER}\n`, ''), width, st));
+    // Reviewer-written, so escapes are stripped as the TUI strips them.
+    print(renderMarkdown(sanitize((outcome.comment ?? '').replace(`${COMMENT_MARKER}\n`, '')), width, st));
     console.log();
     console.log(row(st, 'report', tildify(outcome.reportDir ?? '')));
   }
@@ -573,6 +579,7 @@ export function parse(argv: string[]) {
       'min-score': { type: 'string' },
       // Internal: how -d and the TUI start a background review.
       'head-name': { type: 'string' },
+      'base-name': { type: 'string' },
       worker: { type: 'boolean', default: false },
       detach: { type: 'boolean', short: 'd', default: false },
       follow: { type: 'boolean', short: 'f', default: false },
@@ -596,6 +603,7 @@ export function parse(argv: string[]) {
     reviewers: values.reviewers,
     minScore: values['min-score'],
     headName: values['head-name'],
+    baseName: values['base-name'],
     worker: values.worker,
     detach: values.detach,
     follow: values.follow,
@@ -641,7 +649,8 @@ async function main() {
     console.error(renderHelp(version, err));
     process.exit(1);
   }
-  const configPath = opts.config ?? defaultConfigPath();
+  // Absolute, since background reviews run in the checkout, not where this was started.
+  const configPath = resolve(opts.config ?? defaultConfigPath());
   // setup writes the config, so it must not require a valid one first.
   if (command === 'setup') return setup(configPath);
 

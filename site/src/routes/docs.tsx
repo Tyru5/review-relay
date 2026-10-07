@@ -417,7 +417,8 @@ function Docs() {
               </li>
               <li>
                 <strong>Committed work only.</strong> Uncommitted changes are left out with a warning. Nothing is
-                fetched, so run <code>git fetch</code> first for an up-to-date base.
+                fetched, so run <code>git fetch</code> first for an up-to-date base. Both refs are pinned to commits
+                when the review starts.
               </li>
               <li>
                 <strong>Any clone.</strong> The repo&rsquo;s config entry applies when one names the clone. Any other

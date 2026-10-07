@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseConfig } from '../src/config.ts';
@@ -10,6 +10,7 @@ import type { Harness } from '../src/reviewers/types.ts';
 import type { RunnerDeps } from '../src/runner.ts';
 import { StateStore } from '../src/state.ts';
 import type { HarnessName } from '../src/types.ts';
+import { sweepLocal } from '../src/worktree.ts';
 import { DIMENSIONS, type Verdict } from '../src/verdict.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'relay-local-'));
@@ -43,6 +44,7 @@ describe('localTarget', () => {
   test('reviews the checked-out branch against the remote default branch, and never posts', async () => {
     const dir = await clone('plain');
     const head = (await git(dir, 'rev-parse', 'HEAD')).trim();
+    const main = (await git(dir, 'rev-parse', 'origin/main')).trim();
     const target = await localTarget(config(), dir);
     expect(target.job).toEqual({
       repo: 'plain',
@@ -52,7 +54,8 @@ describe('localTarget', () => {
       headSha: head,
       headRef: 'feature',
       baseRef: 'main',
-      base: 'origin/main',
+      base: main,
+      baseName: 'origin/main',
     });
     expect(target.commits).toBe(1);
     expect(target.dirty).toBe(false);
@@ -71,8 +74,26 @@ describe('localTarget', () => {
 
   test('takes --base and --head refs, and refuses a branch with nothing to review', async () => {
     const dir = await clone('refs');
+    const main = (await git(dir, 'rev-parse', 'main')).trim();
     const target = await localTarget(config(), dir, { base: 'main', head: 'feature' });
-    expect(target.job).toMatchObject({ base: 'main', baseRef: 'main', headRef: 'feature' });
+    expect(target.job).toMatchObject({ base: main, baseName: 'main', baseRef: 'main', headRef: 'feature' });
+
+    // A HEAD-relative base is pinned where it was given, since HEAD is another commit in the review's worktree.
+    writeFileSync(join(dir, 'c.txt'), 'c\n');
+    await git(dir, 'add', 'c.txt');
+    await git(dir, 'commit', '--quiet', '-m', 'add c');
+    const relative = await localTarget(config(), dir, { base: 'HEAD~2', head: 'HEAD~1' });
+    expect(relative.job.base).toBe(main);
+    expect(relative.commits).toBe(1);
+    expect(relative.job.reason).toBe('local review of HEAD~1 against HEAD~2');
+    // A worker given the resolved SHAs still shows and routes by the names.
+    const worker = await localTarget(config(), dir, {
+      base: main,
+      baseName: 'origin/main',
+      head: target.job.headSha,
+      headName: 'feature',
+    });
+    expect(worker.job).toMatchObject({ base: main, baseName: 'origin/main', baseRef: 'main', headRef: 'feature' });
     await expect(localTarget(config(), dir, { base: 'feature' })).rejects.toThrow(
       'nothing to review: feature has no commits that feature lacks',
     );
@@ -152,5 +173,28 @@ describe('reviewLocal', () => {
       'all reviewers failed',
     );
     expect(state.list()[0]).toMatchObject({ status: 'failed', error: expect.stringContaining('all reviewers failed') });
+  });
+});
+
+describe('sweepLocal', () => {
+  test('removes local worktrees and scratch whose process is gone, and keeps live ones and PR ones', async () => {
+    const dir = await clone('sweep');
+    const dataDir = join(root, 'sweep-data');
+    const worktrees = join(dataDir, 'worktrees');
+    const add = async (name: string) => {
+      await git(dir, 'worktree', 'add', '--detach', '--quiet', join(worktrees, name), 'HEAD');
+      mkdirSync(join(dataDir, 'tmp', name), { recursive: true });
+    };
+    const dead = Bun.spawnSync(['true']).pid;
+    await add(`o__r-local${dead}-abcdef12`);
+    await add(`o__r-local${process.pid}-abcdef12`);
+    await add('o__r-pr7-abcdef12');
+    await sweepLocal(dir, dataDir);
+    expect(readdirSync(worktrees).toSorted()).toEqual([`o__r-local${process.pid}-abcdef12`, 'o__r-pr7-abcdef12']);
+    expect(readdirSync(join(dataDir, 'tmp')).toSorted()).toEqual([
+      `o__r-local${process.pid}-abcdef12`,
+      'o__r-pr7-abcdef12',
+    ]);
+    expect(await git(dir, 'worktree', 'list')).not.toContain(`local${dead}`);
   });
 });

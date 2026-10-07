@@ -23,7 +23,7 @@ export function reviewPrompt(job: ResolvedJob, stats: DiffStats, opts: PromptOpt
     ? `the branch ${job.headRef} in ${job.repo}, before it is opened as a pull request,`
     : `pull request #${job.pr} in ${job.repo}`;
   return `You are a senior engineer scoring ${subject} for merge confidence.
-The working directory is checked out at the ${isLocal(job) ? 'branch' : 'PR'} head (${job.headSha}). The base is ${base}.
+The working directory is checked out at the ${isLocal(job) ? 'branch' : 'PR'} head (${job.headSha}). The base is ${base}${job.baseName ? ` (${job.baseName})` : ''}.
 Computed diff stats: ${describeStats(stats)}.
 
 Steps:
