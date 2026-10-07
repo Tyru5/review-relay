@@ -1,14 +1,26 @@
-import { expect, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { uptime } from 'node:os';
-import { tmpdir } from 'node:os';
+import { tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../src/state.ts';
 
 const job = (key: string) => ({ key, repo: 'o/r', pr: 1, headSha: key, source: 'github' as const });
 
+/** Every temp folder a test made, removed after it whether it passed or not. */
+const made: string[] = [];
+afterEach(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A state.json path in a fresh temp folder. */
+const statePath = () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relay-state-'));
+  made.push(dir);
+  return join(dir, 'state.json');
+};
+
 test('keeps only the newest jobs on disk', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   const store = new StateStore(path, 3);
   for (const key of ['a', 'b', 'c', 'd', 'e']) {
     store.queue(job(key));
@@ -41,7 +53,7 @@ const gonePid = () => Bun.spawnSync(['true']).pid;
 const now = () => new Date().toISOString();
 
 test('a queued or running job left by a daemon that died becomes failed, so it can retry', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   const pid = gonePid();
   writeFileSync(
     path,
@@ -66,7 +78,7 @@ test('a queued or running job left by a daemon that died becomes failed, so it c
 });
 
 test('stores on one file keep each other’s records, and a job whose process is alive stays running', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   const daemon = new StateStore(path);
   const local = new StateStore(path);
   daemon.queue(job('pr'));
@@ -96,7 +108,7 @@ test('stores on one file keep each other’s records, and a job whose process is
 });
 
 test('claim refuses a key a live process holds and takes one that finished or whose process died', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   const gone = gonePid();
   const held = (key: string, pid: number, status = 'running') => ({
     ...job(key),
@@ -128,7 +140,7 @@ test('claim refuses a key a live process holds and takes one that finished or wh
 });
 
 test('a job this process queued stays live, one with its pid it never queued is a reused pid’s, and so is one from before boot', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   const store = new StateStore(path);
   store.queue(job('ours'));
   const booted = new Date(Date.now() - uptime() * 1000 - 60_000).toISOString();
@@ -146,7 +158,7 @@ test('a job this process queued stays live, one with its pid it never queued is 
 });
 
 test('isActive and isHandled read the file, so another process finishing or dying counts before any write', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   const daemon = new StateStore(path);
   writeFileSync(path, JSON.stringify([{ ...job('run'), status: 'running', startedAt: now(), pid: process.ppid }]));
   expect(daemon.isActive('run')).toBe(true);
@@ -157,7 +169,7 @@ test('isActive and isHandled read the file, so another process finishing or dyin
 });
 
 test('a lock whose owner is gone is taken over; a live owner’s lock is waited on', async () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'relay-state-')), 'state.json');
+  const path = statePath();
   writeFileSync(`${path}.lock`, `${gonePid()} dead-owner`);
   const store = new StateStore(path);
   store.queue(job('a'));
@@ -166,20 +178,45 @@ test('a lock whose owner is gone is taken over; a live owner’s lock is waited 
 
   // A live owner (the parent) holds it: another process's write waits until it is released.
   writeFileSync(`${path}.lock`, `${process.ppid} live-owner`);
-  const child = Bun.spawn([
-    process.execPath,
-    '-e',
-    `const { StateStore } = await import(${JSON.stringify(join(import.meta.dir, '../src/state.ts'))});
-     new StateStore(${JSON.stringify(path)}).queue({ key: 'b', repo: 'o/r', pr: 1, headSha: 'b', source: 'github' });`,
-  ]);
-  await Bun.sleep(300);
-  expect(store.isHandled('b')).toBe(false);
-  rmSync(`${path}.lock`);
-  expect(await child.exited).toBe(0);
-  expect(
-    new StateStore(path)
-      .list()
-      .map((r) => r.key)
-      .toSorted(),
-  ).toEqual(['a', 'b']);
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `const { StateStore } = await import(${JSON.stringify(join(import.meta.dir, '../src/state.ts'))});
+       const store = new StateStore(${JSON.stringify(path)});
+       console.log('ready');
+       store.queue({ key: 'b', repo: 'o/r', pr: 1, headSha: 'b', source: 'github' });`,
+    ],
+    { stdout: 'pipe' },
+  );
+  try {
+    // Started and about to write, so what follows watches its lock loop, not its startup.
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let out = '';
+    while (!out.includes('\n')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+    expect(out).toBe('ready\n');
+    reader.releaseLock();
+    // Waiting can only be seen over time: across many of its 5ms retries it neither writes nor exits.
+    for (let i = 0; i < 20; i++) {
+      expect(child.exitCode).toBeNull();
+      expect(store.isHandled('b')).toBe(false);
+      await Bun.sleep(5);
+    }
+    rmSync(`${path}.lock`);
+    expect(await child.exited).toBe(0);
+    expect(
+      new StateStore(path)
+        .list()
+        .map((r) => r.key)
+        .toSorted(),
+    ).toEqual(['a', 'b']);
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+  }
 });
