@@ -34,6 +34,7 @@ GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` 
 
 - Trigger modes per repo: `auto`, `greptile`, `coderabbit`, `github`. Each commit is reviewed once; mentions and `run` review again. Drafts are skipped.
 - One PR comment, edited in place on later reviews, with findings linked to exact lines.
+- `review-relay review` scores the checked-out branch against a base before any PR exists: same panel and score, nothing posted, no daemon or GitHub access needed. Runs in the foreground (prints the review; `--min-score` exits 1 under a threshold) or in the background with `-d`, tracked in `status` and the TUI.
 - Distributed as standalone binaries attached to GitHub Releases at https://github.com/Tyru5/review-relay/releases (macOS and glibc Linux on x64/arm64, Windows x64), installed with `curl ... | bash` or `irm ... | iex`. Versions are published by tagging `v*.*.*`.
 - Code is sent to whichever providers the user's chosen agents and models use; the site must never claim code stays on the machine.
 - Windows: daemon shutdown may not clean up temporary repo webhooks.

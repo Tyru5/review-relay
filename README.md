@@ -118,7 +118,7 @@ review-relay checks routes from the top. The first route whose `when` matches de
 | - | - |
 | `repos` | The repo's `owner/name` matches one of these globs, ignoring case. Each must match a configured repo. |
 | `baseBranches` | The base branch matches one of these globs, such as `release/*` |
-| `sources` | The trigger is one of `greptile`, `coderabbit`, `github`, `mention`, `manual` (`run`) |
+| `sources` | The trigger is one of `greptile`, `coderabbit`, `github`, `mention`, `manual` (`run`), `local` (`review`) |
 | `paths` | Any changed file matches one of these globs |
 | `onlyPaths` | At least one file changed, and every changed file matches one of these globs |
 | `minLines`, `maxLines` | Lines added plus deleted, lockfiles left out, are at least or at most this many |
@@ -130,7 +130,7 @@ Globs work like GitHub Actions `paths:` filters: `*.md` matches only root files,
 A skip route reviews nothing and posts nothing; `status` shows the commit as `skipped`. Skip routes are guarded:
 
 - They may only use `onlyPaths`, `repos`, `baseBranches`, and `sources`. A skip on `paths` would skip code that changed next to docs, and a skip on size would let a small change through unreviewed, so the config won't load. Send small PRs to a cheap route instead.
-- A mention or `run` never skips: they go on to the next route that matches, or to `reviewers`.
+- A mention, `run`, or `review` never skips: they go on to the next route that matches, or to `reviewers`.
 - A PR that changes an agent file is never skipped: AGENTS.md, CLAUDE.md, or GEMINI.md at any depth, `.github/copilot-instructions.md`, `.cursorrules`, `.claude/`, `.cursor/`, and every path listed under [Supported agents](#supported-agents) as deleted for a CLI. These files steer coding agents, and review-relay's own reviewers read them as the repo's standards.
 
 A mention can name a route: `@review-relay risky` runs the `risky` route whatever its `when` says. Any other word after the mention gets normal routing. `run --route risky` does the same from the command line.
@@ -224,6 +224,7 @@ review-relay tui                                    # live job list; enter opens
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
 review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
+review-relay review [-d] [--base origin/main]       # score the current branch before opening a PR; see below
 review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
 review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
@@ -231,9 +232,35 @@ review-relay config                                 # resolved config as JSON (i
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
 
+### Reviewing before a PR
+
+`review-relay review` scores the branch you have checked out, so you can rate a change before opening a PR. It needs no PR, no GitHub access, and no running daemon. It runs in one of two ways:
+
+- **Foreground** (default): waits for the reviewers, then prints the score, findings, and dimension notes. Use it in scripts and hooks.
+- **Background** (`-d`): returns at once. A background process reviews the commit `HEAD` was at, so you can keep working, even commit, while it runs. Follow it in `review-relay tui` or `review-relay logs -f`.
+
+```sh
+review-relay review                                  # HEAD against origin/HEAD (else origin/main)
+review-relay review -d                               # same, in the background; watch it in the tui
+review-relay review --base origin/main --min-score 4 # exit 1 when the confidence is under 4
+review-relay review --reviewers claude,codex --json  # pick the reviewers; machine-readable output
+review-relay review --route risky                    # use a route's reviewers and timeout
+```
+
+- It reviews the commits on `--head` (default `HEAD`) that `--base` lacks, the same range a PR from this branch would show, with the same reviewers, rubric, lockdown, and score as a PR review. It runs in the checkout you call it from, including a linked worktree.
+- The base is whatever the clone last fetched; nothing is fetched. Run `git fetch` first for an up-to-date base. Both refs are resolved to commits when the review starts, so `--base HEAD~2` means what it means in your checkout, and a fetch during a background review doesn't change what it reviews.
+- Uncommitted changes are left out, with a warning. Commit them to include them.
+- Both ways record the job, so `status` and the TUI list it with its branch in the PR column and `local` as its source, and write the report to `<dataDir>/reports/<owner>__<repo>/local/<sha>/`. It posts nothing. In the TUI, `r` reviews the branch's current head again in the background, in the checkout it ran in; `o` and `y` have no PR to open.
+- The repo's config entry applies when one names the clone. Any other clone still works, named from its origin remote or its folder.
+- Routes pick the reviewers as for a PR, with source `local` and the base's branch name (`main` for `origin/main`). A skip route never applies, and `sources: ["local"]` can send local reviews to their own reviewers. `--reviewers` runs the listed ids instead of routing.
+- `--min-score N` exits 1 when the confidence is under N, for a pre-push hook or script; a review where every reviewer failed exits 1 too. `--json` prints the score, each reviewer's result, and the merged findings. Both need the foreground. Ctrl-C (or SIGTERM to a background review) stops the reviewers, removes the worktree, and records the job as failed.
+- Each local review is its own process, so `maxConcurrent` doesn't limit them: five `review -d` runs start five panels at once.
+
 Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `review-relay --help` groups the commands with examples.
 
-`review-relay tui` takes over the terminal with the job table in a panel on top, the highlighted job's detail in a panel below it, and the daemon's state in the status line, refreshing as the daemon writes `state.json`. Enter expands a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
+`review-relay tui` takes over the terminal with the job table in a panel on top, the highlighted job's detail in a panel below it, and the daemon's state in the status line, refreshing as the daemon writes `state.json`. Enter expands a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), or a [local review](#reviewing-before-a-pr)'s branch, `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
+
+The daemon, `run`, and local reviews all record jobs in `state.json`. Each saves only the records it changed, under a lock, and records its pid with each job. A queued or running job whose process has exited, or that started before the machine last booted, shows as failed. A local review killed before it could clean up leaves its worktree behind; the next local review of that clone removes it.
 
 Within a job, `[` and `]` select the previous or next Details or Dimension notes section and scroll it into view. Enter or Space toggles the selected section. Sections start expanded, with `▾` for expanded and `▸` for collapsed.
 
@@ -275,7 +302,7 @@ The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, ver
 
 From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 
-Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
+Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` (`local/<sha>/` for `review`) as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
 
 ## How a review runs
 
@@ -312,7 +339,7 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 - CodeRabbit's check-run signal is matched by app, not by check name, because CodeRabbit doesn't document the name (see [CodeRabbit](#coderabbit)). A self-hosted CodeRabbit running under a different app or bot name won't trigger reviews.
 - `gh webhook forward` is GitHub's development tool: one forwarder per repo at a time, and the machine must be online. Stop the daemon with Ctrl+C so it removes the temporary repo webhooks.
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
-- The `maxConcurrent` limit and the one-post-per-PR lock hold within one process. A `run` started while the daemon reviews the same PR is checked against the PR head but can still post at the same moment as the daemon.
+- The `maxConcurrent` limit and the one-post-per-PR lock hold within one process, so local reviews run outside the limit. A `run` started while the daemon reviews the same PR is checked against the PR head but can still post at the same moment as the daemon.
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
 - Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.

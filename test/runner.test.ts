@@ -83,6 +83,26 @@ function setup(
 }
 
 describe('runReview', () => {
+  test('a local review writes its report under local/, links nothing, and never posts', async () => {
+    const t = setup({ reviewers: ['claude'] }, { postToPr: true });
+    const local: ResolvedJob = {
+      ...job,
+      pr: 0,
+      source: 'local',
+      reason: 'local review of feature against origin/main',
+      headRef: 'feature',
+      base: 'origin/main',
+    };
+    const outcome = await runReview(local, t.repo, t.config, t.deps);
+    expect(t.posts).toEqual([]);
+    expect(outcome.reportDir).toBe(join(t.dataDir, 'reports', 'Tyru5__Agendex', 'local', '1e210c5c'));
+    expect(outcome.results?.map((r) => r.score)).toEqual([5]);
+    expect(outcome.comment).toContain('`src/a.ts:3`: Off by one');
+    expect(outcome.comment).not.toContain('https://github.com');
+    expect(t.calls[0]!.prompt).toContain('scoring the branch feature in Tyru5/Agendex, before it is opened');
+    expect(t.calls[0]!.scratchDir).toContain(`-local${process.pid}-1e210c5c`);
+  });
+
   test('runs one CLI twice under two ids, each with its own settings and scratch directory', async () => {
     const t = setup({
       reviewers: ['claude', 'haiku'],

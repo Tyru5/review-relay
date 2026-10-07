@@ -1,5 +1,5 @@
 import { describeStats, type DiffStats } from './diffstats.ts';
-import type { ResolvedJob } from './types.ts';
+import { isLocal, type ResolvedJob } from './types.ts';
 import { VERDICT_SCHEMA } from './verdict.ts';
 import { baseRemoteRef } from './worktree.ts';
 
@@ -19,8 +19,11 @@ export function reviewPrompt(job: ResolvedJob, stats: DiffStats, opts: PromptOpt
   const answer = opts.schema
     ? `Do not modify any files. Reply with only a JSON object, no prose and no code fences, matching this JSON Schema:\n${JSON.stringify(VERDICT_SCHEMA)}`
     : 'Do not modify any files. Respond only with JSON matching the provided schema.';
-  return `You are a senior engineer scoring pull request #${job.pr} in ${job.repo} for merge confidence.
-The working directory is checked out at the PR head (${job.headSha}). The base is ${base}.
+  const subject = isLocal(job)
+    ? `the branch ${job.headRef} in ${job.repo}, before it is opened as a pull request,`
+    : `pull request #${job.pr} in ${job.repo}`;
+  return `You are a senior engineer scoring ${subject} for merge confidence.
+The working directory is checked out at the ${isLocal(job) ? 'branch' : 'PR'} head (${job.headSha}). The base is ${base}${job.baseName ? ` (${job.baseName})` : ''}.
 Computed diff stats: ${describeStats(stats)}.
 
 Steps:

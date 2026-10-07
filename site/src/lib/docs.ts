@@ -5,6 +5,7 @@ export const DOC_SECTIONS = [
   ['reviewers', 'Reviewers & models'],
   ['routing', 'Routing rules'],
   ['triggers', 'Triggers & review flow'],
+  ['local', 'Review before a PR'],
   ['commands', 'CLI commands'],
   ['reports', 'Scores & reports'],
   ['security', 'Security & privacy'],
@@ -118,7 +119,7 @@ export const ROUTE_OPTIONS: ReferenceRow[] = [
 export const ROUTE_CONDITIONS: ReferenceRow[] = [
   ['repos', 'Glob list', 'Match owner/name, ignoring case. Each pattern must match at least one configured repo.'],
   ['baseBranches', 'Glob list', 'Match the target branch, not the PR head branch. Case-sensitive.'],
-  ['sources', 'Value list', 'greptile, coderabbit, github, mention, or manual.'],
+  ['sources', 'Value list', 'greptile, coderabbit, github, mention, manual, or local.'],
   ['paths', 'Glob list', 'At least one changed path matches. Includes the old path of a renamed file.'],
   [
     'onlyPaths',
@@ -153,13 +154,18 @@ export const COMMANDS: ReferenceRow[] = [
   [
     'tui',
     'No flags',
-    'Live terminal view of the jobs. Enter opens scores, findings, and the posted comment; r re-reviews a PR, o opens it, / filters.',
+    'Live terminal view of the jobs, local reviews included. Enter opens scores, findings, and the posted comment; r re-reviews a PR or branch, o opens the PR, / filters.',
   ],
   ['logs', '[N], -f, --follow', 'Read the last N log lines, default 50. Use -f to follow new output.'],
   [
     'run',
     '--repo <owner/name> --pr <n> [--route <name>]',
     'Review an open PR now, including a previously reviewed commit. Can publish a comment.',
+  ],
+  [
+    'review',
+    '[-d] [--base <ref>] [--head <ref>] [--route <name> | --reviewers <ids>] [--min-score <n>] [--json]',
+    'Score the checked-out branch before opening a PR. Prints the report and exits 1 under --min-score, or with -d runs in the background and shows in tui. Posts nothing.',
   ],
   [
     'route',
@@ -174,6 +180,21 @@ export const COMMANDS: ReferenceRow[] = [
   ['info', '--json', 'Resolved configuration and diagnostics. --json prints machine-readable output.'],
   ['config', 'No flags', 'Print the resolved configuration as JSON.'],
   ['help', '[command]', 'List commands, or show a command’s options and examples.'],
+];
+
+/** `review-relay review` flags. test/docs.test.ts checks them against the command's help page. */
+export const LOCAL_OPTIONS: ReferenceRow[] = [
+  ['-d, --detach', 'Foreground', 'Review in the background and return at once. Follow it in tui or logs -f.'],
+  [
+    '--base <ref>',
+    'origin/HEAD, else origin/main',
+    'Ref to diff against. Any ref works: a remote branch, a local branch, or a SHA.',
+  ],
+  ['--head <ref>', 'HEAD', 'Ref to review. Uncommitted changes are only checked, and left out, when this is HEAD.'],
+  ['--route <name>', 'Normal routing', 'Use this non-skip route instead of the one the branch matches.'],
+  ['--reviewers <ids>', 'Normal routing', 'Comma-separated reviewer IDs to run instead of routing. Not with --route.'],
+  ['--min-score <n>', 'None', 'Exit 1 when the confidence is under n, from 1 to 5. Foreground only.'],
+  ['--json', 'Off', 'Print the score, each reviewer’s result, and the merged findings as JSON. Foreground only.'],
 ];
 
 export const ENVIRONMENT: ReferenceRow[] = [

@@ -185,7 +185,7 @@ function parseReviewers(
 }
 
 /** Reviewers that can run, in `reviewers` or a route, need labels that tell them apart in the PR comment. */
-function checkLabels(ids: ReviewerId[], models: Record<ReviewerId, ReviewerEntry>) {
+export function checkLabels(ids: ReviewerId[], models: Record<ReviewerId, ReviewerEntry>) {
   const byLabel = new Map<string, ReviewerId>();
   for (const id of new Set(ids)) {
     const { label } = models[id]!;

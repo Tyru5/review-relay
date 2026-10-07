@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import {
   COMMANDS,
   GLOBAL_OPTIONS,
+  LOCAL_OPTIONS,
   QUICK_CONFIG,
   REPO_OPTIONS,
   REVIEWERS,
@@ -47,6 +48,11 @@ describe('published documentation', () => {
     }
     const names = COMMANDS.map(([name]) => name);
     for (const command of HELP_GROUPS.flatMap((group) => group.commands)) expect(names).toContain(command.name);
+  });
+
+  test('lists the review command flags its help page lists', () => {
+    const review = HELP_GROUPS.flatMap((group) => group.commands).find((command) => command.name === 'review');
+    expect(LOCAL_OPTIONS.map(([flag]) => flag)).toEqual(review!.options!.map(({ flag }) => flag));
   });
 
   test('both copyable configs load without warnings and keep publishing off', () => {

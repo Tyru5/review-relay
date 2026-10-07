@@ -102,7 +102,9 @@ describe('parseRoutes', () => {
       "skip can't use maxLines or wideImpact",
     );
     fails([route({ onlyPaths: ['docs/**'] }, { skip: true, timeoutMs: 5 })]).toThrow("skip can't use timeoutMs");
-    fails([route({ sources: ['mention', 'manual'] }, skip)]).toThrow('never skips anything, because mentions and run');
+    fails([route({ sources: ['mention', 'manual'] }, skip)]).toThrow(
+      'never skips anything, because mentions, run, and review',
+    );
     const allowed = {
       onlyPaths: ['docs/**'],
       repos: ['Tyru5/side-*'],
@@ -240,6 +242,8 @@ describe('pickRoute', () => {
     const c = config(routes);
     const facts = factsOf(job({ source: 'manual' }), stats('3\t1\tdocs/a.md'));
     expect(traceRoutes(c.routes, facts)[0]!.passedOver).toBe('run never skips');
+    const local = factsOf(job({ source: 'local' }), stats('3\t1\tdocs/a.md'));
+    expect(traceRoutes(c.routes, local)[0]!.passedOver).toBe('review never skips');
     const agent = factsOf(job(), stats('3\t1\tdocs/a.md', '1\t0\tdocs/CLAUDE.md'));
     expect(traceRoutes(c.routes, agent)[0]!.passedOver).toBe('docs/CLAUDE.md is an agent file');
     expect(pickRoute(c, job(), stats('3\t1\tdocs/a.md', '1\t0\tdocs/CLAUDE.md')).route?.name).toBe('tiny');
@@ -252,6 +256,9 @@ describe('pickRoute', () => {
       reason: 'requested with run --route',
       forced: true,
     });
+    expect(pickRoute(c, job({ route: 'tiny', source: 'local' }), stats('900\t0\tsrc/a.ts')).route?.reason).toBe(
+      'requested with review --route',
+    );
     expect(pickRoute(c, job({ route: 'please' }), stats('900\t0\tsrc/a.ts')).route).toBeUndefined();
     expect(pickRoute(c, job({ route: 'docs' }), stats('3\t1\tdocs/a.md')).skip).toBe(true);
   });

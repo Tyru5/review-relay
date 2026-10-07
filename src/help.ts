@@ -59,7 +59,7 @@ export const HELP_GROUPS: Group[] = [
         summary: 'Live terminal view of the review jobs: open one, read its findings, re-run it',
         detail: [
           'Lists every job in state.json with its score per reviewer and finding counts, refreshing as the daemon writes. Enter opens a job (scores, merged findings, the posted comment, or its log lines while running); / filters; s cycles the status filter.',
-          'r reviews the PR again in the background, o opens it in the browser, y copies its URL. Press ? inside for every key.',
+          "r reviews the PR, or a local review's branch, again in the background; o opens the PR in the browser, y copies its URL. Local reviews from review-relay review show here too. Press ? inside for every key.",
         ],
         examples: ['review-relay tui'],
       },
@@ -108,6 +108,32 @@ export const HELP_GROUPS: Group[] = [
         ],
       },
       {
+        name: 'review',
+        args: '[-d] [--base <ref>] [--head <ref>] [--route <name> | --reviewers <ids>] [--min-score N] [--json]',
+        summary: 'Score the current branch before opening a PR',
+        detail: [
+          'Reviews the commits on the checked-out branch that the base lacks, in the checkout you run it from, with the same reviewers, rubric, and score as a PR review. Needs no PR, no GitHub access, and no daemon.',
+          'In the foreground it waits for the reviewers, then prints the score and findings. With -d it returns at once and a background process reviews the commit HEAD was at; follow it in review-relay tui or review-relay logs -f. Either way the job shows in status and the TUI, and the report is written under <dataDir>/reports/<owner>__<repo>/local/. Posts nothing. Uncommitted changes are left out; commit them first.',
+          'The base defaults to the remote default branch as the clone last fetched it (origin/HEAD, else origin/main); fetch first for an up-to-date base. A repo not in the config still works, named from its origin remote. Never skipped by a skip route; routes can match it with sources: ["local"].',
+          'Exits 1 when the score is under --min-score, so a script or hook can gate on it. --min-score and --json need the foreground.',
+        ],
+        options: [
+          { flag: '-d, --detach', description: 'Review in the background; follow it in the TUI' },
+          { flag: '--base <ref>', description: 'Ref to diff against (default: origin/HEAD, else origin/main)' },
+          { flag: '--head <ref>', description: 'Ref to review (default: HEAD)' },
+          { flag: '--route <name>', description: 'Use this route instead of the one the branch matches' },
+          { flag: '--reviewers <ids>', description: 'Comma-separated reviewer ids to run instead of routing' },
+          { flag: '--min-score <n>', description: 'Exit 1 when the confidence is under n (1-5)' },
+          { flag: '--json', description: 'Print the score, reviewers, and merged findings as JSON' },
+        ],
+        examples: [
+          'review-relay review',
+          'review-relay review -d',
+          'review-relay review --base origin/main --min-score 4',
+          'review-relay review --reviewers claude,codex --json',
+        ],
+      },
+      {
         name: 'route',
         args: '--repo <owner/name> --pr <N> [--source <source>]',
         summary: 'Show which route a PR matches and why, without reviewing it',
@@ -119,7 +145,7 @@ export const HELP_GROUPS: Group[] = [
           { flag: '--pr <n>', description: 'Pull request number' },
           {
             flag: '--source <source>',
-            description: 'Trigger to check as: github (default), greptile, coderabbit, mention, manual',
+            description: 'Trigger to check as: github (default), greptile, coderabbit, mention, manual, local',
           },
         ],
         examples: [

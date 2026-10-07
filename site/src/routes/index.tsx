@@ -57,6 +57,37 @@ const AGENTS: { name: string; product: string }[] = [
   { name: 'vibe', product: 'Mistral Vibe' },
 ];
 
+/** What `review-relay review` does differently from a PR review, and what stays the same. */
+const LOCAL_FACTS: { title: string; body: ReactNode }[] = [
+  {
+    title: 'Same range',
+    body: (
+      <>
+        The commits your branch adds over <Code>origin/main</Code>, or any base you pass, as the pull request would show
+        them.
+      </>
+    ),
+  },
+  { title: 'Same score', body: 'The panel, lockdown, caps, and lowest-score headline of a PR review.' },
+  {
+    title: 'Keep working',
+    body: (
+      <>
+        <Code>review -d</Code> returns at once. The review shows up in <Code>review-relay tui</Code> next to your PR
+        reviews.
+      </>
+    ),
+  },
+  {
+    title: 'Gate on it',
+    body: (
+      <>
+        <Code>--min-score 4</Code> exits 1 under a 4, for a pre-push hook or script. <Code>--json</Code> for tools.
+      </>
+    ),
+  },
+];
+
 const CONTAINER = 'mx-auto w-full max-w-[84rem] px-5 sm:px-8';
 
 function Home() {
@@ -161,6 +192,35 @@ function Home() {
         </div>
       </section>
 
+      <section aria-labelledby="local-heading" className="border-t-2 border-rule py-24">
+        <div className={`${CONTAINER} grid gap-x-14 gap-y-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,34rem)]`}>
+          <div>
+            <h2 id="local-heading" className="type-broadcast text-[clamp(2.75rem,5.5vw,4.25rem)] text-balance">
+              Score it before the PR.
+            </h2>
+            <p className="mt-5 max-w-[52ch] text-lg leading-relaxed text-pretty text-haze">
+              No pull request yet? <Code>review-relay review</Code> puts the branch you have checked out in front of the
+              same panel, against the same rubric. Wait for the score in your terminal, or send it to the background and
+              watch it in the TUI. It needs no PR, no GitHub access, and no daemon, and posts nothing.
+            </p>
+          </div>
+          <div className="min-w-0 lg:self-end">
+            <Terminal
+              lines={['review-relay review --base origin/main --min-score 4', 'review-relay review -d']}
+              tone="arena"
+            />
+            <ul className="mt-6 divide-y divide-rule border-y border-rule text-haze">
+              {LOCAL_FACTS.map((fact) => (
+                <li key={fact.title} className="grid gap-1 py-4 leading-relaxed sm:grid-cols-[9.5rem_minmax(0,1fr)]">
+                  <span className="font-bold text-chalk">{fact.title}</span>
+                  <span>{fact.body}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section className="on-paper bg-paper py-24 text-navy">
         <div className={`${CONTAINER} grid gap-x-14 gap-y-10 lg:grid-cols-[19rem_minmax(0,1fr)]`}>
           <div>
@@ -228,6 +288,7 @@ function Home() {
                 ['Quick start', 'quick-start'],
                 ['Configuration reference', 'configuration'],
                 ['Routing rules', 'routing'],
+                ['Review before a PR', 'local'],
               ].map(([title, hash]) => (
                 <Link
                   key={hash}
@@ -296,9 +357,11 @@ function Code({ children, tone = 'arena' }: { children: ReactNode; tone?: 'arena
 }
 
 /** Terminal lines with a non-selectable prompt, so copying a selection yields runnable commands. */
-function Terminal({ lines }: { lines: string[] }) {
+function Terminal({ lines, tone = 'paper' }: { lines: string[]; tone?: 'arena' | 'paper' }) {
   return (
-    <pre className="mt-4 overflow-x-auto rounded-md bg-navy px-4 py-3 font-mono text-[0.84rem] leading-relaxed text-chalk">
+    <pre
+      className={`overflow-x-auto rounded-md px-4 py-3 font-mono text-[0.84rem] leading-relaxed text-chalk ${tone === 'paper' ? 'mt-4 bg-navy' : 'bg-board'}`}
+    >
       {lines.map((line) => (
         <span key={line} className="block">
           <span className="text-haze select-none">$ </span>
