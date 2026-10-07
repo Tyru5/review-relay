@@ -404,15 +404,13 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
       const details = state.details?.job === cacheKey(job) ? state.details : { job: cacheKey(job) };
       const sections = content.sections;
       const at = sections.findIndex((s) => s.id === details.selected);
+      const fromScroll = sections.findIndex((s) => s.line >= state.scroll);
       const toggle = key === 'enter' || key === 'space';
       const index =
         at < 0
-          ? key === '['
+          ? key === '[' || fromScroll < 0
             ? sections.length - 1
-            : Math.max(
-                0,
-                sections.findIndex((s) => s.line >= state.scroll),
-              )
+            : fromScroll
           : toggle
             ? at
             : (at + (key === ']' ? 1 : -1) + sections.length) % sections.length;

@@ -428,6 +428,45 @@ describe('list view', () => {
 });
 
 describe('detail view', () => {
+  test('selects the next header at the scroll position, or the last section past all headers', () => {
+    const dir = dataDir();
+    writeFileSync(
+      join(reportDirFor(dir, DONE), 'comment.md'),
+      [
+        '<details><summary>First</summary>',
+        'First body.',
+        '</details>',
+        '<details><summary>Middle</summary>',
+        'Middle body.',
+        '</details>',
+        '<details><summary>Last</summary>',
+        ...Array.from({ length: 20 }, (_, i) => `- Last body ${i}`),
+        '</details>',
+      ].join('\n'),
+    );
+    const ctx = ctxFor(dir, { height: 14 });
+    const detail = press(ctx, ['down', 'enter']);
+    let middle = detail;
+    for (let i = 0; i < 100 && !lines(middle, ctx)[3]!.includes('▾ Middle'); i++) {
+      middle = press(ctx, ['down'], middle);
+    }
+    expect(lines(middle, ctx)[3]).toContain('▾ Middle');
+    const bottom = press(ctx, ['G'], detail);
+    expect(render(bottom, ctx)).not.toContain('▾');
+    for (const key of [']', 'enter', 'space']) {
+      for (const [state, expected] of [
+        [detail, 0],
+        [middle, 3],
+        [press(ctx, ['down'], middle), 6],
+        [bottom, 6],
+      ] as const) {
+        const next = press(ctx, [key], state);
+        expect(next.details?.selected).toBe(expected);
+        expect(next.details?.collapsed).toEqual(key === ']' ? [] : [expected]);
+      }
+    }
+  });
+
   test('selects and toggles individual comment details without hiding adjacent content', () => {
     const dir = dataDir();
     writeFileSync(
