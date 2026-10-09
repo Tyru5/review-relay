@@ -43,8 +43,13 @@ export interface ReviewerEntry extends ModelConfig {
   label: string;
 }
 
+export const THEMES = ['dark', 'light', 'terminal'] as const;
+export type ThemeName = (typeof THEMES)[number];
+
 export interface Config {
   port: number;
+  /** TUI colors; terminal inherits the terminal's configured palette. Defaults to dark. */
+  theme?: ThemeName;
   /** How long `auto` mode waits for Greptile or CodeRabbit after a GitHub PR event before running anyway. */
   graceMs: number;
   /** Per-reviewer timeout. */
@@ -237,8 +242,12 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     throw new Error('maxConcurrent must be a whole number of reviews, 1 or more');
   }
 
+  const theme = c.theme ?? 'dark';
+  if (!THEMES.includes(theme)) throw new Error(`theme must be one of ${THEMES.join(', ')}`);
+
   return {
     port: c.port ?? 9988,
+    theme,
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,
     maxConcurrent,

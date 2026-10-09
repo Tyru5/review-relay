@@ -13,6 +13,12 @@ function parse(fields: Record<string, unknown>) {
 
 const fails = (fields: Record<string, unknown>) => expect(() => parse(fields));
 
+test('theme defaults to dark and accepts only supported preferences', () => {
+  expect(parse({}).config.theme).toBe('dark');
+  for (const theme of ['dark', 'light', 'terminal'] as const) expect(parse({ theme }).config.theme).toBe(theme);
+  for (const theme of ['', 'auto', 1, {}, []]) fails({ theme }).toThrow('theme must be one of dark, light, terminal');
+});
+
 describe('reviewer entries', () => {
   test('a config without custom entries resolves to the same reviewers and models as before', async () => {
     const example = JSON.parse(await Bun.file(join(import.meta.dir, '..', 'config.example.json')).text());

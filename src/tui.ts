@@ -8,9 +8,9 @@
  * (spawning a run, opening a browser) come back as an `effect` the loop performs.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Config } from './config.ts';
+import { THEMES, type Config, type ThemeName } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
 import { renderMarkdownView, type MarkdownDetails } from './markdown.ts';
 import { reportDirFor } from './report.ts';
@@ -215,12 +215,17 @@ export class JobStore {
 
 export type View = 'list' | 'detail' | 'log' | 'help';
 
-export type Effect = { kind: 'rerun'; job: JobRecord } | { kind: 'open'; url: string } | { kind: 'copy'; text: string };
+export type Effect =
+  | { kind: 'rerun'; job: JobRecord }
+  | { kind: 'open'; url: string }
+  | { kind: 'copy'; text: string }
+  | { kind: 'theme'; theme: ThemeName };
 
 const NO_PR = 'a local review has no PR; open one from the branch first';
 
 export interface TuiState {
   view: View;
+  theme: ThemeName;
   /** Key of the highlighted job, so the cursor follows it as the list changes; the top job when unset or gone. */
   selected?: string;
   /** Text narrowing the list to jobs whose row contains it. */
@@ -253,8 +258,9 @@ export interface TuiContext {
   width: number;
 }
 
-export const initialState = (): TuiState => ({
+export const initialState = (theme: ThemeName = 'dark'): TuiState => ({
   view: 'list',
+  theme,
   filtering: false,
   scroll: 0,
   wholeLog: false,
@@ -378,6 +384,10 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
   }
   if (state.view === 'help') return { ...base, view: 'list' };
   if (state.filtering) return filtered(base, key, ctx);
+  if (key === 't') {
+    const theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length]!;
+    return { ...base, theme, effect: { kind: 'theme', theme } };
+  }
   // The header's tabs: a digit picks one, tab moves to the other.
   const onLog = state.view === 'log';
   if (key === '1' || (key === 'tab' && onLog)) return onLog ? { ...base, view: 'list' } : base;
@@ -583,6 +593,7 @@ const HELP_LINES: [string, string][] = [
   ['l', "the job's lines from the daemon log, following as they arrive"],
   ['L', 'the whole daemon log'],
   ['1 2 tab', 'switch between the Jobs and Log tabs'],
+  ['t', 'cycle theme: dark, light, terminal (syncs terminal colors); saves to config'],
   ['r', 'review the PR or local branch again (asks first); runs in the background and logs to daemon.log'],
   ['o', 'open the PR in the browser'],
   ['y', "copy the PR's URL to the clipboard"],
@@ -608,6 +619,21 @@ const PALETTE = {
   blue: 0x73b8ff,
 };
 type Swatch = keyof typeof PALETTE;
+
+const LIGHT: Record<Swatch, number> = {
+  bg: 0xf3f6fa,
+  panel: 0xffffff,
+  fg: 0x182b3a,
+  muted: 0x526579,
+  accent: 0x006b63,
+  line: 0x8093a5,
+  selectionBg: 0xd5eee9,
+  selectionFg: 0x004f49,
+  success: 0x006b63,
+  warn: 0x885500,
+  red: 0xb32632,
+  blue: 0x195fa6,
+};
 
 /** The nearest of the 16 basic colors to each swatch, for terminals without 24-bit color. */
 const BASIC: Record<Swatch, string> = {
@@ -638,15 +664,19 @@ export interface Theme extends Styles {
 }
 
 /**
- * The TUI's painter on the Model Router palette: 24-bit colors where the terminal takes them, else the nearest
- * basic colors with no painted backgrounds, else plain text.
+ * Fixed palettes use 24-bit colors when supported. Terminal mode uses ANSI palette entries and default
+ * foreground/background, so it follows terminal theme changes without querying or replacing its colors.
  */
-export function themeStyles(color: boolean, depth: ColorDepth = 'truecolor'): Theme {
+export function themeStyles(color: boolean, depth: ColorDepth = 'truecolor', theme: ThemeName = 'dark'): Theme {
+  const palette = theme === 'light' ? LIGHT : PALETTE;
+  const fixed = depth === 'truecolor' && theme !== 'terminal';
   const paint = (code: string, s: string) => (color && s ? `${code}${s}${ANSI.reset}` : s);
-  const swatch = (name: Swatch) => `\x1b[${depth === 'truecolor' ? rgb(PALETTE[name]) : BASIC[name]}m`;
+  const swatch = (name: Swatch) =>
+    `\x1b[${fixed ? rgb(palette[name]) : theme === 'terminal' && (name === 'muted' || name === 'line') ? '39' : BASIC[name]}m`;
   const base = (bg: Swatch, text: Swatch = 'fg') => {
     if (!color) return undefined;
-    if (depth === 'truecolor') return `${rgb(PALETTE[bg], 'bg')};${rgb(PALETTE[text])}`;
+    if (fixed) return `${rgb(palette[bg], 'bg')};${rgb(palette[text])}`;
+    if (theme === 'terminal') return bg === 'selectionBg' ? '39;49;7' : '39;49';
     // Basic colors can't paint a background that matches the panels; the selection shows as reverse video.
     return bg === 'selectionBg' ? '7' : undefined;
   };
@@ -672,10 +702,7 @@ export function themeStyles(color: boolean, depth: ColorDepth = 'truecolor'): Th
     paint,
     swatch,
     base,
-    tabOn:
-      depth === 'truecolor'
-        ? `\x1b[${rgb(PALETTE.accent, 'bg')};${rgb(PALETTE.bg)}m${ANSI.bold}`
-        : `\x1b[7;36m${ANSI.bold}`,
+    tabOn: fixed ? `\x1b[${rgb(palette.accent, 'bg')};${rgb(palette.bg)}m${ANSI.bold}` : `\x1b[7;39m${ANSI.bold}`,
   };
 }
 
@@ -810,7 +837,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const label = ` ${i + 1} ${name} `;
     return active ? st.paint(st.tabOn, label) : st.muted(label);
   });
-  const left = ` ${st.tone('success', '◆')} ${st.bold('REVIEW-RELAY')}  ${tabs.join(' ')}`;
+  const left = ` ${st.tone('success', '◆')} ${st.bold('REVIEW-RELAY')}  ${tabs.join(' ')}  ${hints(st, [['t', state.theme]])}`;
   const right = st.muted(`${tildify(ctx.store.dataDir)} · v${version} `);
   const gap = width - visibleLength(left) - visibleLength(right);
   const header = gap >= 4 ? `${left}${' '.repeat(gap)}${right}` : left;
@@ -904,6 +931,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
         dataDir: ctx.store.dataDir,
         reviewers: ctx.reviewers,
         color: st.color,
+        styles: st,
         now: ctx.now,
         reports: list.map((j) => ctx.store.report(j)),
       });
@@ -963,6 +991,19 @@ function rerunLocal(job: JobRecord, config: Config, configPath: string): { text:
 /** Performs `effect` and says what happened, for the flash line. */
 export function perform(effect: Effect, config: Config, configPath: string): { text: string; tone: Tone } {
   switch (effect.kind) {
+    case 'theme': {
+      // Read the current file so a theme change cannot overwrite unrelated edits made since opening the TUI.
+      const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('config must be a JSON object');
+      writeFileSync(configPath, `${JSON.stringify({ ...raw, theme: effect.theme }, null, 2)}\n`);
+      return {
+        text:
+          effect.theme === 'terminal'
+            ? 'theme saved: terminal (syncing terminal colors)'
+            : `theme saved: ${effect.theme}`,
+        tone: 'success',
+      };
+    }
     case 'rerun': {
       const { job } = effect;
       if (isLocal(job)) return rerunLocal(job, config, configPath);
@@ -995,11 +1036,12 @@ const DAEMON_EVERY = 5;
 
 export async function tui(config: Config, configPath: string, version: string): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('tui needs an interactive terminal');
-  const st = themeStyles(supportsColor(), colorDepth());
+  const color = supportsColor();
+  const depth = colorDepth();
   const store = new JobStore(config.dataDir);
   store.refresh();
   let daemon: DaemonState | null = await inspectDaemon(config.dataDir, config.port);
-  let state = initialState();
+  let state = initialState(config.theme);
   let ticks = 0;
   const ctx = (height: number, width: number): TuiContext => ({
     store,
@@ -1018,7 +1060,7 @@ export async function tui(config: Config, configPath: string, version: string): 
         void inspectDaemon(config.dataDir, config.port).then((d) => (daemon = d));
       }
     },
-    render: (height, width) => renderTui(state, ctx(height, width), st, version),
+    render: (height, width) => renderTui(state, ctx(height, width), themeStyles(color, depth, state.theme), version),
     key: (key) => {
       const [height, width] = size();
       state = reduce(state, key, ctx(height, width));
@@ -1027,7 +1069,8 @@ export async function tui(config: Config, configPath: string, version: string): 
         try {
           result = perform(state.effect, config, configPath);
         } catch (err) {
-          result = { text: err instanceof Error ? err.message : String(err), tone: 'danger' };
+          const prefix = state.effect.kind === 'theme' ? 'theme applied, but not saved: ' : '';
+          result = { text: prefix + (err instanceof Error ? err.message : String(err)), tone: 'danger' };
         }
         state = { ...state, effect: undefined, flash: { ...result, until: Date.now() + FLASH_MS } };
       }

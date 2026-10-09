@@ -36,6 +36,7 @@ export const GLOBAL_OPTIONS: ReferenceRow[] = [
     '~/.review-relay',
     'Reports, state, logs, and temporary worktrees. Does not change the config file location.',
   ],
+  ['theme', '"dark"', 'TUI colors: dark, light, or terminal to sync with your terminal. Press t to switch and save.'],
 ];
 
 export const REPO_OPTIONS: ReferenceRow[] = [

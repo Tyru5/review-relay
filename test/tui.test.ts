@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parseConfig, THEMES } from '../src/config.ts';
 import type { DaemonState } from '../src/daemon.ts';
 import { reportDirFor } from '../src/report.ts';
 import type { JobRecord } from '../src/state.ts';
@@ -10,6 +11,7 @@ import {
   initialState,
   JobStore,
   MIN_SIZE,
+  perform,
   prUrl,
   readJobs,
   reduce,
@@ -229,7 +231,7 @@ describe('frame', () => {
     const frame = lines(initialState(), ctx);
     expect(frame).toHaveLength(30);
     for (const line of frame) expect(visibleLength(line)).toBe(160);
-    expect(frame[0]).toMatch(/^ ◆ REVIEW-RELAY {3}1 Jobs {3}2 Log\s+\/tmp\/relay-tui-\S+ · v0\.6\.0 $/);
+    expect(frame[0]).toMatch(/^ ◆ REVIEW-RELAY {3}1 Jobs {3}2 Log {3}\[t] dark\s+\/tmp\/relay-tui-\S+ · v0\.6\.0 $/);
     expect(frame[1]).toContain(
       '✓ daemon running  pid 4242 · up 2h05m · 1/2 forwarders  │  4 jobs · 1 running · 1 done · 1 failed · 1 skipped',
     );
@@ -330,6 +332,63 @@ describe('frame', () => {
     expect(text).not.toContain('Job ·');
     expect(text).toContain(' [↑↓] move   [/] filter   [s] status   [?] help   [q] quit');
     expect(render(initialState(), ctxFor(dir, { daemon: null }))).toContain('daemon …');
+  });
+});
+
+describe('themes', () => {
+  test('cycles themes in each main view without losing navigation or consuming filter text', () => {
+    const ctx = ctxFor();
+    for (const view of ['list', 'detail', 'log'] as const) {
+      let state: TuiState = { ...initialState(), view, selected: DONE.key, scroll: 2 };
+      for (const theme of ['light', 'terminal', 'dark'] as const) {
+        state = reduce(state, 't', ctx);
+        expect(state).toMatchObject({ theme, view, selected: DONE.key, scroll: 2, effect: { kind: 'theme', theme } });
+        expect(render(state, ctx)).toContain(`[t] ${theme}`);
+      }
+    }
+    expect(press(ctx, ['/', 't'])).toMatchObject({ theme: 'dark', filter: 't', effect: undefined });
+    expect(press(ctx, ['down', 'r', 't'])).toMatchObject({ theme: 'dark', confirm: undefined, effect: undefined });
+  });
+
+  test('saves the preference, preserves current config fields, and restores it on reopening', () => {
+    const path = join(tempDir('relay-theme-'), 'config.json');
+    const raw = { repos: [{ fullName: 'acme/app', localPath: '/tmp/app' }], port: 9988 };
+    const config = parseConfig(raw);
+    const current = { ...raw, port: 9999, custom: { keep: true } };
+    writeFileSync(path, JSON.stringify(current));
+    expect(perform({ kind: 'theme', theme: 'terminal' }, config, path).tone).toBe('success');
+    const saved = JSON.parse(readFileSync(path, 'utf8'));
+    expect(saved).toEqual({ ...current, theme: 'terminal' });
+    expect(initialState(parseConfig(saved).theme).theme).toBe('terminal');
+    writeFileSync(path, 'invalid JSON');
+    expect(() => perform({ kind: 'theme', theme: 'light' }, config, path)).toThrow();
+    expect(readFileSync(path, 'utf8')).toBe('invalid JSON');
+  });
+
+  test('light paints readable colors throughout; terminal inherits defaults without any RGB overrides', () => {
+    const ctx = ctxFor();
+    const light = renderTui(initialState('light'), ctx, themeStyles(true, 'truecolor', 'light'), 'test').join('\n');
+    expect(light).toContain('\x1b[48;2;243;246;250;38;2;24;43;58m');
+    expect(light).toContain('\x1b[38;2;136;85;0mrunning');
+    expect(light).toContain('\x1b[38;2;179;38;50mfailed');
+    const terminal = renderTui(initialState('terminal'), ctx, themeStyles(true, 'truecolor', 'terminal'), 'test').join(
+      '\n',
+    );
+    expect(terminal).not.toMatch(/(?:38|48);(?:2|5);/);
+    expect(terminal).toContain('\x1b[39;49m');
+    expect(terminal).toContain('\x1b[39;49;7m');
+    for (const theme of THEMES) {
+      for (const depth of ['truecolor', 'basic'] as const) {
+        for (const color of [true, false]) {
+          for (const view of ['list', 'detail', 'log', 'help'] as const) {
+            const rendered = renderTui({ ...initialState(theme), view }, ctx, themeStyles(color, depth, theme), 'test');
+            expect(rendered).toHaveLength(ctx.height);
+            expect(rendered.every((line) => visibleLength(line) === ctx.width)).toBe(true);
+            if (!color) expect(rendered.join('')).not.toContain('\x1b');
+          }
+        }
+      }
+    }
   });
 });
 

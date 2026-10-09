@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { reportDirFor } from './report.ts';
 import { activeJob, jobTarget, type JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
-import { fmtDuration, sanitize } from './ui.ts';
+import { fmtDuration, sanitize, type Styles, type Tone } from './ui.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
 
 export { fmtDuration };
@@ -79,6 +79,8 @@ export interface StatusOptions {
   dataDir: string;
   reviewers: ReviewerId[];
   color: boolean;
+  /** The TUI supplies its palette; CLI status keeps the terminal's ANSI colors. */
+  styles?: Styles;
   now?: number;
   /** One summary per record, when the caller has them already (the TUI caches them); else they are read here. */
   reports?: (ReportSummary | null)[];
@@ -161,7 +163,17 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
     for (const row of rows) row.splice(route, 1);
   }
   const widths = header.map((h, c) => Math.max(h.length, ...rows.map((row) => row[c]!.text.length)));
-  const paint = ({ text, color }: Cell) => (opts.color && color && text ? `\x1b[${color}m${text}\x1b[0m` : text);
+  const tones: Record<string, Tone> = {
+    [DIM]: 'muted',
+    [RED]: 'danger',
+    [GREEN]: 'success',
+    [YELLOW]: 'warning',
+    [CYAN]: 'info',
+  };
+  const paint = ({ text, color }: Cell) => {
+    if (!opts.color || !color || !text) return text;
+    return opts.styles ? opts.styles.tone(tones[color]!, text) : `\x1b[${color}m${text}\x1b[0m`;
+  };
   const line = (cells: Cell[]) =>
     cells
       .map((cell, c) =>
