@@ -147,6 +147,82 @@ const lines = (state: TuiState, ctx: TuiContext) => renderTui(state, ctx, themeS
 const render = (state: TuiState, ctx: TuiContext) => lines(state, ctx).join('\n');
 
 describe('readJobs and JobStore', () => {
+  test('PR state refreshes independently of review status and is shared across commits, not repos', async () => {
+    const other = job('other', { repo: 'acme/lib' });
+    const dir = dataDir([DONE, RUNNING, other]);
+    let merged = false;
+    const store = new JobStore(dir, async (repo) => (repo === 'acme/lib' ? 'closed' : merged ? 'merged' : 'open'));
+    store.refresh();
+    const ctx = ctxFor(dir, { store });
+    expect(render(initialState(), ctx)).toMatch(/done\s+unknown/);
+    await store.refreshPrStates(store.jobs, NOW);
+    expect(render(initialState(), ctx)).toMatch(/done\s+open/);
+    expect(store.prState(other)).toBe('closed');
+
+    merged = true;
+    await store.refreshPrStates(store.jobs, NOW + 59_999);
+    expect(store.prState(DONE)).toBe('open');
+    await store.refreshPrStates(store.jobs, NOW + 60_000);
+    expect(store.prState(DONE)).toBe('merged');
+    expect(store.prState(RUNNING)).toBe('merged');
+    expect(store.prState(other)).toBe('closed');
+    expect(render(initialState(), ctx)).toMatch(/done\s+merged/);
+    expect(render(press(ctx, ['down', 'enter']), ctx)).toContain('PR merged');
+    expect(store.jobs.find((j) => j.key === DONE.key)?.status).toBe('done');
+    expect(readJobs(join(dir, 'state.json')).find((j) => j.key === DONE.key)?.status).toBe('done');
+    // Later state-file reloads cannot lose a known merge, and merged PRs need no more requests.
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([DONE]));
+    store.refresh();
+    merged = false;
+    await store.refreshPrStates(store.jobs, NOW + 120_000);
+    expect(store.prState(DONE)).toBe('merged');
+  });
+
+  test('failed PR checks show unknown, retry later, and never query local reviews', async () => {
+    const local = job('local', { source: 'local', pr: 0, branch: 'feature' });
+    let offline = true;
+    const requested: number[] = [];
+    const store = new JobStore(dataDir([DONE, local]), async (_repo, pr) => {
+      requested.push(pr);
+      if (offline) throw new Error('offline');
+      return 'open';
+    });
+    store.refresh();
+    await store.refreshPrStates(store.jobs, NOW);
+    expect(store.prState(DONE)).toBe('unknown');
+    expect(store.prState(local)).toBeUndefined();
+    offline = false;
+    await store.refreshPrStates(store.jobs, NOW + 59_999);
+    expect(store.prState(DONE)).toBe('unknown');
+    await store.refreshPrStates(store.jobs, NOW + 60_000);
+    expect(store.prState(DONE)).toBe('open');
+    offline = true;
+    await store.refreshPrStates(store.jobs, NOW + 120_000);
+    expect(store.prState(DONE)).toBe('unknown');
+    expect(requested).toEqual([7, 7, 7]);
+    const ctx = ctxFor(store.dataDir, { store });
+    expect(render(initialState(), ctx)).toMatch(/done\s+-\s+.*feature/);
+    expect(render({ ...initialState(), view: 'detail', selected: local.key }, ctx)).not.toContain('PR unknown');
+  });
+
+  test('concurrent refreshes deduplicate PRs and bound GitHub requests', async () => {
+    let active = 0;
+    let peak = 0;
+    const requested: number[] = [];
+    const store = new JobStore(dataDir(), async (_repo, pr) => {
+      requested.push(pr);
+      peak = Math.max(peak, ++active);
+      await Bun.sleep(5);
+      active--;
+      return 'merged';
+    });
+    const jobs = [...MANY, { ...MANY[0]!, key: 'another-commit' }];
+    await Promise.all([store.refreshPrStates(jobs, NOW), store.refreshPrStates(jobs, NOW)]);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(requested.toSorted()).toEqual(MANY.map((j) => j.pr).toSorted());
+    expect(jobs.every((j) => store.prState(j) === 'merged')).toBe(true);
+  });
+
   test('keeps running jobs as running and sorts newest first, unlike StateStore', () => {
     const dir = dataDir();
     expect(readJobs(join(dir, 'state.json')).map((j) => [j.status, j.headSha])).toEqual([
@@ -237,9 +313,9 @@ describe('frame', () => {
     );
     expect(frame[2]).toMatch(/^╭─ Jobs ─+ 1 of 4 {2}\[\/] filter {3}\[s] status ─╮$/);
     expect(frame[3]).toMatch(
-      /^│ {3}STATUS\s+STARTED\s+TIME\s+REPO\s+PR\s+COMMIT\s+SOURCE\s+ROUTE\s+SCORE\s+CODEX\s+CLAUDE.*│$/,
+      /^│ {3}STATUS\s+PR STATE\s+STARTED\s+TIME\s+REPO\s+PR\s+COMMIT\s+SOURCE\s+ROUTE\s+SCORE\s+CODEX\s+CLAUDE.*│$/,
     );
-    expect(frame[4]).toMatch(/^│ ▌ running\s+10-02 \d\d:00\s+3m30s\s+acme\/app\s+#7\s+aaaaaaaa/);
+    expect(frame[4]).toMatch(/^│ ▌ running\s+unknown\s+10-02 \d\d:00\s+3m30s\s+acme\/app\s+#7\s+aaaaaaaa/);
     expect(frame[5]).toMatch(
       /^│ {3}done\s+.*acme\/app\s+#7\s+bbbbbbbb\s+github\s+-\s+3\/5\s+4\/5 1m05s\s+3\/5 1m30s\s+0\s+1\s+1/,
     );
@@ -844,7 +920,7 @@ describe('local reviews', () => {
     );
     const ctx = ctxFor(dir);
     const list = render(initialState(), ctx);
-    expect(list).toMatch(/done +10-02 \d\d:\d\d +2m05s +acme\/app +feat\/login +ffffffff +local/);
+    expect(list).toMatch(/done +- +10-02 \d\d:\d\d +2m05s +acme\/app +feat\/login +ffffffff +local/);
     expect(list).toContain('Job · acme/app feat/login');
     const detail = render(press(ctx, ['enter']), ctx);
     expect(detail).toContain('branch    feat/login against origin/main');

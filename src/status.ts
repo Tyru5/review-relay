@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { PrState } from './github.ts';
 import { reportDirFor } from './report.ts';
 import { activeJob, jobTarget, type JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
@@ -84,6 +85,8 @@ export interface StatusOptions {
   now?: number;
   /** One summary per record, when the caller has them already (the TUI caches them); else they are read here. */
   reports?: (ReportSummary | null)[];
+  /** Current GitHub states, separate from review status; undefined entries are local reviews. */
+  prStates?: (PrState | 'unknown' | undefined)[];
 }
 
 /** Recent jobs as an aligned table with a header row; ROUTE and NOTE (errors) are dropped when no job has one. */
@@ -99,6 +102,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
 
   const header = [
     'STATUS',
+    ...(opts.prStates ? ['PR STATE'] : []),
     'STARTED',
     'TIME',
     'REPO',
@@ -125,8 +129,17 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
       return { text: `${m.score}/5 ${fmtDuration(m.durationMs)}`, color: scoreColor(m.score ?? 1) };
     });
     const failures = rep?.reviewers.filter((m) => !m.ok && m.error).map((m) => `${m.name}: ${m.error}`) ?? [];
+    const prState = opts.prStates?.[i];
     return [
       { text: r.status, color: STATUS_COLORS[r.status] },
+      ...(opts.prStates
+        ? [
+            {
+              text: prState ?? '-',
+              color: prState === 'merged' ? CYAN : prState === 'open' ? GREEN : prState === 'closed' ? RED : DIM,
+            },
+          ]
+        : []),
       { text: fmtStarted(r.startedAt) },
       end === null ? none : { text: fmtDuration(end - Date.parse(r.startedAt)) },
       { text: r.repo },

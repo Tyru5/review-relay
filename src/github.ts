@@ -3,6 +3,19 @@ import { COMMENT_MARKER } from './report.ts';
 import type { CommitPr } from './scheduler.ts';
 import type { ResolvedJob, ReviewJob } from './types.ts';
 
+export type PrState = 'open' | 'closed' | 'merged';
+
+/** GitHub distinguishes a merged PR from one closed without merging. */
+export async function prState(repo: string, pr: number, signal?: AbortSignal): Promise<PrState> {
+  const out = await execOrThrow(['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'state', '--jq', '.state'], {
+    timeoutMs: 10_000,
+    signal,
+  });
+  const state = out.trim().toLowerCase();
+  if (state !== 'open' && state !== 'closed' && state !== 'merged') throw new Error('unknown PR state');
+  return state;
+}
+
 /** Fills in head SHA and refs from GitHub for triggers whose payload lacks them. `open: false` takes a closed PR too. */
 export async function resolveJob(job: ReviewJob, { open = true } = {}): Promise<ResolvedJob> {
   const out = await execOrThrow([

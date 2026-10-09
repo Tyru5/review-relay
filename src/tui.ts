@@ -12,6 +12,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { THEMES, type Config, type ThemeName } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
+import { prState, type PrState } from './github.ts';
 import { renderMarkdownView, type MarkdownDetails } from './markdown.ts';
 import { reportDirFor } from './report.ts';
 import { localTag } from './local.ts';
@@ -126,8 +127,50 @@ export class JobStore {
   private seen = '';
   private readonly reports = new Map<string, ReportSummary | null>();
   private readonly details = new Map<string, JobDetail>();
+  private readonly prs = new Map<string, { state: PrState | 'unknown'; checkedAt: number }>();
+  private refreshingPrs = false;
 
-  constructor(readonly dataDir: string) {}
+  constructor(
+    readonly dataDir: string,
+    private readonly fetchPrState = prState,
+  ) {}
+
+  /** PR state belongs to the PR, not a particular review or commit. Local reviews have none. */
+  prState(job: JobRecord): PrState | 'unknown' | undefined {
+    return isLocal(job) ? undefined : (this.prs.get(prUrl(job))?.state ?? 'unknown');
+  }
+
+  /** Refresh nearby PRs at most once a minute, four at a time. A merged PR cannot reopen. */
+  async refreshPrStates(jobs: JobRecord[], now = Date.now(), signal?: AbortSignal): Promise<void> {
+    if (this.refreshingPrs) return;
+    const unique = new Map(jobs.filter((job) => !isLocal(job)).map((job) => [prUrl(job), job]));
+    const pending = [...unique].filter(([key]) => {
+      const cached = this.prs.get(key);
+      return !cached || (cached.state !== 'merged' && now - cached.checkedAt >= 60_000);
+    });
+    this.refreshingPrs = true;
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(4, pending.length) }, async () => {
+          for (;;) {
+            if (signal?.aborted) return;
+            const next = pending.shift();
+            if (!next) return;
+            const [key, job] = next;
+            let state: PrState | 'unknown' = 'unknown';
+            try {
+              state = await this.fetchPrState(job.repo, job.pr, signal);
+            } catch {
+              // Offline, missing gh/auth, or inaccessible PR: never imply that it is open or merged.
+            }
+            this.prs.set(key, { state, checkedAt: now });
+          }
+        }),
+      );
+    } finally {
+      this.refreshingPrs = false;
+    }
+  }
 
   /**
    * Re-reads `state.json` when its size or mtime changed; returns true when the list was reloaded. Cache entries
@@ -507,12 +550,16 @@ const SEVERITY_TONES: Record<string, Tone> = { critical: 'danger', major: 'warni
 /** The detail view's body: the job, its reviewers, the merged findings, then the posted comment or the log so far. */
 function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: TuiState['details']) {
   const detail = ctx.store.detail(job);
+  const pr = ctx.store.prState(job);
+  const prBadge = pr
+    ? `  ${st.badge(pr === 'merged' ? 'info' : pr === 'open' ? 'success' : pr === 'closed' ? 'danger' : 'muted', `PR ${pr}`)}`
+    : '';
   let sections: { id: number; line: number }[] = [];
   const end = job.finishedAt ? Date.parse(job.finishedAt) : ctx.now;
   const took = fmtDuration(end - Date.parse(job.startedAt));
   const field = (label: string, value: string) => `  ${st.muted(label.padEnd(10))}${value}`;
   const lines = [
-    `${st.bold(jobTitle(job))}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[job.status], job.status)}`,
+    `${st.bold(jobTitle(job))}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[job.status], job.status)}${prBadge}`,
     ...(isLocal(job)
       ? [field('branch', `${job.branch} against ${job.base}`), field('checkout', tildify(job.localPath ?? ''))]
       : [field('url', prUrl(job))]),
@@ -934,6 +981,7 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
         styles: st,
         now: ctx.now,
         reports: list.map((j) => ctx.store.report(j)),
+        prStates: list.map((j) => ctx.store.prState(j)),
       });
       const marked = rows.map((r, i) =>
         i === cursor ? fill(`${st.tone('success', '▌')} ${r}`, inner, st.base('selectionBg', 'selectionFg')) : `  ${r}`,
@@ -1052,10 +1100,24 @@ export async function tui(config: Config, configPath: string, version: string): 
     width,
   });
   const size = () => [process.stdout.rows || 24, process.stdout.columns || 80] as const;
+  const controller = new AbortController();
+  const refreshPrs = () => {
+    const list = visible(state, store.jobs);
+    const cursor = cursorOf(state, list);
+    const [height] = size();
+    // Include the viewport and nearby rows without querying the whole history on every refresh.
+    void store.refreshPrStates(
+      list.slice(Math.max(0, cursor - height), cursor + height),
+      Date.now(),
+      controller.signal,
+    );
+  };
+  refreshPrs();
   await runScreen({
     tickMs: 1000,
     tick: () => {
       store.refresh();
+      refreshPrs();
       if (++ticks % DAEMON_EVERY === 0) {
         void inspectDaemon(config.dataDir, config.port).then((d) => (daemon = d));
       }
@@ -1076,5 +1138,5 @@ export async function tui(config: Config, configPath: string, version: string): 
       }
       return !!state.done;
     },
-  });
+  }).finally(() => controller.abort());
 }
