@@ -32,6 +32,11 @@ export const GLOBAL_OPTIONS: ReferenceRow[] = [
   ],
   ['routes', '[]', 'Ordered rules that select reviewers or skip an automatic review.'],
   [
+    'pricing',
+    '{}',
+    'USD per million tokens by model, as { input, output, cachedInput?, cacheWrite? }. Adds to or overrides the built-in prices used to estimate Codex costs.',
+  ],
+  [
     'dataDir',
     '~/.review-relay',
     'Reports, state, logs, and temporary worktrees. Does not change the config file location.',
@@ -151,6 +156,11 @@ export const COMMANDS: ReferenceRow[] = [
     'status',
     '--limit <n>, --page <n>',
     'Daemon, endpoint, forwarders, and recent jobs. 20 jobs per page; --page reaches older ones. Exits 3 when the daemon is not running.',
+  ],
+  [
+    'cost',
+    '[--repo <owner/name>] [--pr <n>] [--limit <n>] [--page <n>] [--json]',
+    'What each finished review cost, per reviewer, with totals. Claude Code reports its own cost; Codex costs are estimated from tokens (marked ~).',
   ],
   [
     'tui',

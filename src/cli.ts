@@ -4,7 +4,8 @@ import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
-import { checkLabels, defaultConfigPath, findRepo, loadConfig, type Config } from './config.ts';
+import { checkLabels, defaultConfigPath, findRepo, loadConfig, pricesFor, type Config } from './config.ts';
+import { renderCosts, renderSpend, reviewCosts, spend } from './cost.ts';
 import {
   clearDaemonInfo,
   inspectDaemon,
@@ -234,7 +235,12 @@ async function showStatus(
   const daemon = renderDaemon(state, { version, configPath, logPath: logFilePath(config.dataDir) }, st);
   // Only the requested page is rendered, so reports are read for at most `size` jobs.
   const jobs = paginate(new StateStore(join(config.dataDir, 'state.json')).list(), pageNo, size);
-  const table = renderStatus(jobs.items, { dataDir: config.dataDir, reviewers: config.reviewers, color: st.color });
+  const table = renderStatus(jobs.items, {
+    dataDir: config.dataDir,
+    reviewers: config.reviewers,
+    color: st.color,
+    prices: pricesFor(config),
+  });
   const heading =
     jobs.pages > 1
       ? [
@@ -251,6 +257,75 @@ async function showStatus(
       : [];
   print([...daemon.lines, ...heading, ...table.map((l) => `  ${l}`), ...more]);
   if (daemon.exitCode) process.exitCode = daemon.exitCode;
+}
+
+/**
+ * What each finished review cost, reviewer by reviewer, newest first and paged like status, with totals across every
+ * review that matches `--repo` and `--pr`. `--json` prints all of them.
+ */
+function showCosts(config: Config, opts: Options) {
+  const size = positiveInt('--limit', opts.limit, 20);
+  const pageNo = positiveInt('--page', opts.page, 1);
+  const pr = opts.pr === undefined ? undefined : positiveInt('--pr', opts.pr, 1);
+  const records = new StateStore(join(config.dataDir, 'state.json'))
+    .list()
+    .filter((r) => !opts.repo || r.repo.toLowerCase() === opts.repo.toLowerCase())
+    .filter((r) => pr === undefined || r.pr === pr);
+  const reviews = reviewCosts(records, config.dataDir, pricesFor(config));
+  const total = spend(reviews, config.reviewers);
+  if (opts.json) {
+    const cost = (c: { costUsd: number; estimated: boolean; partial: boolean } | null) =>
+      c ? { costUsd: c.costUsd, estimated: c.estimated, partial: c.partial } : { costUsd: null };
+    return console.log(
+      JSON.stringify(
+        {
+          reviews: total.reviews,
+          ...cost(total.cost),
+          costedReviews: total.costed,
+          averageUsd: total.average?.costUsd ?? null,
+          reviewers: total.reviewers.map(({ cost: c, ...r }) => ({ ...r, ...cost(c) })),
+          unpriced: total.unpriced,
+          jobs: reviews.map(({ job, reviewers, total: t }) => ({
+            repo: job.repo,
+            pr: job.pr,
+            ...(job.branch ? { branch: job.branch } : {}),
+            headSha: job.headSha,
+            source: job.source,
+            status: job.status,
+            startedAt: job.startedAt,
+            finishedAt: job.finishedAt,
+            ...cost(t),
+            reviewers: reviewers.map((r) => ({
+              name: r.name,
+              harness: r.harness,
+              model: r.model,
+              effort: r.effort,
+              ok: r.ok,
+              usage: r.usage ?? null,
+            })),
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  const page = paginate(reviews, pageNo, size);
+  const scope = [opts.repo, pr !== undefined && `#${pr}`].filter(Boolean).join(' ');
+  const where = page.pages > 1 ? `${page.from}-${page.to} of ${page.total} • page ${page.page}/${page.pages}` : '';
+  const more =
+    page.page < page.pages
+      ? [
+          '',
+          `  ${st.muted('older:')} ${st.command(`review-relay cost --page ${page.page + 1}${opts.limit === undefined ? '' : ` --limit ${size}`}${opts.repo ? ` --repo ${opts.repo}` : ''}${pr !== undefined ? ` --pr ${pr}` : ''}`)}`,
+        ]
+      : [];
+  print([
+    `${st.section('Review costs')}${scope ? `  ${scope}` : ''}${where ? `  ${st.muted(where)}` : ''}`,
+    ...renderCosts(page.items, { reviewers: config.reviewers, color: st.color }).map((l) => `  ${l}`),
+    ...more,
+    ...(reviews.length > 0 ? ['', st.section(scope ? `Total for ${scope}` : 'Total'), ...renderSpend(total, st)] : []),
+  ]);
 }
 
 function positiveInt(flag: string, value: string | undefined, fallback: number): number {
@@ -617,6 +692,7 @@ const COMMANDS = [
   'stop',
   'restart',
   'status',
+  'cost',
   'tui',
   'logs',
   'run',
@@ -666,6 +742,8 @@ async function main() {
       return startDetached(config, configPath);
     case 'status':
       return showStatus(config, configPath, undefined, opts.limit, opts.page);
+    case 'cost':
+      return showCosts(config, opts);
     case 'tui':
       return tui(config, configPath, version);
     case 'logs':

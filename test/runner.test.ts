@@ -103,6 +103,39 @@ describe('runReview', () => {
     expect(t.calls[0]!.scratchDir).toContain(`-local${process.pid}-1e210c5c`);
   });
 
+  test('records each reviewer’s usage, priced at review time when the CLI reports no cost', async () => {
+    const t = setup({
+      reviewers: ['codex', 'claude', 'pro'],
+      models: { pro: { harness: 'codex', model: 'gpt-6-pro', label: 'Pro' } },
+      pricing: { 'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 } },
+    });
+    const tokens = { inputTokens: 1_000_000, cachedInputTokens: 500_000, cacheWriteTokens: 0, outputTokens: 10_000 };
+    for (const name of ['codex', 'claude'] as const) {
+      const fake = t.deps.harnesses[name];
+      t.deps.harnesses[name] = {
+        ...fake,
+        run: async (input) => {
+          const out = await fake.run(input);
+          // Claude reports its own cost; codex (and the unpriced gpt-6-pro) only tokens. Pro times out.
+          if (input.model === 'gpt-6-pro') return { ...out, timedOut: true, usage: tokens };
+          return { ...out, usage: name === 'claude' ? { ...tokens, costUsd: 2.5 } : tokens };
+        },
+      };
+    }
+    const { reportDir, results } = await runReview(job, t.repo, t.config, t.deps);
+    expect(results?.map((r) => [r.name, r.usage?.costUsd, r.usage?.costSource])).toEqual([
+      ['codex', 5 + 0.5 + 0.5, 'estimated'],
+      ['claude', 2.5, 'reported'],
+      ['pro', undefined, undefined],
+    ]);
+    const meta = JSON.parse(readFileSync(join(reportDir!, 'meta.json'), 'utf8'));
+    expect(meta.reviewers.map((r: { usage?: unknown }) => r.usage)).toEqual([
+      { ...tokens, costUsd: 6, costSource: 'estimated' },
+      { ...tokens, costUsd: 2.5, costSource: 'reported' },
+      tokens,
+    ]);
+  });
+
   test('runs one CLI twice under two ids, each with its own settings and scratch directory', async () => {
     const t = setup({
       reviewers: ['claude', 'haiku'],

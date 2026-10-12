@@ -5,22 +5,29 @@ import { reportDirFor } from './report.ts';
 import { activeJob, jobTarget, type JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
 import { fmtDuration, sanitize, type Styles, type Tone } from './ui.ts';
+import { fmtCost, recordedUsage, totalCost, type CostTotal, type Price, type Usage } from './usage.ts';
 import { mergeFindings, type Finding, type Severity } from './verdict.ts';
 
 export { fmtDuration };
 
-interface ReviewerMeta {
+export interface ReviewerMeta {
   name: ReviewerId;
+  harness?: string;
+  model?: string;
+  effort?: string;
   ok: boolean;
   score?: number;
   error?: string;
   durationMs: number;
+  usage?: Usage;
 }
 
 export interface ReportSummary {
   score: number | null;
   reviewers: ReviewerMeta[];
   findings: Record<Severity, number>;
+  /** What the reviewers cost together; null when none reported usage (older reports, or CLIs that don't). */
+  cost: CostTotal | null;
 }
 
 const readJson = (path: string): any => {
@@ -31,11 +38,17 @@ const readJson = (path: string): any => {
   }
 };
 
-/** Scores, timings, and merged finding counts from a report directory; null when it was never written. */
-export function readReport(dir: string): ReportSummary | null {
+/**
+ * Scores, timings, merged finding counts, and costs from a report directory; null when it was never written. `prices`
+ * prices usage that was recorded without a cost.
+ */
+export function readReport(dir: string, prices?: Record<string, Price>): ReportSummary | null {
   const meta = readJson(join(dir, 'meta.json'));
   if (!meta || !Array.isArray(meta.reviewers)) return null;
-  const reviewers = meta.reviewers as ReviewerMeta[];
+  const reviewers = (meta.reviewers as ReviewerMeta[]).map((r) => ({
+    ...r,
+    usage: recordedUsage(r.usage, r.model, prices),
+  }));
   const byReviewer = reviewers
     .filter((r) => r.ok)
     .map((r) => ({
@@ -44,10 +57,11 @@ export function readReport(dir: string): ReportSummary | null {
     }));
   const findings = { critical: 0, major: 0, minor: 0 };
   for (const f of mergeFindings(byReviewer)) findings[f.severity]++;
-  return { score: meta.score ?? null, reviewers, findings };
+  return { score: meta.score ?? null, reviewers, findings, cost: totalCost(reviewers.map((r) => r.usage)) };
 }
 
-const fmtStarted = (iso: string) => {
+/** `10-11 14:02`, in local time. */
+export const fmtStarted = (iso: string) => {
   const d = new Date(iso);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -58,9 +72,10 @@ const oneLine = (s: string, max: number) => {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-type Cell = { text: string; color?: string };
+/** A table cell; `color` is an SGR code, painted with the TUI's palette when one is given. */
+export type Cell = { text: string; color?: string };
 
-const DIM = '2';
+export const DIM = '2';
 const RED = '31';
 const GREEN = '32';
 const YELLOW = '33';
@@ -85,6 +100,8 @@ export interface StatusOptions {
   now?: number;
   /** One summary per record, when the caller has them already (the TUI caches them); else they are read here. */
   reports?: (ReportSummary | null)[];
+  /** Prices for usage recorded without a cost; the built-in ones when unset. */
+  prices?: Record<string, Price>;
   /** Current GitHub states, separate from review status; undefined entries are local reviews. */
   prStates?: (PrState | 'unknown' | undefined)[];
 }
@@ -95,12 +112,12 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
   const now = opts.now ?? Date.now();
   const reports =
     opts.reports ??
-    records.map((r) => (activeJob(r) ? null : readReport(r.reportDir ?? reportDirFor(opts.dataDir, r))));
+    records.map((r) => (activeJob(r) ? null : readReport(r.reportDir ?? reportDirFor(opts.dataDir, r), opts.prices)));
   const reviewers = [...opts.reviewers];
   for (const rep of reports)
     for (const r of rep?.reviewers ?? []) if (!reviewers.includes(r.name)) reviewers.push(r.name);
 
-  const header = [
+  const leading = [
     'STATUS',
     ...(opts.prStates ? ['PR STATE'] : []),
     'STARTED',
@@ -111,12 +128,11 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
     'SOURCE',
     'ROUTE',
     'SCORE',
-    ...reviewers.map((n) => n.toUpperCase()),
-    'CRIT',
-    'MAJ',
-    'MIN',
-    'NOTE',
   ];
+  const header = [...leading, ...reviewers.map((n) => n.toUpperCase()), 'COST', 'CRIT', 'MAJ', 'MIN', 'NOTE'];
+  // By position, since a reviewer's column can share a header with these (a reviewer named cost).
+  const routeAt = leading.indexOf('ROUTE');
+  const costAt = leading.length + reviewers.length;
   const none: Cell = { text: '-', color: DIM };
 
   const rows = records.map((r, i): Cell[] => {
@@ -149,6 +165,7 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
       r.route ? { text: r.route } : none,
       rep?.score ? { text: `${rep.score}/5`, color: scoreColor(rep.score) } : none,
       ...reviewerCells,
+      rep?.cost ? { text: fmtCost(rep.cost) } : none,
       ...(rep
         ? [
             countCell(rep.findings.critical, RED),
@@ -170,11 +187,21 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
     header.pop();
     for (const row of rows) row.pop();
   }
-  if (records.every((r) => !r.route)) {
-    const route = header.indexOf('ROUTE');
-    header.splice(route, 1);
-    for (const row of rows) row.splice(route, 1);
+  // Older reports, and CLIs that report no usage, have no cost; the column shows once any job has one. COST comes
+  // after ROUTE, so it goes first and ROUTE's position still holds.
+  for (const [at, keep] of [
+    [costAt, reports.some((rep) => rep?.cost)],
+    [routeAt, records.some((r) => r.route)],
+  ] as const) {
+    if (keep) continue;
+    header.splice(at, 1);
+    for (const row of rows) row.splice(at, 1);
   }
+  return renderTable(header, rows, opts);
+}
+
+/** An aligned table: the header muted, then the rows, columns two spaces apart and the last left ragged. */
+export function renderTable(header: string[], rows: Cell[][], opts: { color: boolean; styles?: Styles }): string[] {
   const widths = header.map((h, c) => Math.max(h.length, ...rows.map((row) => row[c]!.text.length)));
   const tones: Record<string, Tone> = {
     [DIM]: 'muted',

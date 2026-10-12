@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findBin, HARNESS_NAMES, HARNESSES } from '../src/reviewers/index.ts';
+import { codexUsage } from '../src/reviewers/codex.ts';
 import { resultText } from '../src/reviewers/run.ts';
 import type { ReviewerInput } from '../src/reviewers/types.ts';
 import { removeProjectFiles } from '../src/runner.ts';
@@ -114,6 +115,60 @@ describe('claude', () => {
     expect(failed.raw).toBe('no auth');
   });
 
+  test('reports the CLI’s own cost and the tokens of every model the run used, failed runs included', async () => {
+    // As Claude Code 2.1 prints it: a side call to a small model is listed apart from the main one.
+    const result = {
+      type: 'result',
+      is_error: false,
+      structured_output: verdict,
+      total_cost_usd: 0.0161204,
+      usage: { input_tokens: 10, cache_creation_input_tokens: 7203, cache_read_input_tokens: 13832, output_tokens: 39 },
+      modelUsage: {
+        'claude-haiku-5-5': {
+          inputTokens: 1172,
+          outputTokens: 18,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+        },
+        'claude-opus-5-5': {
+          inputTokens: 10,
+          outputTokens: 39,
+          cacheReadInputTokens: 13832,
+          cacheCreationInputTokens: 7203,
+        },
+      },
+    };
+    const out = await run('claude', fakeCli(JSON.stringify(result)));
+    expect(out.verdict).toEqual(verdict);
+    expect(out.usage).toEqual({
+      inputTokens: 1172 + 10 + 13832 + 7203,
+      cachedInputTokens: 13832,
+      cacheWriteTokens: 7203,
+      outputTokens: 18 + 39,
+      costUsd: 0.0161204,
+    });
+
+    // Older CLIs without modelUsage: the usage block, whose input_tokens leaves out the cache.
+    const { modelUsage: _, ...older } = result;
+    expect((await run('claude', fakeCli(JSON.stringify(older)))).usage?.inputTokens).toBe(10 + 13832 + 7203);
+
+    const failed = await run(
+      'claude',
+      fakeCli(JSON.stringify({ ...result, is_error: true, result: 'rate limited', structured_output: undefined })),
+    );
+    expect(failed.code).toBe(1);
+    expect(failed.usage?.costUsd).toBe(0.0161204);
+    expect((await run('claude', fakeCli('not json'))).usage).toBeUndefined();
+
+    // A malformed modelUsage entry is skipped, never thrown on, so the verdict still counts.
+    const odd = await run(
+      'claude',
+      fakeCli(JSON.stringify({ ...result, modelUsage: { x: null, ...result.modelUsage } })),
+    );
+    expect(odd.verdict).toEqual(verdict);
+    expect(odd.usage?.outputTokens).toBe(18 + 39);
+  });
+
   test('leaves model and effort to the CLI when unset', async () => {
     const cli = fakeCli(JSON.stringify({ structured_output: verdict }));
     await run('claude', cli);
@@ -131,7 +186,49 @@ test('codex runs in the read-only sandbox without user config and reads the -o f
   expect(argv).toContain('--ignore-user-config');
   expect(argv).toContain('--ignore-rules');
   expect(hasPair(argv, '-c', 'model_reasoning_effort="high"')).toBe(true);
+  expect(argv).toContain('--json');
   expect(argv.at(-1)).toBe('-');
+});
+
+test('codex sums the token usage of every completed turn from its --json events', () => {
+  const events = [
+    'Reading prompt from stdin...',
+    { type: 'thread.started', thread_id: 't' },
+    { type: 'turn.started' },
+    { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+    {
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 24_763,
+        cached_input_tokens: 24_448,
+        cache_write_input_tokens: 0,
+        output_tokens: 122,
+        reasoning_output_tokens: 64,
+      },
+    },
+    { type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 10 } },
+  ];
+  const stdout = events.map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n');
+  expect(codexUsage(stdout)).toEqual({
+    inputTokens: 25_763,
+    cachedInputTokens: 24_448,
+    cacheWriteTokens: 0,
+    outputTokens: 132,
+  });
+  expect(codexUsage('{"type":"turn.started"}')).toBeUndefined();
+});
+
+test('a failed codex run keeps its usage and reports the error events when stderr is empty', async () => {
+  const stdout = [
+    { type: 'turn.completed', usage: { input_tokens: 500, cached_input_tokens: 0, output_tokens: 5 } },
+    { type: 'error', message: 'stream disconnected' },
+    { type: 'turn.failed', error: { message: 'usage limit reached' } },
+  ]
+    .map((e) => JSON.stringify(e))
+    .join('\n');
+  const out = await run('codex', fakeCli(stdout, { exitCode: 1 }));
+  expect(out.raw).toBe('stream disconnected\nusage limit reached');
+  expect(out.usage).toMatchObject({ inputTokens: 500, outputTokens: 5 });
 });
 
 describe('droid', () => {

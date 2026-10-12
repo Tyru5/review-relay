@@ -699,6 +699,42 @@ describe('detail view', () => {
     expect(press(ctx, ['left'], failed).view).toBe('list');
   });
 
+  test('shows what each reviewer cost in the list, the detail, and the status bar', () => {
+    const dir = dataDir();
+    const report = reportDirFor(dir, DONE);
+    const meta = JSON.parse(readFileSync(join(report, 'meta.json'), 'utf8'));
+    const usage = { inputTokens: 288_000, cachedInputTokens: 200_000, cacheWriteTokens: 0, outputTokens: 9_000 };
+    meta.reviewers[0].usage = { ...usage, costUsd: 0.62, costSource: 'estimated' };
+    meta.reviewers[1].usage = { ...usage, inputTokens: 412_000, outputTokens: 12_000, costUsd: 1.84 };
+    writeFileSync(join(report, 'meta.json'), JSON.stringify(meta));
+    const ctx = ctxFor(dir);
+
+    const list = render(initialState(), ctx);
+    expect(list).toContain('~$2.46 spent');
+    expect(list).toMatch(/CLAUDE\s+COST\s+CRIT/);
+    expect(list).toMatch(/3\/5 1m30s\s+~\$2\.46/);
+
+    const text = render(press(ctx, ['down', 'enter']), ctx);
+    expect(text).toContain('cost      ~$2.46  codex ~$0.62 · claude $1.84');
+    expect(text).toContain('codex   4/5  1m05s · gpt-6-astra, effort high · ~$0.62 · 288k in/9k out');
+    expect(text).toContain('claude  3/5  1m30s · claude-opus-5-5 · $1.84 · 412k in/12k out');
+
+    // A finished review whose report has no cost makes the total a lower bound, as `cost` marks it.
+    const failedReport = reportDirFor(dir, FAILED);
+    mkdirSync(failedReport, { recursive: true });
+    writeFileSync(
+      join(failedReport, 'meta.json'),
+      JSON.stringify({ reviewers: [{ name: 'codex', ok: false, durationMs: 1 }] }),
+    );
+    expect(render(initialState(), ctxFor(dir))).toContain('~$2.46+ spent');
+
+    // Reports from before costs were recorded show none of it.
+    const plain = ctxFor();
+    expect(render(initialState(), plain)).not.toContain('spent');
+    expect(render(initialState(), plain)).not.toContain('COST');
+    expect(render(press(plain, ['down', 'enter']), plain)).not.toContain('cost  ');
+  });
+
   test('a running job shows its elapsed time and log so far; a skipped one says why it is empty', () => {
     const ctx = ctxFor();
     const text = render(press(ctx, ['enter']), ctx);

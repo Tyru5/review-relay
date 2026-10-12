@@ -1,6 +1,6 @@
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Config, RepoConfig, ReviewerEntry } from './config.ts';
+import { pricesFor, type Config, type RepoConfig, type ReviewerEntry } from './config.ts';
 import { diffStats, promptDiff, type DiffStats } from './diffstats.ts';
 import { prHead, upsertComment } from './github.ts';
 import { reviewPrompt } from './prompt.ts';
@@ -9,6 +9,7 @@ import { findBin, HARNESSES } from './reviewers/index.ts';
 import type { Harness, ReviewerInput } from './reviewers/types.ts';
 import { pickRoute, type RouteChoice } from './routes.ts';
 import { isLocal, type HarnessName, type ResolvedJob, type ReviewerId, type ReviewerResult } from './types.ts';
+import { priced, type Price } from './usage.ts';
 import { finalScore, VERDICT_SCHEMA } from './verdict.ts';
 import { baseRemoteRef, fetchPr, withCheckout, workName } from './worktree.ts';
 
@@ -46,12 +47,15 @@ async function runReviewer(
   entry: ReviewerEntry,
   harness: Harness,
   input: ReviewerInput,
+  prices: Record<string, Price>,
 ): Promise<ReviewerResult> {
   const started = Date.now();
   const ran = { name, ...entry, timeoutMs: input.timeoutMs };
   const durationMs = () => Date.now() - started;
   try {
-    const r = await harness.run(input);
+    const out = await harness.run(input);
+    // Priced now, so a later price change leaves this review's recorded cost as it was.
+    const r = out.usage ? { ...out, usage: priced(out.usage, entry.model, prices) } : out;
     if (r.timedOut)
       return {
         ...ran,
@@ -59,6 +63,7 @@ async function runReviewer(
         output: r.raw,
         error: `timed out after ${Math.round(input.timeoutMs / 1000)}s`,
         durationMs: durationMs(),
+        usage: r.usage,
       };
     if (r.code !== 0 || !r.verdict)
       return {
@@ -67,6 +72,7 @@ async function runReviewer(
         output: r.raw,
         error: r.error ?? `exit ${r.code}: ${r.raw.slice(-2000)}`,
         durationMs: durationMs(),
+        usage: r.usage,
       };
     return {
       ...ran,
@@ -75,6 +81,7 @@ async function runReviewer(
       verdict: r.verdict,
       score: finalScore(r.verdict),
       durationMs: durationMs(),
+      usage: r.usage,
     };
   } catch (err) {
     return {
@@ -162,6 +169,7 @@ export async function runReview(
   await Bun.write(schemaPath, JSON.stringify(VERDICT_SCHEMA, null, 2));
   const reviewers = pick.reviewers.map((name) => ({ name, entry: config.models[name]! }));
   const harnessOf = (entry: ReviewerEntry) => deps.harnesses[entry.harness];
+  const prices = pricesFor(config);
 
   const results = await deps
     .checkout(repo, job, config.dataDir, async (dir) => {
@@ -178,22 +186,28 @@ export async function runReview(
           // Keyed by reviewer id, so two reviewers on one CLI never share output files.
           const scratchDir = join(scratchRoot, name);
           await mkdir(scratchDir, { recursive: true });
-          return runReviewer(name, entry, harness, {
-            // An uninstalled harness still runs by name, so its failure reads "executable not found".
-            bin: deps.findBin(entry.harness) ?? harness.bins[0]!,
-            dir,
-            prompt: reviewPrompt(job, stats, {
-              schema: harness.schema === 'prompt',
-              diff: harness.shell === 'none' ? inlineDiff : undefined,
-            }),
-            schemaPath,
-            scratchDir,
-            timeoutMs: pick.timeoutMs,
-            signal,
-            model: entry.model,
-            effort: entry.effort,
-            provider: entry.provider,
-          });
+          return runReviewer(
+            name,
+            entry,
+            harness,
+            {
+              // An uninstalled harness still runs by name, so its failure reads "executable not found".
+              bin: deps.findBin(entry.harness) ?? harness.bins[0]!,
+              dir,
+              prompt: reviewPrompt(job, stats, {
+                schema: harness.schema === 'prompt',
+                diff: harness.shell === 'none' ? inlineDiff : undefined,
+              }),
+              schemaPath,
+              scratchDir,
+              timeoutMs: pick.timeoutMs,
+              signal,
+              model: entry.model,
+              effort: entry.effort,
+              provider: entry.provider,
+            },
+            prices,
+          );
         }),
       );
     })

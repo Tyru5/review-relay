@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
 import { parseRoutes, type Route } from './routes.ts';
 import type { HarnessName, ReviewerId, TriggerMode } from './types.ts';
+import { DEFAULT_PRICES, PRICE_FIELDS, type Price } from './usage.ts';
 
 export interface GithubTriggerConfig {
   /** Also review on `pull_request.synchronize` (new commits). */
@@ -62,6 +63,8 @@ export interface Config {
   models: Record<ReviewerId, ReviewerEntry>;
   /** Checked from the top; the first that matches a PR decides its review, else `reviewers` runs. */
   routes: Route[];
+  /** USD per million tokens by model name, over the built-in prices, for CLIs that report tokens but no cost. */
+  pricing: Record<string, Price>;
   dataDir: string;
   repos: RepoConfig[];
 }
@@ -189,6 +192,35 @@ function parseReviewers(
   return ids;
 }
 
+/** Prices by model name; every rate a number of dollars per million tokens, `input` and `output` required. */
+function parsePricing(raw: unknown): Record<string, Price> {
+  if (raw === undefined) return {};
+  if (!isObject(raw)) throw new Error('pricing must be an object of model names to prices');
+  const prices: Record<string, Price> = {};
+  for (const [model, value] of Object.entries(raw)) {
+    if (!isObject(value)) throw new Error(`pricing.${model} must be an object such as { "input": 10, "output": 50 }`);
+    for (const [key, rate] of Object.entries(value)) {
+      if (!(PRICE_FIELDS as readonly string[]).includes(key)) {
+        throw new Error(`pricing.${model}.${key} is not a price (expected ${PRICE_FIELDS.join(', ')})`);
+      }
+      if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0) {
+        throw new Error(`pricing.${model}.${key} must be dollars per million tokens, 0 or more`);
+      }
+    }
+    if (value.input === undefined || value.output === undefined) {
+      throw new Error(`pricing.${model} needs both input and output`);
+    }
+    prices[model] = value as unknown as Price;
+  }
+  return prices;
+}
+
+/** Built-in prices with the config's on top. */
+export const pricesFor = (config: Pick<Config, 'pricing'>): Record<string, Price> => ({
+  ...DEFAULT_PRICES,
+  ...config.pricing,
+});
+
 /** Reviewers that can run, in `reviewers` or a route, need labels that tell them apart in the PR comment. */
 export function checkLabels(ids: ReviewerId[], models: Record<ReviewerId, ReviewerEntry>) {
   const byLabel = new Map<string, ReviewerId>();
@@ -254,6 +286,7 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     reviewers,
     models,
     routes,
+    pricing: parsePricing(c.pricing),
     dataDir: c.dataDir ? resolve(String(c.dataDir).replace(/^~(?=\/|$)/, homedir())) : DEFAULT_DATA_DIR,
     repos,
   };

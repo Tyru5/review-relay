@@ -1,6 +1,51 @@
 import { exec } from '../exec.ts';
+import type { Usage } from '../usage.ts';
 import { opt, withVerdict } from './run.ts';
 import type { Harness } from './types.ts';
+
+interface CodexEvent {
+  type?: string;
+  usage?: Record<string, unknown>;
+  message?: unknown;
+  error?: { message?: unknown };
+}
+
+/** The events `exec --json` prints, one per line; anything else on stdout is skipped. */
+function events(stdout: string): CodexEvent[] {
+  return stdout.split('\n').flatMap((line) => {
+    try {
+      const event = JSON.parse(line) as CodexEvent;
+      return event && typeof event === 'object' ? [event] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+
+/**
+ * Tokens over every `turn.completed` event. Cached reads and cache writes are part of `input_tokens`, and reasoning
+ * is part of `output_tokens`, as the OpenAI API counts them. Codex reports no cost, so the runner prices the tokens.
+ */
+export function codexUsage(stdout: string): Usage | undefined {
+  const turns = events(stdout).filter((e) => e.type === 'turn.completed' && e.usage && typeof e.usage === 'object');
+  if (turns.length === 0) return undefined;
+  const sum = (key: string) => turns.reduce((n, e) => n + count(e.usage![key]), 0);
+  return {
+    inputTokens: sum('input_tokens'),
+    cachedInputTokens: sum('cached_input_tokens'),
+    cacheWriteTokens: sum('cache_write_input_tokens'),
+    outputTokens: sum('output_tokens'),
+  };
+}
+
+/** What the `error` and `turn.failed` events said, for a run that failed with nothing on stderr. */
+export const codexErrors = (stdout: string) =>
+  events(stdout)
+    .map((e) => (e.type === 'error' ? e.message : e.type === 'turn.failed' ? e.error?.message : undefined))
+    .filter((message): message is string => typeof message === 'string' && message !== '')
+    .join('\n');
 
 export const codex: Harness = {
   label: 'Codex',
@@ -29,6 +74,8 @@ export const codex: Harness = {
         '--sandbox',
         'read-only',
         '--ephemeral',
+        // Events on stdout, so the run's token usage can be read; the verdict still comes from the -o file.
+        '--json',
         '--output-schema',
         schemaPath,
         '-o',
@@ -37,12 +84,15 @@ export const codex: Harness = {
       ],
       { cwd: dir, timeoutMs, signal, stdin: prompt },
     );
-    if (result.code !== 0 || result.timedOut) return { ...result, raw: result.stderr.trim() || result.stdout.trim() };
+    const usage = codexUsage(result.stdout);
+    if (result.code !== 0 || result.timedOut) {
+      return { ...result, raw: result.stderr.trim() || codexErrors(result.stdout) || result.stdout.trim(), usage };
+    }
     const raw = (
       await Bun.file(outFile)
         .text()
         .catch(() => '')
     ).trim();
-    return withVerdict(result, raw, () => raw);
+    return { ...withVerdict(result, raw, () => raw), usage };
   },
 };

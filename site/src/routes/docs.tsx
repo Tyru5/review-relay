@@ -534,10 +534,11 @@ function Docs() {
               }
             />
             <p>
-              <code>meta.json</code> records the job, route, selected models, timeouts, durations, and scores. Reviewer
-              JSON contains the verdict, or an error and raw output on failure. Re-running the same PR commit writes to
-              the same directory. <code>tui</code> renders these reports in the terminal: open a job to read its scores,
-              findings, and <code>comment.md</code> without leaving the shell.
+              <code>meta.json</code> records the job, route, selected models, timeouts, durations, scores, and each
+              reviewer's tokens and cost (Claude Code's own figure; Codex estimated from tokens at list price), which{' '}
+              <code>cost</code> totals. Reviewer JSON contains the verdict, or an error and raw output on failure.
+              Re-running the same PR commit writes to the same directory. <code>tui</code> renders these reports in the
+              terminal: open a job to read its scores, findings, and <code>comment.md</code> without leaving the shell.
             </p>
             <p>
               One failed reviewer does not cancel the others. A partial result can publish with the failure noted. If

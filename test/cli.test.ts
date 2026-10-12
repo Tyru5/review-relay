@@ -40,6 +40,85 @@ test('info resolves custom reviewer executables and JSON commands keep warnings 
   }
 });
 
+test('cost lists each review’s cost per reviewer, filters by repo and PR, and prints JSON', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relay-cli-cost-'));
+  try {
+    const config = join(dir, 'config.json');
+    writeFileSync(config, JSON.stringify({ dataDir: dir, repos: [{ fullName: 'o/r', localPath: dir }] }));
+    const record = (repo: string, pr: number, sha: string) => ({
+      key: `${repo}@${sha}`,
+      repo,
+      pr,
+      headSha: sha,
+      source: 'github',
+      status: 'done',
+      startedAt: `2026-10-0${pr}T10:00:00.000Z`,
+      finishedAt: `2026-10-0${pr}T10:05:00.000Z`,
+    });
+    const jobs = [record('o/r', 2, 'aaaaaaaa11'), record('o/other', 1, 'bbbbbbbb22')];
+    writeFileSync(join(dir, 'state.json'), JSON.stringify(jobs));
+    const usage = (costUsd: number, costSource: string) => ({
+      inputTokens: 100_000,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 2_000,
+      costUsd,
+      costSource,
+    });
+    for (const job of jobs) {
+      const report = join(dir, 'reports', job.repo.replace('/', '__'), `pr-${job.pr}`, job.headSha.slice(0, 8));
+      mkdirSync(report, { recursive: true });
+      writeFileSync(
+        join(report, 'meta.json'),
+        JSON.stringify({
+          reviewers: [
+            { name: 'codex', model: 'gpt-6-astra', ok: true, durationMs: 1, usage: usage(0.5, 'estimated') },
+            { name: 'claude', ok: true, durationMs: 1, usage: usage(1.25, 'reported') },
+          ],
+        }),
+      );
+    }
+    const cost = (...args: string[]) => {
+      const result = Bun.spawnSync(
+        [process.execPath, join(import.meta.dir, '../src/cli.ts'), 'cost', ...args, '--config', config],
+        { env: { ...process.env, NO_COLOR: '1' } },
+      );
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString();
+    };
+
+    const all = cost();
+    expect(all).toMatch(/CODEX\s+CLAUDE\s+TOTAL/);
+    expect(all).toContain('~$0.50 · 100k in/2k out  $1.25 · 100k in/2k out  ~$1.75');
+    expect(all).toMatch(/total\s+~\$3\.50\s+2 reviews · ~\$1\.75 per review/);
+    expect(all).toMatch(/claude\s+\$2\.50\s+2 reviews/);
+
+    const one = cost('--repo', 'O/R', '--pr', '2');
+    expect(one).toContain('Review costs  O/R #2');
+    expect(one).not.toContain('o/other');
+    expect(one).toMatch(/total\s+~\$1\.75\s+1 review /);
+
+    const json = JSON.parse(cost('--json'));
+    expect(json).toMatchObject({
+      reviews: 2,
+      costUsd: 3.5,
+      estimated: true,
+      partial: false,
+      costedReviews: 2,
+      averageUsd: 1.75,
+      unpriced: [],
+    });
+    expect(json.reviewers.map((r: { name: string; costUsd: number }) => [r.name, r.costUsd])).toEqual([
+      ['codex', 1],
+      ['claude', 2.5],
+    ]);
+    expect(json.jobs[0]).toMatchObject({ repo: 'o/r', pr: 2, costUsd: 1.75 });
+    expect(json.jobs[0].reviewers[0]).toMatchObject({ name: 'codex', model: 'gpt-6-astra', usage: { costUsd: 0.5 } });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe('review', () => {
   const root = mkdtempSync(join(tmpdir(), 'relay-review-cli-'));
   afterAll(() => rmSync(root, { recursive: true, force: true }));

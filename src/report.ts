@@ -138,7 +138,7 @@ export async function writeReport(
         score: combinedScore(results),
         route: route ?? null,
         reviewers: results.map(
-          ({ name, harness, model, effort, provider, timeoutMs, ok, score, error, durationMs }) => ({
+          ({ name, harness, model, effort, provider, timeoutMs, ok, score, error, durationMs, usage }) => ({
             name,
             harness,
             model,
@@ -149,6 +149,7 @@ export async function writeReport(
             score,
             error,
             durationMs,
+            usage,
           }),
         ),
       },

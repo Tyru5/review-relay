@@ -10,10 +10,11 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { THEMES, type Config, type ThemeName } from './config.ts';
+import { pricesFor, THEMES, type Config, type ThemeName } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
 import { prState, type PrState } from './github.ts';
 import { renderMarkdownView, type MarkdownDetails } from './markdown.ts';
+import { sumTotals } from './cost.ts';
 import { reportDirFor } from './report.ts';
 import { localTag } from './local.ts';
 import { activeJob, jobTarget, orphaned, type JobRecord, type JobStatus } from './state.ts';
@@ -31,6 +32,7 @@ import {
   type Tone,
 } from './ui.ts';
 import { isLocal } from './types.ts';
+import { DEFAULT_PRICES, fmtCost, fmtUsage, type Price } from './usage.ts';
 import { mergeFindings, type Finding, type MergedFinding, type Verdict } from './verdict.ts';
 
 const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded'];
@@ -133,6 +135,8 @@ export class JobStore {
   constructor(
     readonly dataDir: string,
     private readonly fetchPrState = prState,
+    /** Prices for usage recorded without a cost. */
+    private readonly prices: Record<string, Price> = DEFAULT_PRICES,
   ) {}
 
   /** PR state belongs to the PR, not a particular review or commit. Local reviews have none. */
@@ -203,7 +207,7 @@ export class JobStore {
   report(job: JobRecord): ReportSummary | null {
     if (!isFinished(job)) return null;
     const key = cacheKey(job);
-    if (!this.reports.has(key)) this.reports.set(key, readReport(this.dirOf(job)));
+    if (!this.reports.has(key)) this.reports.set(key, readReport(this.dirOf(job), this.prices));
     return this.reports.get(key)!;
   }
 
@@ -570,6 +574,14 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
   if (job.error) lines.push(field('error', st.tone('danger', sanitize(job.error))));
   const score = detail.summary?.score;
   if (score) lines.push(field('score', st.tone(scoreTone(score), `${score}/5`)));
+  const cost = detail.summary?.cost;
+  if (cost) {
+    const each = detail.summary!.reviewers.map(
+      (r) =>
+        `${r.name} ${r.usage?.costUsd === undefined ? '-' : fmtCost({ costUsd: r.usage.costUsd, estimated: r.usage.costSource === 'estimated' })}`,
+    );
+    lines.push(field('cost', `${st.bold(fmtCost(cost))}  ${st.muted(each.join(' · '))}`));
+  }
 
   if (detail.summary) {
     lines.push('', st.section('Reviewers'));
@@ -581,8 +593,9 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
       const result = r.ok
         ? st.tone(scoreTone(r.score ?? 1), `${r.score}/5`)
         : st.tone('danger', `failed: ${sanitize(r.error ?? 'unknown error')}`);
+      const spent = r.usage ? ` · ${fmtUsage(r.usage)}` : '';
       lines.push(
-        `  ${st.key(r.name.padEnd(width))}  ${result}  ${st.muted(`${fmtDuration(r.durationMs)} · ${model}`)}`,
+        `  ${st.key(r.name.padEnd(width))}  ${result}  ${st.muted(`${fmtDuration(r.durationMs)} · ${model}${spent}`)}`,
       );
     }
   }
@@ -893,8 +906,11 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
   const counts = STATUSES.map((s) => [s, jobs.filter((j) => j.status === s).length] as const)
     .filter(([, n]) => n > 0)
     .map(([s, n]) => st.tone(STATUS_TONES[s], `${n} ${s}`));
+  // Reports are cached per finished job, and the list reads them all anyway. A report without a cost marks the total
+  // partial, as the cost command marks it; jobs that wrote no report (skipped, running) spent nothing to count.
+  const spent = sumTotals(jobs.flatMap((j) => (ctx.store.report(j) ? [ctx.store.report(j)!.cost] : [])));
   const summary = jobs.length
-    ? [`${jobs.length} jobs`, ...counts].join(st.muted(' · '))
+    ? [`${jobs.length} jobs`, ...counts, ...(spent ? [`${fmtCost(spent)} spent`] : [])].join(st.muted(' · '))
     : st.muted('no review jobs yet');
   const narrowed = state.status || state.filter ? st.muted(`  showing ${list.length}`) : '';
   const filterText = state.filtering
@@ -1086,7 +1102,7 @@ export async function tui(config: Config, configPath: string, version: string): 
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('tui needs an interactive terminal');
   const color = supportsColor();
   const depth = colorDepth();
-  const store = new JobStore(config.dataDir);
+  const store = new JobStore(config.dataDir, prState, pricesFor(config));
   store.refresh();
   let daemon: DaemonState | null = await inspectDaemon(config.dataDir, config.port);
   let state = initialState(config.theme);

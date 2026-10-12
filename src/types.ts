@@ -1,3 +1,4 @@
+import type { Usage } from './usage.ts';
 import type { Verdict } from './verdict.ts';
 
 export type TriggerMode = 'auto' | 'greptile' | 'coderabbit' | 'github';
@@ -72,6 +73,8 @@ export interface ReviewerResult {
   score?: number;
   error?: string;
   durationMs: number;
+  /** Tokens and cost, when the CLI reported them; a failed run can still have spent tokens. */
+  usage?: Usage;
 }
 
 /** A review of a branch in a checkout rather than a PR: `pr` is 0, and nothing is fetched or posted. */

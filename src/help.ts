@@ -58,7 +58,7 @@ export const HELP_GROUPS: Group[] = [
         name: 'tui',
         summary: 'Live terminal view of the review jobs: open one, read its findings, re-run it',
         detail: [
-          'Lists every job in state.json with its score per reviewer and finding counts, refreshing as the daemon writes. Enter opens a job (scores, merged findings, the posted comment, or its log lines while running); / filters; s cycles the status filter.',
+          'Lists every job in state.json with its score per reviewer, cost, and finding counts, refreshing as the daemon writes; the status bar adds up what they cost. Enter opens a job (scores, merged findings, the posted comment, or its log lines while running); / filters; s cycles the status filter.',
           "r reviews the PR, or a local review's branch, again in the background; o opens the PR in the browser, y copies its URL. Local reviews from review-relay review show here too. Press ? inside for every key.",
         ],
         examples: ['review-relay tui'],
@@ -73,6 +73,28 @@ export const HELP_GROUPS: Group[] = [
           { flag: '--page <n>', description: 'Page of jobs, newest first (default 1)' },
         ],
         examples: ['review-relay status', 'review-relay status --limit 5', 'review-relay status --page 2'],
+      },
+      {
+        name: 'cost',
+        args: '[--repo <owner/name>] [--pr N] [--limit N] [--page N] [--json]',
+        summary: 'What each review cost, per reviewer, with totals',
+        detail: [
+          "Lists every finished review, newest first, with each reviewer's cost and tokens and the review's total, then the totals across all of them, per reviewer and per review.",
+          "Claude Code reports its own cost. Codex reports only tokens, so its cost is an estimate (marked ~) at the model's list price; the pricing config field adds or changes prices. A + marks a total that leaves out runs with no reported cost. A review run before this was recorded shows -.",
+        ],
+        options: [
+          { flag: '--repo <owner/name>', description: 'Only reviews of this repo' },
+          { flag: '--pr <n>', description: 'Only reviews of this pull request' },
+          { flag: '--limit <n>', description: 'Reviews per page (default 20)' },
+          { flag: '--page <n>', description: 'Page of reviews, newest first (default 1)' },
+          { flag: '--json', description: 'Print the totals and every matching review as JSON' },
+        ],
+        examples: [
+          'review-relay cost',
+          'review-relay cost --repo owner/repo',
+          'review-relay cost --repo owner/repo --pr 42',
+          'review-relay cost --json | jq .costUsd',
+        ],
       },
       {
         name: 'logs',

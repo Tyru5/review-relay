@@ -62,6 +62,7 @@ bun src/cli.ts start
 | `models.claude` | `{"model": "claude-opus-5-5", "effort": "max"}` | |
 | `models.codex` | `{"model": "gpt-6-astra", "effort": "high"}` | |
 | `routes` | none | Rules that pick the reviewers for each PR; see [Routing](#routing) |
+| `pricing` | `{}` | USD per million tokens by model name, such as `{"gpt-6-pro": {"input": 30, "cachedInput": 3, "output": 180}}`; `cacheWrite` is also read. Adds to and overrides the built-in prices `review-relay cost` uses for CLIs that report tokens but no cost; see [Review costs](#review-costs) |
 | `dataDir` | `~/.review-relay` | State, reports, and temporary worktrees |
 | `theme` | `dark` | TUI theme: `dark`, `light`, or `terminal` to sync with your terminal's colors. Press `t` in the TUI to switch and save. |
 | `repos[].fullName` | required | `owner/name` |
@@ -221,6 +222,7 @@ review-relay start -d                               # same, as a background daem
 review-relay stop                                   # SIGTERM so temporary repo webhooks get deleted; forces after 20s
 review-relay restart                                # stop, then start -d
 review-relay status [--limit N] [--page N]          # daemon (pid, uptime, endpoint, health), forwarders, jobs (20/page); exit 3 if stopped
+review-relay cost [--repo owner/name] [--pr N]     # what each review cost, per reviewer, with totals; --json for scripts
 review-relay tui                                    # live job list; enter opens a job, r re-reviews, o opens the PR, / filters
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
@@ -232,6 +234,15 @@ review-relay info                                   # resolved config with defau
 review-relay config                                 # resolved config as JSON (info --json)
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
+
+### Review costs
+
+Every review records what each reviewer spent in its report's `meta.json` (`reviewers[].usage`: tokens in, cached, written to cache, out, and `costUsd`). `review-relay cost` lists the finished reviews newest first with each reviewer's cost and tokens and the review's total, then the totals across them, overall and per reviewer. `--repo` and `--pr` narrow it, `--limit` and `--page` page it like `status`, and `--json` prints every matching review. The TUI shows the same: a `COST` column in the job list, each reviewer's cost and tokens and the total in a job's detail, and the total spent in the status bar. `status` shows the `COST` column too.
+
+- **Claude Code** reports its own cost (`total_cost_usd`, at list price even on a subscription), which is used as is. Its tokens add up every model the run used.
+- **Codex** reports only tokens (`codex exec --json`), so the cost is those tokens at the model's list price, marked `~`. Built-in prices cover `gpt-6-astra`, `gpt-6-sol`, `gpt-6.1-sol`, and `gpt-6-luna`; `pricing` in the config adds models or changes a price. Long-context surcharges aren't modeled. The price is applied when the review runs, so a later change leaves earlier costs as they were; a run whose model had no price then is priced when it is read, so adding a price covers earlier reviews too.
+- Other CLIs don't report usage yet, so their columns show `-`, and a total that leaves out a run with no cost (one that timed out, for example) is marked `+`.
+- A re-review of the same commit replaces its report, cost included, so `cost` counts the latest run of each commit. Reviews from before costs were recorded show `-`.
 
 ### Reviewing before a PR
 

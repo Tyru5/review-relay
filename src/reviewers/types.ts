@@ -1,4 +1,5 @@
 import type { ExecResult } from '../exec.ts';
+import type { Usage } from '../usage.ts';
 import type { Verdict } from '../verdict.ts';
 
 export interface ReviewerInput {
@@ -23,6 +24,8 @@ export interface ReviewerOutput extends ExecResult {
   verdict?: Verdict;
   /** Why no verdict came back when the CLI itself exited cleanly. */
   error?: string;
+  /** Tokens, and cost when the CLI reports it; unset for CLIs that report neither. */
+  usage?: Usage;
 }
 
 /** An agentic coding CLI that can review a checkout headlessly with writes and arbitrary shell blocked. */
