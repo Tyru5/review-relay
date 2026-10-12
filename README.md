@@ -230,6 +230,7 @@ review-relay run --repo owner/name --pr 123 --route risky   # ... with this rout
 review-relay review [-d] [--base origin/main]       # score the current branch before opening a PR; see below
 review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
+review-relay mcp                                    # MCP server on stdio, so agents can request and read reviews; see below
 review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
 review-relay config                                 # resolved config as JSON (info --json)
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
@@ -267,6 +268,28 @@ review-relay review --route risky                    # use a route's reviewers a
 - Routes pick the reviewers as for a PR, with source `local` and the base's branch name (`main` for `origin/main`). A skip route never applies, and `sources: ["local"]` can send local reviews to their own reviewers. `--reviewers` runs the listed ids instead of routing.
 - `--min-score N` exits 1 when the confidence is under N, for a pre-push hook or script; a review where every reviewer failed exits 1 too. `--json` prints the score, each reviewer's result, and the merged findings. Both need the foreground. Ctrl-C (or SIGTERM to a background review) stops the reviewers, removes the worktree, and records the job as failed.
 - Each local review is its own process, so `maxConcurrent` doesn't limit them: five `review -d` runs start five panels at once.
+
+### MCP server
+
+`review-relay mcp` serves review-relay to agents over the [Model Context Protocol](https://modelcontextprotocol.io) on stdin and stdout, so an agent can score the branch it is working on before it opens a PR, or review a PR, and act on the findings. Register it with your agent's client as a stdio server running `review-relay mcp`:
+
+```sh
+claude mcp add review-relay -- review-relay mcp           # Claude Code
+codex mcp add review-relay -- review-relay mcp            # Codex
+```
+
+Other clients take the same command in their MCP config, such as `{"mcpServers": {"review-relay": {"command": "review-relay", "args": ["mcp"]}}}`. Add `--config <path>` to the args for a config other than the default.
+
+| Tool | What it does |
+| - | - |
+| `review_branch` | Starts a [local review](#reviewing-before-a-pr) of a checkout's branch, like `review -d`: `path` (default: the directory the client started the server in), `base`, `head`, and `route` or `reviewers`. Posts nothing. |
+| `review_pr` | Starts a review of an open PR in a configured repo, like `run`: `repo`, `pr`, and `route`. Posts the comment when the repo has `postToPr` on. |
+| `get_review` | A job's status and, once it finishes, its score, each reviewer's score, summary, and dimension notes, and the merged findings with file, line, detail, and suggestion. Names the job by `key`, by `repo` and `pr` for the PR's latest review, or by neither for the newest job. |
+| `list_reviews` | Recent jobs, newest first, with status, score, finding counts, and cost; filters by `repo`, `pr`, and `status`. |
+
+- A review takes minutes, longer than many clients wait for one tool call, so the start tools return the job's `key` at once and a background process runs the review, as `review -d` and the TUI's `r` do. Until that process records the job, its status is `starting`. `get_review` with `waitSeconds` (up to 600) waits for it to finish, through `starting` too; the start tools take `waitSeconds` as well. A process that exits before recording the job fails the call with the lines it logged. While it waits, the server sends progress notifications to clients that ask for them.
+- The jobs land in `state.json` like any other, so `status`, `cost`, and the TUI show them, and their output goes to `daemon.log`, each line ending with `[mcp:<id>]` so the server can quote a failed process's own lines. Starting a review of a commit that is already being reviewed returns that job instead of starting another.
+- The config is read on every call, so edits apply without restarting the client, and a missing or broken config comes back as a tool error.
 
 Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `review-relay --help` groups the commands with examples.
 

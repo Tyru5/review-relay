@@ -4,7 +4,15 @@ import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
-import { checkLabels, defaultConfigPath, findRepo, loadConfig, pricesFor, type Config } from './config.ts';
+import {
+  checkRoute,
+  defaultConfigPath,
+  findRepo,
+  loadConfig,
+  pricesFor,
+  withReviewers,
+  type Config,
+} from './config.ts';
 import { renderCosts, renderSpend, reviewCosts, spend } from './cost.ts';
 import {
   clearDaemonInfo,
@@ -25,6 +33,7 @@ import { openPrForCommit, prAuthor, prHead, resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
 import { busyLocal, localTag, localTarget, reviewLocal } from './local.ts';
 import { renderMarkdown } from './markdown.ts';
+import { MCP_DEPS, serveMcp } from './mcp.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import { COMMENT_MARKER, combinedScore } from './report.ts';
@@ -53,19 +62,34 @@ const appendLog = (dataDir: string) => (message: string) => {
   appendFileSync(logFilePath(dataDir), `${logTime()} ${message}\n`);
 };
 
+/**
+ * ` [mcp:<id>]` in a process the MCP server started with `--spawn-id`, else empty. It ends every line the process
+ * logs, so the server can quote this process's own lines from the shared daemon.log when it fails.
+ */
+let spawnMark = '';
+const marked = (text: string) => (spawnMark ? text.replace(/$/gm, spawnMark) : text);
+const SPAWN_ID = /^[0-9a-f]{8,32}$/;
+
+/** `--spawn-id` read straight from the arguments, so an error parsing the rest of them is marked too. */
+function rawSpawnId(argv: string[]): string | undefined {
+  const at = argv.indexOf('--spawn-id');
+  const value = at === -1 ? argv.find((a) => a.startsWith('--spawn-id='))?.slice('--spawn-id='.length) : argv[at + 1];
+  return value !== undefined && SPAWN_ID.test(value) ? value : undefined;
+}
+
 /** Timestamped log line; the tag `[owner/repo]` and the time are colored on a terminal only. */
 const log = (message: string) => {
   const time = logTime();
   const tagged = st.color ? message.replace(/^\[([^\]]+)\]/, (_, tag) => st.paint(ANSI.cyan, `[${tag}]`)) : message;
-  console.log(`${st.muted(time)} ${tagged}`);
+  console.log(marked(`${st.muted(time)} ${tagged}`));
 };
 
 const print = (lines: string[]) => console.log(lines.join('\n'));
 const fail = (message: string): never => {
-  console.error(`${err.badge('danger', message)}`);
+  console.error(marked(err.badge('danger', message)));
   process.exit(1);
 };
-const warn = (message: string) => console.log(err.badge('warning', message));
+const warn = (message: string) => console.log(marked(err.badge('warning', message)));
 const ok = (message: string) => console.log(st.badge('success', message));
 
 function makeScheduler(config: Config, state: StateStore, overrides: Partial<SchedulerDeps> = {}) {
@@ -98,6 +122,7 @@ interface Options {
   reviewers?: string;
   minScore?: string;
   headName?: string;
+  spawnId?: string;
   baseName?: string;
   worker: boolean;
   detach: boolean;
@@ -392,19 +417,22 @@ async function logs(config: Config, count: string | undefined, follow: boolean) 
 const unknownRepo = (config: Config, name: string) =>
   `no configured repo named "${name}" (configured: ${config.repos.map((r) => r.fullName).join(', ') || 'none'})`;
 
-/** Fails unless `route` names a route that reviews, so a typo never falls through to normal routing. */
-function checkRoute(config: Config, route: string, command: string) {
-  const named = config.routes.find((r) => r.name === route);
-  const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
-  if (!named) fail(`no route named "${route}" (routes: ${names})`);
-  if (named!.skip) fail(`route "${route}" skips the review, so ${command} can't use it`);
-}
-
-async function runOnce(config: Config, repoName: string | undefined, pr: string | undefined, route?: string) {
+/**
+ * Reviews one PR now. `head` pins the commit, as the MCP server does after looking the head up, so the job is
+ * recorded under the commit it asked for; a push since then supersedes the job instead of reviewing the new head.
+ */
+async function runOnce(
+  config: Config,
+  repoName: string | undefined,
+  pr: string | undefined,
+  route?: string,
+  head?: string,
+) {
   const repo = findRepo(config, repoName);
   if (!repoName || !pr) fail('run needs --repo <configured owner/name> and --pr <number>');
   if (!repo) fail(unknownRepo(config, repoName!));
   if (route !== undefined) checkRoute(config, route, 'run');
+  if (head !== undefined && !/^[0-9a-f]{40}$/.test(head)) fail(`run --head takes a full commit SHA, got "${head}"`);
   const state = new StateStore(join(config.dataDir, 'state.json'));
   const scheduler = makeScheduler(config, state);
   scheduler.runNow(repo!, {
@@ -413,20 +441,9 @@ async function runOnce(config: Config, repoName: string | undefined, pr: string 
     source: 'manual',
     reason: 'manual run',
     ...(route ? { route } : {}),
+    ...(head ? { headSha: head } : {}),
   });
   await scheduler.idle();
-}
-
-/** The config a `review --reviewers` list runs with: those reviewers, and no routes to override them. */
-function withReviewers(config: Config, list: string): Config {
-  const ids = [...new Set(list.split(',').map((id) => id.trim()))].filter(Boolean);
-  if (ids.length === 0) fail('--reviewers takes reviewer ids separated by commas, such as codex,claude');
-  const unknown = ids.filter((id) => !config.models[id]);
-  if (unknown.length > 0) {
-    fail(`no reviewer named ${unknown.join(', ')} (reviewers: ${Object.keys(config.models).join(', ')})`);
-  }
-  checkLabels(ids, config.models);
-  return { ...config, reviewers: ids, routes: [] };
 }
 
 /**
@@ -458,7 +475,7 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
   }
   if (opts.route !== undefined && opts.reviewers !== undefined) fail('pass --route or --reviewers, not both');
   if (opts.route !== undefined) checkRoute(config, opts.route, 'review');
-  const reviewConfig = opts.reviewers === undefined ? config : withReviewers(config, opts.reviewers);
+  const reviewConfig = opts.reviewers === undefined ? config : withReviewers(config, opts.reviewers.split(','));
 
   const target = await localTarget(reviewConfig, process.cwd(), {
     base: opts.base,
@@ -655,6 +672,8 @@ export function parse(argv: string[]) {
       // Internal: how -d and the TUI start a background review.
       'head-name': { type: 'string' },
       'base-name': { type: 'string' },
+      // Internal: names a process the MCP server started; see `spawnMark`.
+      'spawn-id': { type: 'string' },
       worker: { type: 'boolean', default: false },
       detach: { type: 'boolean', short: 'd', default: false },
       follow: { type: 'boolean', short: 'f', default: false },
@@ -679,6 +698,7 @@ export function parse(argv: string[]) {
     minScore: values['min-score'],
     headName: values['head-name'],
     baseName: values['base-name'],
+    spawnId: values['spawn-id'],
     worker: values.worker,
     detach: values.detach,
     follow: values.follow,
@@ -699,6 +719,7 @@ const COMMANDS = [
   'review',
   'route',
   'replay',
+  'mcp',
   'setup',
   'info',
   'config',
@@ -706,7 +727,12 @@ const COMMANDS = [
 ];
 
 async function main() {
+  const early = rawSpawnId(process.argv.slice(2));
+  if (early) spawnMark = ` [mcp:${early}]`;
   const { opts, positionals, help, version: showVersion } = parse(process.argv.slice(2));
+  if (opts.spawnId !== undefined && !SPAWN_ID.test(opts.spawnId)) {
+    fail(`--spawn-id takes a hex id, got "${opts.spawnId}"`);
+  }
   const [command, arg] = positionals;
   if (showVersion) return console.log(version);
   // `help <cmd>` and `<cmd> --help` both open the command's page; bare help opens the overview.
@@ -729,9 +755,11 @@ async function main() {
   const configPath = resolve(opts.config ?? defaultConfigPath());
   // setup writes the config, so it must not require a valid one first.
   if (command === 'setup') return setup(configPath);
+  // Reads the config on each tool call instead, so a missing or edited config is reported to the agent, not fatal.
+  if (command === 'mcp') return serveMcp({ ...MCP_DEPS, version, configPath, cwd: process.cwd() });
 
   // On stderr, so `config` and `info --json` output stays plain JSON.
-  const config = await loadConfig(configPath, (message) => console.error(`warning: ${message}`));
+  const config = await loadConfig(configPath, (message) => console.error(marked(`warning: ${message}`)));
   switch (command) {
     case 'start':
       return opts.detach ? startDetached(config, configPath) : serve(config, configPath);
@@ -749,7 +777,7 @@ async function main() {
     case 'logs':
       return logs(config, arg, opts.follow);
     case 'run':
-      return runOnce(config, opts.repo, opts.pr, opts.route);
+      return runOnce(config, opts.repo, opts.pr, opts.route, opts.head);
     case 'review':
       return reviewBranch(config, configPath, opts);
     case 'route':

@@ -248,3 +248,58 @@ describe('review', () => {
     expect(job).toMatchObject({ status: 'done', branch: 'feat', base: 'origin/main' });
   });
 });
+
+test('run --head takes only a full commit SHA, before asking GitHub anything', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relay-cli-head-'));
+  try {
+    const config = join(dir, 'config.json');
+    writeFileSync(config, JSON.stringify({ dataDir: dir, repos: [{ fullName: 'o/r', localPath: dir }] }));
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        join(import.meta.dir, '../src/cli.ts'),
+        'run',
+        '--repo',
+        'o/r',
+        '--pr',
+        '1',
+        '--head',
+        'main',
+        '--config',
+        config,
+      ],
+      // No gh on PATH, so a lookup would fail with another error.
+      { env: { ...process.env, PATH: dir, NO_COLOR: '1' } },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('run --head takes a full commit SHA, got "main"');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--spawn-id marks every line a process logs, and must be a hex id', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relay-cli-spawn-'));
+  try {
+    const config = join(dir, 'config.json');
+    writeFileSync(config, JSON.stringify({ dataDir: dir, repos: [{ fullName: 'o/r', localPath: dir }] }));
+    const cli = (...args: string[]) =>
+      Bun.spawnSync([process.execPath, join(import.meta.dir, '../src/cli.ts'), ...args, '--config', config], {
+        env: { ...process.env, PATH: dir, NO_COLOR: '1' },
+      });
+    const marked = cli('run', '--repo', 'x/y', '--pr', '1', '--spawn-id', '0123abcd');
+    expect(marked.exitCode).toBe(1);
+    expect(marked.stderr.toString().trim()).toEndWith('(configured: o/r) [mcp:0123abcd]');
+    // Marked even when the arguments fail to parse, in either spelling of the flag.
+    for (const flag of [['--spawn-id', '0123abcd'], ['--spawn-id=0123abcd']]) {
+      const unparsed = cli('run', '--no-such-flag', ...flag);
+      expect(unparsed.exitCode).toBe(1);
+      expect(unparsed.stderr.toString().trim()).toEndWith(' [mcp:0123abcd]');
+    }
+    const bad = cli('run', '--repo', 'o/r', '--pr', '1', '--spawn-id', 'nope');
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr.toString()).toContain('--spawn-id takes a hex id, got "nope"');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

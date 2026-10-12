@@ -184,6 +184,11 @@ export const COMMANDS: ReferenceRow[] = [
     'Explain matching rules without running reviewers or posting. Fetches the PR and base refs. Default source: github.',
   ],
   [
+    'mcp',
+    'No flags',
+    'MCP server on stdio for agents: review_branch, review_pr, get_review, and list_reviews. Reviews run in the background and show in status and tui.',
+  ],
+  [
     'replay',
     '<events.jsonl> --dry-run --grace <ms>',
     'Process recorded deliveries. --dry-run logs would-run jobs; --grace overrides the auto-mode wait for this replay.',

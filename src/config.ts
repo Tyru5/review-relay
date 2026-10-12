@@ -302,3 +302,23 @@ export async function loadConfig(path = defaultConfigPath(), warn?: (message: st
 
 export const findRepo = (config: Config, fullName: string | undefined) =>
   config.repos.find((r) => r.fullName.toLowerCase() === fullName?.toLowerCase());
+
+/** The config a review with an explicit reviewer list runs with: those reviewers, and no routes to override them. */
+export function withReviewers(config: Config, ids: string[]): Config {
+  const list = [...new Set(ids.map((id) => id.trim()))].filter(Boolean);
+  if (list.length === 0) throw new Error('--reviewers takes reviewer ids separated by commas, such as codex,claude');
+  const unknown = list.filter((id) => !config.models[id]);
+  if (unknown.length > 0) {
+    throw new Error(`no reviewer named ${unknown.join(', ')} (reviewers: ${Object.keys(config.models).join(', ')})`);
+  }
+  checkLabels(list, config.models);
+  return { ...config, reviewers: list, routes: [] };
+}
+
+/** Throws unless `route` names a route that reviews, so a typo never falls through to normal routing. */
+export function checkRoute(config: Config, route: string, command: string) {
+  const named = config.routes.find((r) => r.name === route);
+  const names = config.routes.map((r) => r.name).join(', ') || 'none configured';
+  if (!named) throw new Error(`no route named "${route}" (routes: ${names})`);
+  if (named.skip) throw new Error(`route "${route}" skips the review, so ${command} can't use it`);
+}

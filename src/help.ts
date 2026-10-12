@@ -176,6 +176,15 @@ export const HELP_GROUPS: Group[] = [
         ],
       },
       {
+        name: 'mcp',
+        summary: 'Serve review-relay to agents as an MCP server on stdio',
+        detail: [
+          'Speaks the Model Context Protocol on stdin and stdout, so an agent such as Claude Code or Codex can review the branch it is working on, or a PR, and read the score and findings. Register it with your client as the command review-relay mcp.',
+          'Tools: review_branch starts a local review like review -d, review_pr starts a PR review like run (and posts when postToPr is on), get_review returns a job’s status, score, and merged findings, waiting up to waitSeconds, and list_reviews lists recent jobs. Reviews run in background processes, so they show in status and the TUI, and the config is read on every call.',
+        ],
+        examples: ['review-relay mcp', 'claude mcp add review-relay -- review-relay mcp'],
+      },
+      {
         name: 'replay',
         args: '<events.jsonl> [--dry-run] [--grace <ms>]',
         summary: 'Feed recorded webhook deliveries through the trigger logic',
