@@ -749,7 +749,8 @@ function messageLines(state: TuiState, ctx: TuiContext, st: Styles): string[] {
   return chunks.map((chunk, i) => (i === 0 ? ` ${st.badge(m.tone, chunk)}` : `   ${st.tone(m.tone, chunk)}`));
 }
 
-const HELP_LINES: [string, string][] = [
+/** The `?` key help. test/docs.test.ts checks the site's key table against it. */
+export const HELP_LINES: [string, string][] = [
   ['↑↓ j k', 'move · g/G top and bottom · pgup/pgdn page'],
   [
     '← →',

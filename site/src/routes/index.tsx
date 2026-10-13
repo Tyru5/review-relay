@@ -86,6 +86,15 @@ const LOCAL_FACTS: { title: string; body: ReactNode }[] = [
       </>
     ),
   },
+  {
+    title: 'From your agent',
+    body: (
+      <>
+        <Code>review-relay mcp</Code> serves the same review over MCP, so Claude Code, Codex, or any client can score
+        the branch it is working on and fix the findings before it opens the PR.
+      </>
+    ),
+  },
 ];
 
 const CONTAINER = 'mx-auto w-full max-w-[84rem] px-5 sm:px-8';
@@ -257,7 +266,7 @@ function Home() {
               to watch, then lists the agent CLIs on your PATH so you can pick your panel and each judge&rsquo;s model
               and effort. It writes <Code tone="paper">~/.review-relay/config.json</Code>,{' '}
               <Code tone="paper">start</Code> keeps watching, and <Code tone="paper">tui</Code> shows the jobs as they
-              run:
+              run, with each PR&rsquo;s state on GitHub and what every review cost:
             </p>
             <Terminal lines={['review-relay setup', 'review-relay start -d', 'review-relay tui']} />
             <p className="mt-8 border-t border-paper-rule pt-5 text-sm leading-relaxed text-slate">
@@ -280,8 +289,9 @@ function Home() {
           </div>
           <div className="max-w-[44rem]">
             <p className="max-w-[62ch] leading-relaxed text-haze">
-              Choose models and effort, route different pull requests to different panels, and decide when the relay
-              runs. Find the defaults, working config examples, and help when a review does not arrive.
+              Choose models and effort, route different pull requests to different panels, decide when the relay runs,
+              and connect your agents over MCP. Find the defaults, working config examples, and help when a review does
+              not arrive.
             </p>
             <nav aria-label="Documentation" className="mt-6 divide-y divide-rule border-y border-rule">
               {[
@@ -289,6 +299,7 @@ function Home() {
                 ['Configuration reference', 'configuration'],
                 ['Routing rules', 'routing'],
                 ['Review before a PR', 'local'],
+                ['Agents & MCP', 'mcp'],
               ].map(([title, hash]) => (
                 <Link
                   key={hash}

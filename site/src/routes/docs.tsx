@@ -8,6 +8,8 @@ import {
   ENVIRONMENT,
   GLOBAL_OPTIONS,
   LOCAL_OPTIONS,
+  MCP_CONFIG,
+  MCP_TOOLS,
   MODEL_OPTIONS,
   QUICK_CONFIG,
   REPO_OPTIONS,
@@ -15,13 +17,14 @@ import {
   ROUTE_CONDITIONS,
   ROUTE_OPTIONS,
   ROUTED_CONFIG,
+  TUI_KEYS,
   type ReferenceRow,
 } from '../lib/docs';
 import docsCss from '../docs.css?url';
 
 const TITLE = 'Documentation | review-relay';
 const DESCRIPTION =
-  'Install review-relay, configure your reviewers and routing rules, and understand triggers, scores, and local reports.';
+  'Install review-relay, configure your reviewers and routing rules, connect your agents over MCP, and understand triggers, scores, costs, and local reports.';
 
 export const Route = createFileRoute('/docs')({
   head: () => ({
@@ -114,6 +117,7 @@ function Docs() {
             <div className="docs-shortcuts">
               <a href="#quick-start">Set up the relay</a>
               <a href="#local">Review before a PR</a>
+              <a href="#mcp">Connect an agent</a>
               <a href="#configuration">Config reference</a>
               <a href="#troubleshooting">Something not working?</a>
             </div>
@@ -445,6 +449,57 @@ function Docs() {
             </p>
           </Section>
 
+          <Section id="mcp" title="Agents & MCP">
+            <p>
+              <code>review-relay mcp</code> serves review-relay to agents over the{' '}
+              <a href="https://modelcontextprotocol.io">Model Context Protocol</a> on stdin and stdout, so an agent can
+              score the branch it is working on before it opens a PR, or review a PR, and act on the findings. Register
+              it with your agent&rsquo;s client as a stdio server that runs <code>review-relay mcp</code>.
+            </p>
+            <Snippet
+              label="Register the server"
+              code={
+                'claude mcp add review-relay -- review-relay mcp    # Claude Code\ncodex mcp add review-relay -- review-relay mcp     # Codex'
+              }
+            />
+            <p>
+              Other clients take the same command in their MCP config. Add <code>--config &lt;path&gt;</code> to the
+              arguments for a config other than the default.
+            </p>
+            <Snippet label="MCP config · other clients" code={JSON.stringify(MCP_CONFIG, null, 2)} />
+            <h3>Tools</h3>
+            <Reference rows={MCP_TOOLS} label="MCP tools" headings={['Tool', 'Arguments', 'What it does']} />
+            <ul>
+              <li>
+                <strong>Reviews run in the background.</strong> A review takes minutes, longer than many clients wait
+                for one tool call, so the start tools return the job&rsquo;s <code>key</code> at once and a separate
+                process runs the review, as <code>review -d</code> does. Until that process records the job, its status
+                is <code>starting</code>.
+              </li>
+              <li>
+                <strong>Wait when you want to.</strong> <code>waitSeconds</code>, up to 600 on the start tools and{' '}
+                <code>get_review</code>, holds the call until the review finishes, sending progress notifications to
+                clients that ask for them. A process that exits before recording the job fails the call with the lines
+                it logged.
+              </li>
+              <li>
+                <strong>Same jobs as everywhere else.</strong> They land in <code>state.json</code>, so{' '}
+                <code>status</code>, <code>cost</code>, and <code>tui</code> show them, and their output goes to{' '}
+                <code>daemon.log</code>. Starting a review of a commit already under review returns that job instead of
+                starting another.
+              </li>
+              <li>
+                <strong>Config read on every call.</strong> Edits apply without restarting the client. A missing or
+                broken config comes back as a tool error.
+              </li>
+            </ul>
+            <Note title="Agents review their own work">
+              The server tells the agent to commit, call <code>review_branch</code>, then poll <code>get_review</code>{' '}
+              with the key until the status is <code>done</code>, and address the findings. Uncommitted changes are left
+              out of the review.
+            </Note>
+          </Section>
+
           <Section id="commands" title="CLI commands">
             <p>
               Run <code>review-relay help &lt;command&gt;</code> or <code>review-relay &lt;command&gt; --help</code> for
@@ -455,23 +510,42 @@ function Docs() {
             <h3>Watch jobs live</h3>
             <Snippet label="Full-screen job view" code="review-relay tui" />
             <p>
-              <code>tui</code> takes over the terminal: the job table on top, the highlighted job’s detail below it, and
-              the daemon’s state in the status line, refreshing as the daemon writes <code>state.json</code>. Enter
-              expands a job: the published score, each reviewer’s score, model, and time, the merged findings with their
-              file and line, and the review comment from <code>comment.md</code>, which is only posted to the PR when{' '}
-              <code>postToPr</code> is on and a reviewer succeeded. A job with no comment yet shows its log lines
-              instead.
+              <code>tui</code> takes over the terminal: the job table in a panel taking about four fifths of the screen,
+              the highlighted job’s detail in a panel below it, and the daemon’s state and the total spent in the status
+              line, refreshing as the daemon writes <code>state.json</code>. Enter expands a job: the published score,
+              each reviewer’s score, model, cost, and time, the merged findings with their file and line, and the review
+              comment from <code>comment.md</code>, which is only posted to the PR when <code>postToPr</code> is on and
+              a reviewer succeeded. A job with no comment yet shows its log lines instead.
             </p>
             <p>
-              <code>/</code> filters by repo, PR, commit, status, source, route, or error text and <code>s</code> cycles
-              the status filter. <code>r</code> reviews the PR again in the background after confirming, <code>o</code>{' '}
-              opens it in the browser, <code>y</code> copies its URL, <code>l</code> follows the job’s log and{' '}
-              <code>L</code> the whole log. <code>?</code> lists every key. It reads <code>state.json</code>, the report
-              directories, and <code>daemon.log</code> directly, so it works whether or not the daemon is running.
-              <code>r</code> on a <a href="#local">local review</a> reviews its branch again. A queued or running job
-              whose process has exited shows as failed in both <code>tui</code> and <code>status</code>, so it can
+              The table has a <code>COST</code> column and a <code>PR STATE</code> column that shows GitHub’s{' '}
+              <code>open</code>, <code>closed</code>, or <code>merged</code> state apart from the review result. The TUI
+              checks nearby rows through your signed-in <code>gh</code> in the background, at most once a minute;
+              unchecked PRs show <code>unknown</code> and local reviews <code>-</code>.
+            </p>
+            <Reference rows={TUI_KEYS} label="TUI keys" headings={['Key', 'Where', 'What it does']} />
+            <p>
+              <code>?</code> lists every key. The TUI reads <code>state.json</code>, the report directories, and{' '}
+              <code>daemon.log</code> directly, so it works whether or not the daemon is running. A queued or running
+              job whose process has exited shows as failed in both <code>tui</code> and <code>status</code>, so it can
               retry.
             </p>
+            <details>
+              <summary>Themes, small terminals, and wide rows</summary>
+              <p>
+                <code>t</code> cycles Dark, Light, and Terminal. Terminal uses your terminal’s own foreground,
+                background, and ANSI palette and follows its theme changes; Dark and Light use truecolor where the
+                terminal supports it. The choice is saved as <code>theme</code> in the active config without restarting
+                the daemon, and <code>NO_COLOR</code> still disables color in every mode.
+              </p>
+              <p>
+                On a narrow terminal the table, a job’s detail, and the log pan sideways with <code>←</code> and{' '}
+                <code>→</code>, and the panel’s top edge counts the columns hidden on each side. A long message wraps
+                onto up to three rows instead of being cut. The status line and footer drop their least important parts
+                first, and the detail panel is dropped when the terminal is too short for both. The layout needs at
+                least 40 columns by 10 rows.
+              </p>
+            </details>
             <h3>Preview or force a route</h3>
             <Snippet
               label="Explain routing without running agents"
@@ -545,6 +619,40 @@ function Docs() {
               all reviewers fail, local reports are saved but no comment is posted, and the job fails. A publishing
               failure also leaves the local report available.
             </p>
+            <h3>What a review cost</h3>
+            <Snippet
+              label="Costs per review and per reviewer"
+              code={
+                'review-relay cost\nreview-relay cost --repo acme/widget --pr 42\nreview-relay cost --json | jq .costUsd'
+              }
+            />
+            <p>
+              <code>cost</code> lists the finished reviews newest first with each reviewer’s cost and tokens and the
+              review’s total, then the totals across them, overall and per reviewer. <code>--repo</code> and{' '}
+              <code>--pr</code> narrow it, <code>--limit</code> and <code>--page</code> page it like <code>status</code>
+              , and <code>--json</code> prints every matching review. <code>status</code> and <code>tui</code> show the
+              same <code>COST</code> column.
+            </p>
+            <ul>
+              <li>
+                <strong>Claude Code</strong> reports its own cost, at list price even on a subscription, and it is used
+                as is.
+              </li>
+              <li>
+                <strong>Codex</strong> reports only tokens, so its cost is those tokens at the model’s list price,
+                marked <code>~</code>. Built-in prices cover <code>gpt-6-astra</code>, <code>gpt-6-sol</code>,{' '}
+                <code>gpt-6.1-sol</code>, and <code>gpt-6-luna</code>; <code>pricing</code> in the config adds a model
+                or changes a price, and a run whose model had no price when it ran is priced when it is read.
+              </li>
+              <li>
+                <strong>Other CLIs</strong> do not report usage yet, so their columns show <code>-</code>. A total that
+                leaves out a run with no cost, such as one that timed out, is marked <code>+</code>.
+              </li>
+              <li>
+                A re-review of the same commit replaces its report, cost included, so <code>cost</code> counts the
+                latest run of each commit.
+              </li>
+            </ul>
           </Section>
 
           <Section id="security" title="Security & privacy">
@@ -632,6 +740,16 @@ function Docs() {
               <p>
                 Forced exits and Windows shutdown can leave temporary webhooks behind. Inspect the repository’s Settings
                 → Webhooks and remove only hooks you can identify as stale relay forwarders.
+              </p>
+            </details>
+            <details>
+              <summary>An agent’s MCP call failed or never finished</summary>
+              <p>
+                A tool error names a missing or broken config; fix the file and call again, since the server reads it on
+                every call. A start tool that fails quotes the lines the review process logged. A job left at{' '}
+                <code>starting</code> or <code>running</code> shows up in <code>tui</code> and <code>logs</code> like
+                any other, so read its log lines there. Long reviews outlast many clients’ tool timeouts: start without
+                waiting, then poll <code>get_review</code> with a shorter <code>waitSeconds</code>.
               </p>
             </details>
             <details>

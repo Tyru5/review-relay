@@ -4,16 +4,21 @@ import {
   COMMANDS,
   GLOBAL_OPTIONS,
   LOCAL_OPTIONS,
+  MCP_CONFIG,
+  MCP_TOOLS,
   QUICK_CONFIG,
   REPO_OPTIONS,
   REVIEWERS,
   ROUTED_CONFIG,
+  TUI_KEYS,
 } from '../site/src/lib/docs.ts';
 import { parseConfig } from '../src/config.ts';
 import { parseNumstat } from '../src/diffstats.ts';
 import { HELP_GROUPS } from '../src/help.ts';
+import { MAX_WAIT_SECONDS, TOOLS } from '../src/mcp.ts';
 import { HARNESS_NAMES, HARNESSES } from '../src/reviewers/index.ts';
 import { pickRoute } from '../src/routes.ts';
+import { HELP_LINES } from '../src/tui.ts';
 import type { ResolvedJob } from '../src/types.ts';
 
 describe('published documentation', () => {
@@ -53,6 +58,25 @@ describe('published documentation', () => {
   test('lists the review command flags its help page lists', () => {
     const review = HELP_GROUPS.flatMap((group) => group.commands).find((command) => command.name === 'review');
     expect(LOCAL_OPTIONS.map(([flag]) => flag)).toEqual(review!.options!.map(({ flag }) => flag));
+  });
+
+  test('lists every MCP tool, its arguments, and the longest wait', () => {
+    expect(MCP_TOOLS.map(([name]) => name)).toEqual(TOOLS.map((tool) => tool.name));
+    for (const [name, args] of MCP_TOOLS) {
+      const schema = TOOLS.find((tool) => tool.name === name)!.inputSchema as { properties: Record<string, unknown> };
+      const documented = args
+        .split(/[,|+]/)
+        .map((arg) => arg.trim())
+        .filter((arg) => arg && arg !== 'none');
+      expect(documented.toSorted()).toEqual(Object.keys(schema.properties).toSorted());
+    }
+    expect(MAX_WAIT_SECONDS).toBe(600);
+    expect(MCP_CONFIG.mcpServers['review-relay']).toEqual({ command: 'review-relay', args: ['mcp'] });
+  });
+
+  test('lists TUI keys the TUI itself lists', () => {
+    const keys = HELP_LINES.map(([key]) => key);
+    for (const [key] of TUI_KEYS) expect(keys).toContain(key);
   });
 
   test('both copyable configs load without warnings and keep publishing off', () => {

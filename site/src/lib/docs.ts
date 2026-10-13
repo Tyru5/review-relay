@@ -6,6 +6,7 @@ export const DOC_SECTIONS = [
   ['routing', 'Routing rules'],
   ['triggers', 'Triggers & review flow'],
   ['local', 'Review before a PR'],
+  ['mcp', 'Agents & MCP'],
   ['commands', 'CLI commands'],
   ['reports', 'Scores & reports'],
   ['security', 'Security & privacy'],
@@ -212,6 +213,59 @@ export const LOCAL_OPTIONS: ReferenceRow[] = [
   ['--min-score <n>', 'None', 'Exit 1 when the confidence is under n, from 1 to 5. Foreground only.'],
   ['--json', 'Off', 'Print the score, each reviewer’s result, and the merged findings as JSON. Foreground only.'],
 ];
+
+/** Tools `review-relay mcp` serves. test/docs.test.ts checks the names against the server. */
+export const MCP_TOOLS: ReferenceRow[] = [
+  [
+    'review_branch',
+    'path, base, head, route | reviewers, waitSeconds',
+    'Start a local review of a checkout’s branch, like review -d. path defaults to the directory the client started the server in. Posts nothing.',
+  ],
+  [
+    'review_pr',
+    'repo, pr, route, waitSeconds',
+    'Start a review of an open PR in a configured repo, like run. Posts the comment when the repo has postToPr on.',
+  ],
+  [
+    'get_review',
+    'key | repo + pr | none, waitSeconds',
+    'A job’s status and, once it finishes, its score, each reviewer’s score, summary, and dimension notes, and the merged findings with file, line, detail, and suggestion. With no key, the PR’s latest review, or the newest job.',
+  ],
+  [
+    'list_reviews',
+    'repo, pr, status, limit',
+    'Recent jobs, newest first, with status, score, finding counts, and cost. status is queued, running, done, failed, skipped, or superseded.',
+  ],
+];
+
+/** The keys `review-relay tui` takes. test/docs.test.ts checks them against the TUI’s own key help. */
+export const TUI_KEYS: ReferenceRow[] = [
+  ['enter', 'Job list', 'Open the job: scores, findings, and the posted comment, or its log lines while it runs.'],
+  [
+    '[ ]',
+    'Job',
+    'Select the previous or next Details or Dimension notes section; enter or space expands or collapses it.',
+  ],
+  [
+    '← →',
+    'Any',
+    'Pan a table or line wider than the screen. At the edges, → opens or moves on and ← leaves a job or the log.',
+  ],
+  ['l', 'Any', 'Follow the job’s lines from the daemon log as they arrive.'],
+  ['L', 'Any', 'The whole daemon log.'],
+  ['/', 'Job list', 'Filter by repo, PR, commit, status, source, route, or error text.'],
+  ['s', 'Job list', 'Cycle the status filter: queued, running, done, failed, skipped, superseded, all.'],
+  ['r', 'Any', 'Review the PR, or a local review’s branch, again in the background. Asks first.'],
+  ['o', 'Any', 'Open the PR in the browser.'],
+  ['y', 'Any', 'Copy the PR’s URL.'],
+  ['t', 'Any', 'Cycle the theme: dark, light, terminal. Saved to the config without restarting the daemon.'],
+  ['q', 'Any', 'Quit. esc goes back, clears the filters, then quits.'],
+];
+
+/** What a client other than Claude Code or Codex puts in its MCP config. */
+export const MCP_CONFIG = {
+  mcpServers: { 'review-relay': { command: 'review-relay', args: ['mcp'] } },
+};
 
 export const ENVIRONMENT: ReferenceRow[] = [
   [
