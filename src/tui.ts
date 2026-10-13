@@ -349,6 +349,10 @@ const flash = (state: TuiState, text: string, ctx: TuiContext, tone: Tone = 'inf
 const CHROME = 5;
 /** The most rows a long message takes before it is cut short. */
 const MESSAGE_ROWS = 3;
+/** The share of the body the job table takes on the list view when the detail pane fits under it. */
+const LIST_SHARE = 0.8;
+/** The fewest rows the detail pane under the table takes, borders included; with less it is dropped. */
+const DETAIL_MIN = 8;
 /** Lines a full-body panel shows, after the message takes its rows. */
 const room = (state: TuiState, ctx: TuiContext) =>
   Math.max(1, ctx.height - CHROME - messageLines(state, ctx, styles(false)).length);
@@ -1176,11 +1180,10 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
       pan: hscroll,
     });
   } else {
-    // Jobs on top; the highlighted job's detail below when there is room for both.
-    const detailMin = 8;
-    const wanted = Math.max(5, list.length + 3);
-    const split = job && body - detailMin >= 5;
-    const jobsH = split ? Math.min(body - detailMin, wanted) : body;
+    // Jobs on top, taking LIST_SHARE of the body; the highlighted job's detail takes the rest when that leaves it at
+    // least DETAIL_MIN rows, otherwise the table has the whole body.
+    const split = job && body - DETAIL_MIN >= 5;
+    const jobsH = split ? Math.min(body - DETAIL_MIN, Math.max(5, Math.round(body * LIST_SHARE))) : body;
     let lines: string[];
     let hidden: string | undefined;
     if (list.length === 0) {

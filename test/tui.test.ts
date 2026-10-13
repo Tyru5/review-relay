@@ -320,10 +320,14 @@ describe('frame', () => {
       /^│ {3}done\s+.*acme\/app\s+#7\s+bbbbbbbb\s+github\s+-\s+3\/5\s+4\/5 1m05s\s+3\/5 1m30s\s+0\s+1\s+1/,
     );
     expect(frame[6]).toMatch(/^│ {3}failed\s+.*acme\/lib\s+#12.*risky.*codex: timed out/);
-    expect(frame[8]).toMatch(/^╰─+╯$/);
-    // The highlighted job's detail sits under the table.
-    expect(frame[9]).toMatch(/^╭─ Job · acme\/app #7 ─+ \[enter] expand ─╮$/);
-    expect(frame[10]).toContain('│ acme/app #7  aaaaaaaa  ! running');
+    // The table takes about four fifths of the body (26 rows here: 18 for the table, the detail's minimum of 8), so
+    // its empty rows stay inside the panel and the highlighted job's detail sits under it.
+    expect(frame[7]).toMatch(/^│ {3}skipped\s+.*│$/);
+    expect(frame[8]).toMatch(/^│\s+│$/);
+    expect(frame[19]).toMatch(/^╰─+╯$/);
+    expect(frame[20]).toMatch(/^╭─ Job · acme\/app #7 ─+ \[enter] expand ─╮$/);
+    expect(frame[21]).toContain('│ acme/app #7  aaaaaaaa  ! running');
+    expect(frame[27]).toMatch(/^╰─+╯$/);
     expect(frame[28]).toBe(' '.repeat(160));
     expect(frame[29]).toBe(
       ' [↑↓] move   [enter] open   [l] log   [r] re-run   [o] open PR   [y] copy url   [/] filter   [s] status   [?] help   [q] quit'.padEnd(
