@@ -45,11 +45,15 @@ export const parseKeys = (input: string): string[] =>
 
 type Paint = (code: string, text: string) => string;
 
-/** The rows that fit in `room` lines, kept around the cursor, with markers for what scrolled out of view. */
+/**
+ * The rows that fit in `room` lines, kept around the cursor, with markers for what scrolled out of view. Under three
+ * lines the markers would crowd out the rows themselves, so the cursor's row takes the room instead.
+ */
 export function windowed(rows: string[], cursor: number, room: number, paint: Paint): string[] {
   if (rows.length <= room) return rows;
-  const size = Math.max(1, room - 2);
+  const size = Math.max(1, room < 3 ? room : room - 2);
   const start = Math.min(Math.max(0, cursor - Math.floor(size / 2)), rows.length - size);
+  if (room < 3) return rows.slice(start, start + size);
   const below = rows.length - start - size;
   return [
     paint('2', start > 0 ? `  ↑ ${start} more` : ''),
@@ -90,8 +94,11 @@ export function moved(cursor: number, key: string, n: number, page = 10): number
 // oxlint-disable-next-line no-control-regex
 const SGR_AT = /^\x1b\[[\d;]*m/;
 
-/** The first `width` visible characters of `line`, keeping its ANSI styling and closing it at the cut. */
-export function clip(line: string, width: number): string {
+/**
+ * `width` visible characters of `line` starting at column `from`, keeping its ANSI styling and closing it at the cut.
+ * Styles opened before `from` still apply, so a panned row keeps its colors.
+ */
+export function clip(line: string, width: number, from = 0): string {
   if (width <= 0) return '';
   let out = '';
   let seen = 0;
@@ -104,15 +111,18 @@ export function clip(line: string, width: number): string {
       i += sgr[0].length;
       continue;
     }
-    if (seen === width) return out + (styled ? '\x1b[0m' : '');
+    if (seen === from + width) return out + (styled ? '\x1b[0m' : '');
     const ch = line.codePointAt(i)!;
     const text = String.fromCodePoint(ch);
-    out += text;
+    if (seen >= from) out += text;
     seen++;
     i += text.length;
   }
   return out;
 }
+
+/** `line` without its first `cols` visible characters: the row as it shows when panned sideways. */
+export const pan = (line: string, cols: number): string => (cols > 0 ? clip(line, Infinity, cols) : line);
 
 export interface Screen {
   /** The frame to draw for a terminal of `height` rows and `width` columns. */
@@ -219,12 +229,12 @@ export const rgb = (hex: number, layer: 'fg' | 'bg' = 'fg'): string =>
   `${layer === 'fg' ? 38 : 48};2;${(hex >> 16) & 255};${(hex >> 8) & 255};${hex & 255}`;
 
 /**
- * `line` clipped and padded to exactly `width` visible columns. With `base` (SGR parameters for the row's background
- * and text color), the row is painted edge to edge, and the base is restored after every reset inside the line, so a
- * colored cell can't punch a hole in the background.
+ * `line` clipped and padded to exactly `width` visible columns, from column `from` when panned sideways. With `base`
+ * (SGR parameters for the row's background and text color), the row is painted edge to edge, and the base is restored
+ * after every reset inside the line, so a colored cell can't punch a hole in the background.
  */
-export function fill(line: string, width: number, base?: string): string {
-  const cut = clip(line, width);
+export function fill(line: string, width: number, base?: string, from = 0): string {
+  const cut = clip(line, width, from);
   const padded = cut + ' '.repeat(Math.max(0, width - visibleLength(cut)));
   if (!base) return padded;
   const on = `\x1b[${base}m`;

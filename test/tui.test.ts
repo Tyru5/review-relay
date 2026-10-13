@@ -6,7 +6,7 @@ import { parseConfig, THEMES } from '../src/config.ts';
 import type { DaemonState } from '../src/daemon.ts';
 import { reportDirFor } from '../src/report.ts';
 import type { JobRecord } from '../src/state.ts';
-import { clip, colorDepth, fill, frame, moved, parseKeys, rgb } from '../src/term.ts';
+import { clip, colorDepth, fill, frame, moved, pan, parseKeys, rgb } from '../src/term.ts';
 import {
   initialState,
   JobStore,
@@ -388,14 +388,15 @@ describe('frame', () => {
   });
 
   test('asks for a bigger terminal under the minimum size', () => {
-    const ctx = ctxFor(undefined, { height: 10, width: 80 });
+    const ctx = ctxFor(undefined, { height: 8, width: 80 });
     const frame = lines(initialState(), ctx);
-    expect(frame).toHaveLength(10);
+    expect(frame).toHaveLength(8);
     expect(frame.join('\n')).toContain('REVIEW-RELAY');
     expect(frame.join('\n')).toContain(`Resize to at least ${MIN_SIZE.width} × ${MIN_SIZE.height}.`);
     expect(frame.join('\n')).toContain('Press q to exit.');
     expect(frame.join('\n')).not.toContain('acme/app');
-    expect(lines(initialState(), ctxFor(undefined, { height: 30, width: 50 })).join('\n')).toContain('Resize');
+    expect(lines(initialState(), ctxFor(undefined, { height: 30, width: 39 })).join('\n')).toContain('Resize');
+    expect(lines(initialState(), ctxFor(undefined, { height: 10, width: 40 })).join('\n')).toContain('STATUS');
     expect(press(ctx, ['q']).done).toBe(true);
   });
 
@@ -550,15 +551,35 @@ describe('list view', () => {
     expect(press(ctx, ['ctrl-c'], typing).done).toBe(true);
   });
 
-  test('? opens the key help and any key closes it', () => {
+  test('? opens the key help; scroll keys scroll it and any other key closes it', () => {
     const ctx = ctxFor();
     const help = press(ctx, ['?']);
     expect(help.view).toBe('help');
     const text = render(help, ctx);
-    expect(text).toMatch(/╭─ Keys ─+ \[any key] close ─╮/);
+    expect(text).toMatch(/╭─ Keys ─+ \[any other key] close ─╮/);
     expect(text).toContain('review the PR or local branch again (asks first)');
-    expect(text).toContain(' [any key] closes help');
+    expect(text).toContain(' [↑↓] scroll   [any other key] closes help');
+    expect(press(ctx, ['down'], help).view).toBe('help');
     expect(press(ctx, ['x'], help).view).toBe('list');
+    expect(press(ctx, ['left'], help).view).toBe('list');
+
+    // On a short, narrow terminal the descriptions wrap and the panel scrolls instead of cutting the rest off.
+    const small = { ...ctx, height: 14, width: 60 };
+    const top = render(help, small);
+    expect(top).toMatch(/╭─ Keys ─+ 1-8 of \d+ {2}\[any other key] close ─╮/);
+    expect(top).toContain('│ enter        open the job: scores, findings, and the     │');
+    expect(top).toContain('│              posted comment');
+    expect(top).not.toContain('quit');
+    const end = press(small, ['G'], help);
+    expect(end.view).toBe('help');
+    expect(render(end, small)).toContain('│ q            quit');
+    expect(render(press(small, ['j', 'k'], help), small)).toBe(top);
+    // Help starts at its top whatever the view before it had scrolled to.
+    const scrolledFirst = press(small, ['down', 'enter', 'G', 'escape', '?']);
+    expect(scrolledFirst.scroll).toBe(0);
+    expect(render(scrolledFirst, small)).toContain('1-8 of');
+    expect(render(press(small, ['down', 'enter', 'G', '?']), small)).toContain('1-8 of');
+    expect(render(press(small, ['L', 'up', '?']), small)).toContain('1-8 of');
   });
 });
 
@@ -888,6 +909,29 @@ describe('term helpers', () => {
     expect(clip('abc', 0)).toBe('');
   });
 
+  test('visible length counts columns, so a row with emoji is padded to the full width', () => {
+    expect(visibleLength('🚀🚀')).toBe(2);
+    expect(visibleLength('\x1b[32m🚀\x1b[0mab')).toBe(3);
+    expect(fill('🚀', 3)).toBe('🚀  ');
+    const rocket = job('ffffffff5', { source: 'local', pr: 0, branch: 'feat/🚀-launch', base: 'main' });
+    const ctx = ctxFor(dataDir([rocket, DONE]), { width: 70 });
+    for (const view of ['list', 'detail', 'log'] as const) {
+      const frame = renderTui({ ...initialState(), view }, ctx, themeStyles(false), 'x');
+      for (const line of frame) expect(visibleLength(line)).toBe(70);
+    }
+    expect(render(initialState(), ctx)).toContain('feat/🚀-launch');
+  });
+
+  test('clip from a column and pan keep the styling opened before the cut', () => {
+    expect(clip('abcdef', 3, 2)).toBe('cde');
+    expect(clip('\x1b[32mabc\x1b[0mdef', 2, 2)).toBe('\x1b[32mc\x1b[0md');
+    expect(clip('abc', 5, 5)).toBe('');
+    expect(pan('abcdef', 4)).toBe('ef');
+    expect(pan('\x1b[1mab\x1b[0mcd', 3)).toBe('\x1b[1m\x1b[0md');
+    expect(pan('abc', 0)).toBe('abc');
+    expect(fill('abcdef', 3, undefined, 4)).toBe('ef ');
+  });
+
   test('fill pads to the width and, with a base, paints it and restores it after every reset', () => {
     expect(fill('ab', 4)).toBe('ab  ');
     expect(fill('abcdef', 4)).toBe('abcd');
@@ -984,5 +1028,217 @@ describe('local reviews', () => {
       ['failed', 'stopped before finishing'],
       ['running', undefined],
     ]);
+  });
+});
+
+describe('small terminals', () => {
+  test('the header, status line, and footer give way gracefully instead of being cut mid-word', () => {
+    const wide = ctxFor();
+    const narrow = { ...wide, width: 80 };
+    const rows = lines(initialState(), narrow);
+    for (const line of rows) expect(visibleLength(line)).toBe(80);
+    expect(rows[0]).toContain('/tmp/');
+    const header = lines(initialState(), { ...wide, width: 60 })[0];
+    expect(header).toMatch(/^ ◆ REVIEW-RELAY {3}1 Jobs {3}2 Log {3}\[t] dark\s+$/);
+    expect(header).not.toContain('/tmp/');
+    // The daemon's details go first; the counts stay while they fit.
+    expect(rows[1]).toBe(' ✓ daemon running  │  4 jobs · 1 running · 1 done · 1 failed · 1 skipped'.padEnd(80));
+    expect(rows.at(-1)).toBe(
+      ' [↑↓] move   [←→] sideways   [enter] open   [l] log   [r] re-run   …   [?] help'.padEnd(80),
+    );
+    expect(render(initialState(), { ...wide, width: 50 })).toContain(' ✓ daemon running  │  4 jobs ');
+
+    const tiny = lines(initialState(), { ...wide, width: 40, height: 10 });
+    expect(tiny).toHaveLength(10);
+    for (const line of tiny) expect(visibleLength(line)).toBe(40);
+    expect(tiny[0]).toBe(' ◆ REVIEW-RELAY   1 Jobs   2 Log'.padEnd(40));
+    expect(tiny[1]).toBe(' ✓ daemon running  │  4 jobs'.padEnd(40));
+    expect(tiny[2]).toMatch(/^╭─ Jobs ─+ 1 of 4 · \d+ more → ─╮$/);
+    expect(tiny.at(-1)).toBe(' [↑↓] move   …   [?] help'.padEnd(40));
+    // A long title gives way to the panel's corners.
+    const stopped = { ...wide, width: 40, daemon: { ...DAEMON, running: false, pid: null } };
+    expect(render(press(stopped, ['L']), stopped)).toMatch(/^╭─ Log · \/tmp\/relay-tui-.*… ─+╮$/m);
+    expect(render(initialState(), stopped)).toContain(' ✗ daemon stopped  │  4 jobs');
+
+    // The filter being typed is never the part that goes.
+    const typing = render(press({ ...wide, width: 44 }, ['/', 'l', 'i', 'b']), { ...wide, width: 44 });
+    expect(typing).toContain(' ✓ daemon running  showing 1  / lib▏');
+    expect(typing).toContain(' [type] to filter   …   [esc] clear it');
+  });
+
+  test('every view fills a tiny terminal exactly, in every theme', () => {
+    const ctx = ctxFor(undefined, { height: 10, width: 40 });
+    for (const theme of THEMES) {
+      for (const color of [true, false]) {
+        for (const view of ['list', 'detail', 'log', 'help'] as const) {
+          const rendered = renderTui(
+            { ...initialState(theme), view },
+            ctx,
+            themeStyles(color, 'truecolor', theme),
+            'x',
+          );
+          expect(rendered).toHaveLength(10);
+          expect(rendered.every((line) => visibleLength(line) === 40)).toBe(true);
+        }
+      }
+    }
+    // Empty and filtered-out lists wrap their hint instead of losing its end.
+    const empty = render(initialState(), ctxFor(tempDir('relay-none-'), { height: 12, width: 48 }));
+    expect(empty).toContain('│ Jobs appear here as the daemon reviews PRs,  │');
+    expect(empty).toContain('review -d');
+  });
+
+  test('← → pan a table that is wider than the panel and keep their other meanings at the edges', () => {
+    const ctx = ctxFor(undefined, { width: 80 });
+    const start = render(initialState(), ctx);
+    expect(start).toMatch(/╭─ Jobs ─+ 1 of 4 · \d+ more →  \[\/] filter {3}\[s] status ─╮/);
+    expect(start).not.toContain('SCORE');
+    // Nothing to the left yet, so ← does nothing; → pans by half the row width.
+    expect(press(ctx, ['left'])).toEqual(reduce(initialState(), 'x', ctx));
+    const once = press(ctx, ['right']);
+    expect(once.view).toBe('list');
+    expect(once.hscroll).toBe(37);
+    const panned = render(once, ctx);
+    expect(panned).toMatch(/╭─ Jobs ─+ 1 of 4 · ← 37 more · \d+ more →/);
+    expect(panned).toContain('SCORE');
+    expect(panned).not.toContain('STATUS');
+    expect(panned).toMatch(/^│ ▌ /m);
+    // Past the last column → opens the job, as it does on a wide terminal; the detail starts unpanned.
+    let state = once;
+    while (render(state, ctx).includes('more →')) state = press(ctx, ['right'], state);
+    expect(render(state, ctx)).toContain('codex: timed out');
+    const opened = press(ctx, ['right'], state);
+    expect(opened.view).toBe('detail');
+    expect(opened.hscroll).toBe(0);
+    expect(press(ctx, ['left'], once).hscroll).toBe(0);
+    // Panning does not move the cursor, and the filter input keeps panning too.
+    expect(press(ctx, ['down', 'right']).selected).toBe(DONE.key);
+    expect(press(ctx, ['/', 'right']).hscroll).toBe(37);
+    expect(render(press(ctx, ['/', 'right']), ctx)).toContain('[←→] sideways');
+    // A wide terminal shows everything, so the hint and note are absent and → opens.
+    const wide = ctxFor();
+    expect(render(initialState(), wide)).not.toContain('sideways');
+    expect(render(initialState(), wide)).not.toContain('more →');
+    expect(press(wide, ['right']).view).toBe('detail');
+  });
+
+  test('the detail and log views pan too; ← at the left edge goes back and → at the right edge moves on', () => {
+    const ctx = ctxFor(undefined, { width: 48, height: 24 });
+    const detail = press(ctx, ['down', 'enter']);
+    const text = render(detail, ctx);
+    expect(text).toMatch(/╭─ Job · acme\/app #7 ─+ (?:\d+-\d+ of \d+ · )?\d+ more →/);
+    // The sideways hint is one of those that gives way here; the rest stay reachable through the ellipsis.
+    expect(text).toContain(' [[/]] details   [enter] toggle   …   [esc] back');
+    // Findings wrap to the panel rather than running past it.
+    expect(text).toContain('│            why it matters');
+    const panned = press(ctx, ['right'], detail);
+    expect(panned.view).toBe('detail');
+    expect(panned.hscroll).toBeGreaterThan(0);
+    expect(render(panned, ctx)).toContain('← ');
+    expect(press(ctx, ['left'], panned)).toEqual({ ...panned, hscroll: 0 });
+    expect(press(ctx, ['left'], detail).view).toBe('list');
+    let end = panned;
+    while (render(end, ctx).includes('more →')) end = press(ctx, ['right'], end);
+    expect(press(ctx, ['right'], end).selected).toBe(FAILED.key);
+    expect(press(ctx, ['n'], end).hscroll).toBe(end.hscroll);
+
+    expect(render(press(ctx, ['L']), ctx)).toContain(' [↑↓] scroll   [←→] sideways   …   [esc] back');
+    const log = press(ctx, ['l']);
+    expect(render(log, ctx)).toMatch(/╭─ Log · acme\/app #7 ─+ following · \d+ more → ─╮/);
+    expect(press(ctx, ['right'], log).hscroll).toBeGreaterThan(0);
+    expect(render(press(ctx, ['right'], log), ctx)).toContain('aaaaaaaa: reviewing (opened)');
+    expect(render(press(ctx, ['right'], log), ctx)).not.toContain('11:00:00');
+    expect(press(ctx, ['left'], log).view).toBe('list');
+    expect(press(ctx, ['escape'], press(ctx, ['right'], log)).hscroll).toBe(0);
+  });
+
+  test('a resize clamps the pan so a wider terminal never shows a blank panel', () => {
+    const narrow = ctxFor(undefined, { width: 60 });
+    const state = press(narrow, ['right', 'right', 'right']);
+    expect(state.hscroll).toBeGreaterThan(60);
+    const wide = { ...narrow, width: 200 };
+    const text = render(state, wide);
+    expect(text).toContain('STATUS');
+    expect(text).not.toContain('more →');
+    expect(text).not.toContain('← ');
+    // On the wide terminal the arrows have nothing to pan, so they mean what they always did there.
+    expect(press(wide, ['left'], state).view).toBe('list');
+    expect(press(wide, ['right'], state).view).toBe('detail');
+    // Back on the narrow terminal the pan is clamped to what there is to see, never past the last column.
+    expect(render({ ...state, hscroll: 10_000 }, narrow)).toContain('codex: timed out');
+    expect(render({ ...state, hscroll: 10_000 }, narrow)).not.toContain('more →');
+  });
+
+  test('a long message takes rows from the body instead of being cut, and the question has a short form', () => {
+    const ctx = ctxFor(undefined, { width: 50, height: 16 });
+    const asked = press(ctx, ['down', 'r']);
+    const askedText = render(asked, ctx);
+    expect(askedText).toContain(' ! review acme/app #7 again?');
+    expect(askedText).not.toContain('configured reviewers');
+    expect(render(asked, { ...ctx, width: 100 })).toContain(
+      ' ! review acme/app #7 again with the configured reviewers?',
+    );
+
+    const error = 'theme applied, but not saved: EACCES: permission denied, open /home/me/.review-relay/config.json';
+    const flashed = { ...initialState(), flash: { text: error, tone: 'danger' as const, until: NOW + 1 } };
+    const frame = lines(flashed, ctx);
+    expect(frame).toHaveLength(16);
+    for (const line of frame) expect(visibleLength(line)).toBe(50);
+    expect(frame.slice(-4, -1)).toEqual([
+      ' ✗ theme applied, but not saved: EACCES:'.padEnd(50),
+      '   permission denied, open'.padEnd(50),
+      '   /home/me/.review-relay/config.json'.padEnd(50),
+    ]);
+    expect(frame.at(-1)).toContain('[?] help');
+    expect(frame.join('\n')).toContain('╰');
+    // Past three rows it ends in an ellipsis; a message that fits takes one row, none takes a blank one.
+    const long = { ...flashed, flash: { ...flashed.flash, text: Array.from({ length: 40 }, () => 'word').join(' ') } };
+    const cut = lines(long, ctx);
+    expect(cut).toHaveLength(16);
+    expect(cut.at(-2)).toMatch(/^ {3}word (word )*word…\s*$/);
+    expect(cut.at(-5)).toMatch(/^╰─+╯$/);
+    expect(lines({ ...flashed, flash: { ...flashed.flash, text: 'copied' } }, ctx).at(-3)).toMatch(/^╰─+╯$/);
+    expect(lines(initialState(), ctx).at(-2)).toBe(' '.repeat(50));
+
+    // A path wider than the row breaks at the edge rather than losing its end; the third row still ends in an ellipsis.
+    const path = '/home/me/code/some/deeply/nested/checkout/path/that/goes/on no longer exists';
+    const broken = lines({ ...flashed, flash: { ...flashed.flash, text: path } }, { ...ctx, width: 40 });
+    expect(broken.slice(-4, -1)).toEqual([
+      ' ✗ /home/me/code/some/deeply/nested/chec'.padEnd(40),
+      '   kout/path/that/goes/on'.padEnd(40),
+      '   no longer exists'.padEnd(40),
+    ]);
+    const endless = lines({ ...flashed, flash: { ...flashed.flash, text: 'x'.repeat(200) } }, { ...ctx, width: 40 });
+    expect(endless.slice(-4, -1)).toEqual([` ✗ ${'x'.repeat(37)}`, `   ${'x'.repeat(37)}`, `   ${'x'.repeat(36)}…`]);
+    expect(endless).toHaveLength(16);
+    // Characters outside the BMP take two code units but one column, and must not conjure a blank row.
+    const emoji = lines(
+      { ...flashed, flash: { ...flashed.flash, text: `${'🚀'.repeat(20)} done` } },
+      { ...ctx, width: 40 },
+    );
+    expect(emoji.slice(-3, -1)).toEqual([` ✗ ${'🚀'.repeat(20)}${' '.repeat(17)}`, '   done'.padEnd(40)]);
+
+    // At the minimum height a three-row message leaves the list two rows: the header and the highlighted job.
+    const tiny = lines(flashed, { ...ctx, width: 40, height: 10 });
+    expect(tiny).toHaveLength(10);
+    expect(tiny[3]).toMatch(/^│ {3}STATUS/);
+    expect(tiny[4]).toMatch(/^│ ▌ running/);
+    expect(tiny[5]).toMatch(/^╰─+╯$/);
+    expect(
+      lines(press({ ...ctx, width: 40, height: 10 }, ['G'], flashed), { ...ctx, width: 40, height: 10 })[4],
+    ).toMatch(/^│ ▌ skipped/);
+
+    // Paging in a job's detail counts the rows the message took, so a page moves by what is actually visible.
+    const two = {
+      ...flashed,
+      flash: { ...flashed.flash, text: 'a local review has no PR; open one from the branch first' },
+    };
+    const detail = press(ctx, ['down', 'enter'], two);
+    expect(render(detail, ctx).split('\n').slice(-3, -1).join('\n')).toContain('branch first');
+    const paged = press(ctx, ['pagedown'], detail);
+    const shown = render(paged, ctx).match(/(\d+)-(\d+) of (\d+)/)!;
+    const avail = 16 - 5 - 2;
+    expect(Number(shown[1])).toBe(avail);
+    expect(Number(shown[2]) - Number(shown[1]) + 1).toBe(avail);
   });
 });

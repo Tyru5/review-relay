@@ -89,8 +89,8 @@ export const section = (st: Styles, title: string): string[] => ['', st.section(
 // oxlint-disable-next-line no-control-regex
 const SGR = /\x1b\[[\d;]*m/g;
 
-/** Visible length, ignoring ANSI sequences. */
-export const visibleLength = (s: string): number => s.replace(SGR, '').length;
+/** Visible length in columns, ignoring ANSI sequences; a character outside the BMP (an emoji) is one column. */
+export const visibleLength = (s: string): number => [...s.replace(SGR, '')].length;
 
 /** Pads by visible width so colored cells still line up. */
 export const padVisible = (s: string, width: number): string => s + ' '.repeat(Math.max(0, width - visibleLength(s)));

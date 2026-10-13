@@ -13,13 +13,13 @@ import { join } from 'node:path';
 import { pricesFor, THEMES, type Config, type ThemeName } from './config.ts';
 import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
 import { prState, type PrState } from './github.ts';
-import { renderMarkdownView, type MarkdownDetails } from './markdown.ts';
+import { renderMarkdownView, wrapSpans, type MarkdownDetails } from './markdown.ts';
 import { sumTotals } from './cost.ts';
 import { reportDirFor } from './report.ts';
 import { localTag } from './local.ts';
 import { activeJob, jobTarget, orphaned, type JobRecord, type JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
-import { colorDepth, fill, moved, rgb, runScreen, windowed } from './term.ts';
+import { clip, colorDepth, fill, moved, pan, rgb, runScreen, windowed } from './term.ts';
 import {
   ANSI,
   fmtDuration,
@@ -280,8 +280,10 @@ export interface TuiState {
   filtering: boolean;
   /** Only jobs with this status are listed. */
   status?: JobStatus;
-  /** Top line shown in the detail and log views. */
+  /** Top line shown in the detail, log, and help views. */
   scroll: number;
+  /** Columns panned sideways in the current view, when its rows are wider than the panel; reset on a view change. */
+  hscroll: number;
   /** Disclosure state belongs to one review run, not another job or a later re-run. */
   details?: MarkdownDetails & { job: string };
   /** The log view shows the whole daemon log instead of the selected job's lines. */
@@ -310,6 +312,7 @@ export const initialState = (theme: ThemeName = 'dark'): TuiState => ({
   theme,
   filtering: false,
   scroll: 0,
+  hscroll: 0,
   wholeLog: false,
   follow: true,
 });
@@ -342,10 +345,56 @@ const flash = (state: TuiState, text: string, ctx: TuiContext, tone: Tone = 'inf
   flash: { text, tone, until: ctx.now + FLASH_MS },
 });
 
-/** Rows outside the body's panel: header, status, message, footer, and the panel's two borders. */
-const CHROME = 6;
-/** Lines a full-body panel shows. */
-const room = (ctx: TuiContext) => Math.max(1, ctx.height - CHROME);
+/** Rows outside the body's panel: header, status, footer, and the panel's two borders; the message rows come on top. */
+const CHROME = 5;
+/** The most rows a long message takes before it is cut short. */
+const MESSAGE_ROWS = 3;
+/** Lines a full-body panel shows, after the message takes its rows. */
+const room = (state: TuiState, ctx: TuiContext) =>
+  Math.max(1, ctx.height - CHROME - messageLines(state, ctx, styles(false)).length);
+/** Columns a panel's rows have: the width less the border and padding on each side. */
+const innerWidth = (ctx: TuiContext) => Math.max(1, ctx.width - 4);
+/** Columns a job row has: the panel's, less the cursor marker. */
+const rowWidth = (ctx: TuiContext) => Math.max(1, innerWidth(ctx) - 2);
+
+const widthOf = (lines: string[]) => Math.max(0, ...lines.map(visibleLength));
+
+/** `text` as plain lines no wider than `width`, each starting with `indent`; the caller styles them. */
+const wrapped = (text: string, width: number, indent: string) =>
+  wrapSpans([{ text }], width, styles(false), indent, indent);
+
+/**
+ * Pans the view sideways when `key` is an arrow with columns hidden on that side; undefined otherwise, so at the
+ * edges the arrows keep their other meanings (open, next, back). Each step is half the panel.
+ */
+function panned(state: TuiState, key: string, widest: number, inner: number): TuiState | undefined {
+  const max = Math.max(0, widest - inner);
+  const at = Math.min(state.hscroll, max);
+  const step = Math.max(8, Math.floor(inner / 2));
+  if (key === 'right' && at < max) return { ...state, hscroll: Math.min(max, at + step) };
+  if (key === 'left' && at > 0) return { ...state, hscroll: Math.max(0, at - step) };
+  return undefined;
+}
+
+/** The widest row of the current view and the columns it has, for panning; nothing pans in the help view. */
+function extent(state: TuiState, ctx: TuiContext): { widest: number; inner: number } {
+  const st = styles(false);
+  switch (state.view) {
+    case 'list':
+      return { widest: widthOf(listRows(state, ctx, st)), inner: rowWidth(ctx) };
+    case 'detail': {
+      const job = selectedJob(state, ctx);
+      return { widest: job ? widthOf(detailContent(job, ctx, st, state.details).lines) : 0, inner: innerWidth(ctx) };
+    }
+    case 'log':
+      return {
+        widest: widthOf(ctx.store.log(state.wholeLog ? undefined : selectedJob(state, ctx))),
+        inner: innerWidth(ctx),
+      };
+    default:
+      return { widest: 0, inner: innerWidth(ctx) };
+  }
+}
 
 /** Keys that act on the highlighted job from the list and detail views. */
 function jobKeys(state: TuiState, key: string, ctx: TuiContext): TuiState | undefined {
@@ -412,12 +461,17 @@ function filtered(state: TuiState, key: string, ctx: TuiContext): TuiState {
 
 function listMove(state: TuiState, key: string, ctx: TuiContext): TuiState | undefined {
   const list = visible(state, ctx.store.jobs);
-  const at = moved(cursorOf(state, list), key, list.length, Math.max(1, room(ctx) - 2));
+  const at = moved(cursorOf(state, list), key, list.length, Math.max(1, room(state, ctx) - 2));
   return at === undefined ? undefined : { ...state, selected: list[at]!.key };
 }
 
-/** Applies one key. Sets `done` to quit and `effect` for the loop to perform. */
+/** Applies one key. Sets `done` to quit and `effect` for the loop to perform. A new view starts unpanned. */
 export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState {
+  const next = reduceKey(state, key, ctx);
+  return next.view === state.view ? next : { ...next, hscroll: 0 };
+}
+
+function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
   if (key === 'ctrl-c') return { ...state, done: true };
   const base: TuiState = { ...state, effect: undefined };
   if (state.confirm) {
@@ -429,7 +483,15 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
     if (activeJob(job)) return flash(next, busyText(job), ctx, 'warning');
     return { ...next, effect: { kind: 'rerun', job } };
   }
-  if (state.view === 'help') return { ...base, view: 'list' };
+  if (state.view === 'help') {
+    // Scroll keys scroll the help, even when it fits; any other key closes it.
+    return scrolled(base, key, helpLines(ctx, styles(false)).length, room(base, ctx)) ?? { ...base, view: 'list' };
+  }
+  if (key === 'left' || key === 'right') {
+    const { widest, inner } = extent(state, ctx);
+    const shifted = panned(base, key, widest, inner);
+    if (shifted) return shifted;
+  }
   if (state.filtering) return filtered(base, key, ctx);
   if (key === 't') {
     const theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length]!;
@@ -460,7 +522,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
           ? { ...base, selected: list[cursorOf(state, list)]!.key, view: 'detail', scroll: 0, details: undefined }
           : base;
       case '?':
-        return { ...base, view: 'help' };
+        return { ...base, view: 'help', scroll: 0 };
       case 'escape':
         if (state.filter) return { ...base, filter: undefined };
         if (state.status) return { ...base, status: undefined };
@@ -499,9 +561,9 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
       const next = { ...base, details: { ...details, selected: section.id, collapsed } };
       const updated = detailContent(job, ctx, styles(false), next.details);
       // Put the selected header near the top so its body is visible after expansion.
-      return { ...next, scroll: Math.max(0, Math.min(section.line - 1, updated.lines.length - room(ctx))) };
+      return { ...next, scroll: Math.max(0, Math.min(section.line - 1, updated.lines.length - room(next, ctx))) };
     }
-    const scroll = scrolled(base, key, content.lines.length, room(ctx));
+    const scroll = scrolled(base, key, content.lines.length, room(base, ctx));
     if (scroll) return scroll;
     const list = visible(state, ctx.store.jobs);
     const at = cursorOf(state, list);
@@ -517,7 +579,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
       case 'backspace':
         return { ...base, view: 'list' };
       case '?':
-        return { ...base, view: 'help' };
+        return { ...base, view: 'help', scroll: 0 };
       default:
         return jobKeys(base, key, ctx) ?? base;
     }
@@ -525,7 +587,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
 
   // Log view.
   const lines = ctx.store.log(state.wholeLog ? undefined : selectedJob(state, ctx));
-  const scroll = scrolled(base, key, lines.length, room(ctx));
+  const scroll = scrolled(base, key, lines.length, room(base, ctx));
   if (scroll) return scroll;
   switch (key) {
     case 'L':
@@ -536,7 +598,7 @@ export function reduce(state: TuiState, key: string, ctx: TuiContext): TuiState 
     case 'backspace':
       return { ...base, view: 'list' };
     case '?':
-      return { ...base, view: 'help' };
+      return { ...base, view: 'help', scroll: 0 };
     default:
       return base;
   }
@@ -606,10 +668,11 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
       // Every finding field is reviewer output, paths included.
       const file = sanitize(f.file ?? '');
       const where = file ? (f.line ? `${file}:${f.line}` : file) : 'general';
+      const indent = ' '.repeat(11);
       lines.push(
         `  ${st.tone(SEVERITY_TONES[f.severity] ?? 'muted', f.severity.padEnd(8))} ${st.bold(sanitize(f.title))}  ${st.muted(where)}`,
-        `           ${st.muted(sanitize(f.detail).replace(/\s+/g, ' '))}`,
-        `           ${st.muted(`by ${f.reviewers.join(', ')}`)}`,
+        ...wrapped(sanitize(f.detail).replace(/\s+/g, ' '), innerWidth(ctx), indent).map((l) => st.muted(l)),
+        `${indent}${st.muted(`by ${f.reviewers.join(', ')}`)}`,
       );
     }
   }
@@ -644,8 +707,50 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
   return { lines, sections };
 }
 
+/** The message row's text: a pending question (with a shorter form for narrow terminals) or a live flash. */
+function message(state: TuiState, ctx: TuiContext): { text: string; short?: string; tone: Tone } | undefined {
+  const asked = state.confirm && ctx.store.jobs.find((j) => j.key === state.confirm!.key);
+  if (asked) {
+    return {
+      text: `review ${jobTitle(asked)} again with the configured reviewers?`,
+      short: `review ${jobTitle(asked)} again?`,
+      tone: 'warning',
+    };
+  }
+  const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
+  return live && { text: live.text, tone: live.tone };
+}
+
+/**
+ * The message as rows: one blank row with no message, one when it fits, else the short form or the text wrapped
+ * onto up to `MESSAGE_ROWS` rows, the last ending in an ellipsis. Errors surface only here, so they are not cut.
+ */
+function messageLines(state: TuiState, ctx: TuiContext, st: Styles): string[] {
+  const m = message(state, ctx);
+  if (!m) return [''];
+  // The row is a space, the badge's icon, a space, then the text.
+  const width = Math.max(1, ctx.width - 3);
+  const text = visibleLength(m.text) <= width || !m.short ? m.text : m.short;
+  // A path or URL wider than the row has no space to wrap at, so it is broken at the row's edge instead of cut. The
+  // chunks are plain text, and `clip` counts code points, so the bound does too (an emoji is one column, two units).
+  let chunks = wrapped(text, width, '').flatMap((chunk) => {
+    const pieces: string[] = [];
+    const columns = [...chunk].length;
+    for (let at = 0; at === 0 || at < columns; at += width) pieces.push(clip(chunk, width, at));
+    return pieces;
+  });
+  if (chunks.length > MESSAGE_ROWS) {
+    chunks = [...chunks.slice(0, MESSAGE_ROWS - 1), `${clip(chunks[MESSAGE_ROWS - 1]!, width - 1)}…`];
+  }
+  return chunks.map((chunk, i) => (i === 0 ? ` ${st.badge(m.tone, chunk)}` : `   ${st.tone(m.tone, chunk)}`));
+}
+
 const HELP_LINES: [string, string][] = [
   ['↑↓ j k', 'move · g/G top and bottom · pgup/pgdn page'],
+  [
+    '← →',
+    'pan a table or line that is wider than the screen; at its edges they mean what they usually do in the view (→ opens or moves on, ← leaves a job or the log)',
+  ],
   ['enter', 'open the job: scores, findings, and the posted comment'],
   ['[ ]', 'previous/next Details or Dimension notes section in the comment'],
   ['enter space', 'expand/collapse the selected section while viewing a job'],
@@ -662,6 +767,25 @@ const HELP_LINES: [string, string][] = [
   ['esc', 'back; on the list it clears the filters, then quits'],
   ['q', 'quit'],
 ];
+
+/** The key help, each description wrapped to the panel so nothing is cut off on a narrow screen. */
+function helpLines(ctx: TuiContext, st: Styles): string[] {
+  const w = Math.max(...HELP_LINES.map(([k]) => k.length));
+  return HELP_LINES.flatMap(([k, what]) => {
+    const [first, ...rest] = wrapped(what, innerWidth(ctx), ' '.repeat(w + 2));
+    return [`${st.key(k.padEnd(w))}  ${first!.trimStart()}`, ...rest];
+  });
+}
+
+/** The first of `candidates` that fits in `width` columns, else the last (the shortest) one, for responsive rows. */
+const fitting = (width: number, ...candidates: string[]) =>
+  candidates.find((c) => visibleLength(c) <= width) ?? candidates.at(-1)!;
+
+/** `← 20 more · 48 more →`: the columns hidden on each side of a panned panel, for its border. */
+const panNote = (hscroll: number, widest: number, inner: number) =>
+  [hscroll > 0 && `← ${hscroll} more`, widest - inner - hscroll > 0 && `${widest - inner - hscroll} more →`]
+    .filter(Boolean)
+    .join(' · ');
 
 /** The Model Router palette, so this TUI looks like the user's other terminal tools. */
 const PALETTE = {
@@ -772,12 +896,31 @@ const hints = (st: Theme, pairs: [string, string][]) =>
     .map(([key, label]) => `${st.paint(ANSI.bold + st.swatch('accent'), `[${key}]`)} ${st.muted(label)}`)
     .join('   ');
 
+/**
+ * `hints` that fit in `width`: all of them, or the leading ones that fit, an ellipsis, and the `?` hint (or the last
+ * one, where a mode has no help) so the rest stay reachable.
+ */
+function fitHints(st: Theme, pairs: [string, string][], width: number): string {
+  const all = hints(st, pairs);
+  if (visibleLength(all) <= width) return all;
+  const tail = pairs.find(([key]) => key === '?') ?? pairs.at(-1)!;
+  const end = `${st.muted('…')}   ${hints(st, [tail])}`;
+  const head = pairs.filter((pair) => pair !== tail);
+  for (let n = head.length; n > 0; n--) {
+    const line = `${hints(st, head.slice(0, n))}   ${end}`;
+    if (visibleLength(line) <= width) return line;
+  }
+  return end;
+}
+
 interface PanelOptions {
   title: string;
   /** Muted text in the top border, before the hints. */
   note?: string;
   hints?: [string, string][];
   focused?: boolean;
+  /** Columns the rows are panned sideways. */
+  pan?: number;
 }
 
 /** `lines` inside a rounded border, exactly `height` rows by `width` columns, with the title and hints in the top edge. */
@@ -785,19 +928,20 @@ function panel(st: Theme, width: number, height: number, lines: string[], opts: 
   const inner = Math.max(1, width - 4);
   const bg = st.base('panel');
   const edge = (s: string) => st.paint(st.swatch(opts.focused ? 'accent' : 'line'), s);
-  const left = `${edge('╭─')} ${st.bold(opts.title)} `;
-  const tail = [opts.note && st.muted(opts.note), opts.hints?.length && hints(st, opts.hints)]
-    .filter(Boolean)
-    .join('  ');
-  let right = tail ? ` ${tail} ${edge('─╮')}` : edge('─╮');
-  let dashes = width - visibleLength(left) - visibleLength(right);
-  if (dashes < 0) {
-    right = edge('─╮');
-    dashes = Math.max(0, width - visibleLength(left) - 2);
-  }
+  // The title gives way to the corners; the note (a position) outlasts the hints, which the footer repeats.
+  const title = opts.title.length > width - 7 ? `${clip(opts.title, Math.max(1, width - 8))}…` : opts.title;
+  const left = `${edge('╭─')} ${st.bold(title)} `;
+  const note = opts.note && st.muted(opts.note);
+  const keys = opts.hints?.length && hints(st, opts.hints);
+  const tails = [[note, keys], [note], [keys], []].map((parts) => parts.filter(Boolean).join('  '));
+  const corner = edge('─╮');
+  const space = width - visibleLength(left) - visibleLength(corner);
+  const tail = tails.find((t) => !t || visibleLength(t) + 2 <= space) ?? '';
+  const right = tail ? ` ${tail} ${corner}` : corner;
+  const dashes = Math.max(0, width - visibleLength(left) - visibleLength(right));
   const top = fill(`${left}${edge('─'.repeat(dashes))}${right}`, width, bg);
   const rows = Array.from({ length: Math.max(0, height - 2) }, (_, i) =>
-    fill(`${edge('│')} ${fill(lines[i] ?? '', inner, bg)} ${edge('│')}`, width, bg),
+    fill(`${edge('│')} ${fill(lines[i] ?? '', inner, bg, opts.pan)} ${edge('│')}`, width, bg),
   );
   const bottom = fill(edge(`╰${'─'.repeat(Math.max(0, width - 2))}╯`), width, bg);
   return [top, ...rows, bottom];
@@ -814,20 +958,21 @@ function daemonLine(ctx: TuiContext, st: Styles): string {
   return `${st.badge('success', 'daemon running')}  ${st.muted(`pid ${d.pid}${up}${forwarders}`)}`;
 }
 
-/** The footer's key hints for the current view. */
-function footer(state: TuiState, list: JobRecord[], selected?: JobRecord): [string, string][] {
+/** The footer's key hints for the current view; `wide` adds the panning hint when rows are wider than the panel. */
+function footer(
+  state: TuiState,
+  list: JobRecord[],
+  selected: JobRecord | undefined,
+  wide: boolean,
+): [string, string][] {
+  const side: [string, string][] = wide ? [['←→', 'sideways']] : [];
   if (state.confirm)
     return [
       ['y', 're-run'],
       ['any other key', 'cancel'],
     ];
   if (state.filtering) {
-    return [
-      ['type', 'to filter'],
-      ['↑↓', 'move'],
-      ['enter', 'keep filter'],
-      ['esc', 'clear it'],
-    ];
+    return [['type', 'to filter'], ['↑↓', 'move'], ...side, ['enter', 'keep filter'], ['esc', 'clear it']];
   }
   const job: [string, string][] = list.length
     ? [
@@ -844,12 +989,24 @@ function footer(state: TuiState, list: JobRecord[], selected?: JobRecord): [stri
     : [];
   switch (state.view) {
     case 'help':
-      return [['any key', 'closes help']];
+      return [
+        ['↑↓', 'scroll'],
+        ['any other key', 'closes help'],
+      ];
     case 'detail':
-      return [['[/]', 'details'], ['enter', 'toggle'], ['↑↓', 'scroll'], ['n/p', 'next/prev'], ...job, ['esc', 'back']];
+      return [
+        ['[/]', 'details'],
+        ['enter', 'toggle'],
+        ['↑↓', 'scroll'],
+        ...side,
+        ['n/p', 'next/prev'],
+        ...job,
+        ['esc', 'back'],
+      ];
     case 'log':
       return [
         ['↑↓', 'scroll'],
+        ...side,
         ['G', 'follow'],
         ['L', state.wholeLog ? 'this job only' : 'whole log'],
         ['esc', 'back'],
@@ -857,6 +1014,7 @@ function footer(state: TuiState, list: JobRecord[], selected?: JobRecord): [stri
     default:
       return [
         ['↑↓', 'move'],
+        ...side,
         ...(list.length ? ([['enter', 'open']] as [string, string][]) : []),
         ...job,
         ['/', 'filter'],
@@ -867,8 +1025,23 @@ function footer(state: TuiState, list: JobRecord[], selected?: JobRecord): [stri
   }
 }
 
+/** The job table's header and rows, without the cursor margin; empty when no job is listed. */
+function listRows(state: TuiState, ctx: TuiContext, st: Styles): string[] {
+  const list = visible(state, ctx.store.jobs);
+  if (list.length === 0) return [];
+  return renderStatus(list, {
+    dataDir: ctx.store.dataDir,
+    reviewers: ctx.reviewers,
+    color: st.color,
+    styles: st,
+    now: ctx.now,
+    reports: list.map((j) => ctx.store.report(j)),
+    prStates: list.map((j) => ctx.store.prState(j)),
+  });
+}
+
 /** The smallest terminal the layout fits; below it the screen only asks for more room. */
-export const MIN_SIZE = { width: 60, height: 14 };
+export const MIN_SIZE = { width: 40, height: 10 };
 
 /** Draws the current view as `height` rows of `width` columns, painted edge to edge. */
 export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: string): string[] {
@@ -897,10 +1070,12 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const label = ` ${i + 1} ${name} `;
     return active ? st.paint(st.tabOn, label) : st.muted(label);
   });
-  const left = ` ${st.tone('success', '◆')} ${st.bold('REVIEW-RELAY')}  ${tabs.join(' ')}  ${hints(st, [['t', state.theme]])}`;
+  const name = ` ${st.tone('success', '◆')} ${st.bold('REVIEW-RELAY')}  ${tabs.join(' ')}`;
+  const left = `${name}  ${hints(st, [['t', state.theme]])}`;
   const right = st.muted(`${tildify(ctx.store.dataDir)} · v${version} `);
   const gap = width - visibleLength(left) - visibleLength(right);
-  const header = gap >= 4 ? `${left}${' '.repeat(gap)}${right}` : left;
+  // Narrow terminals lose the data folder, then the theme hint (t still works).
+  const header = fitting(width, gap >= 4 ? `${left}${' '.repeat(gap)}${right}` : left, left, name);
 
   // Status: the daemon, the counts, and the active filters.
   const counts = STATUSES.map((s) => [s, jobs.filter((j) => j.status === s).length] as const)
@@ -919,40 +1094,66 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
       ? st.muted(`/ ${state.filter}`)
       : '';
   const statusText = state.status ? st.tone(STATUS_TONES[state.status], `[${state.status}]`) : '';
-  const status = ` ${daemonLine(ctx, st)}  ${st.muted('│')}  ${summary}${narrowed}  ${[statusText, filterText].filter(Boolean).join(' ')}`;
+  const filters = [statusText, filterText].filter(Boolean).join(' ');
+  // Narrow terminals drop the daemon's details, then the counts; the filter being typed always shows.
+  const daemonFull = daemonLine(ctx, st);
+  const daemonShort = ctx.daemon
+    ? st.badge(ctx.daemon.running ? 'success' : 'danger', ctx.daemon.running ? 'daemon running' : 'daemon stopped')
+    : st.muted('daemon …');
+  const brief = jobs.length ? `${jobs.length} jobs` : st.muted('no jobs');
+  const statusRow = (daemon: string, count: string) =>
+    ` ${daemon}  ${st.muted('│')}  ${count}${narrowed}${filters ? `  ${filters}` : ''}`;
+  const status = fitting(
+    width,
+    statusRow(daemonFull, summary),
+    statusRow(daemonShort, summary),
+    statusRow(daemonShort, brief),
+    ` ${daemonShort}${narrowed}${filters ? `  ${filters}` : ''}`,
+  );
 
-  // Message: a confirmation, a flash, or nothing.
-  const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
-  const asked = state.confirm && jobs.find((j) => j.key === state.confirm!.key);
-  const message = asked
-    ? ` ${st.badge('warning', `review ${jobTitle(asked)} again with the configured reviewers?`)}`
-    : live
-      ? ` ${st.badge(live.tone, live.text)}`
-      : '';
+  // Message: a confirmation, a flash, or nothing; a long one takes its extra rows from the body.
+  const messages = messageLines(state, ctx, st);
 
-  const body = height - 4;
-  const inner = Math.max(1, width - 4);
+  const body = height - 3 - messages.length;
+  const inner = innerWidth(ctx);
   const paintCode = (code: string, text: string) => st.paint(`\x1b[${code}m`, text);
   let panels: string[];
+  /** Columns hidden on the left, after a resize may have shrunk what there is to pan. */
+  let hscroll = 0;
+  let overflow = 0;
+  const sideways = (widest: number, columns: number) => {
+    overflow = Math.max(0, widest - columns);
+    hscroll = Math.min(state.hscroll, overflow);
+    return panNote(hscroll, widest, columns);
+  };
+  const notes = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(' · ') || undefined;
 
   if (state.view === 'help') {
-    const w = Math.max(...HELP_LINES.map(([k]) => k.length));
-    const lines = HELP_LINES.map(([k, what]) => `${st.key(k.padEnd(w))}  ${what}`);
-    panels = panel(st, width, body, lines, { title: 'Keys', hints: [['any key', 'close']] });
-  } else if (state.view === 'detail' && job) {
-    const { lines } = detailContent(job, ctx, st, state.details);
+    const lines = helpLines(ctx, st);
     const avail = body - 2;
     const top = Math.min(state.scroll, Math.max(0, lines.length - avail));
     const note =
       lines.length > avail ? `${top + 1}-${Math.min(lines.length, top + avail)} of ${lines.length}` : undefined;
     panels = panel(st, width, body, lines.slice(top, top + avail), {
-      title: `Job · ${jobTitle(job)}`,
+      title: 'Keys',
       note,
+      hints: [['any other key', 'close']],
+    });
+  } else if (state.view === 'detail' && job) {
+    const { lines } = detailContent(job, ctx, st, state.details);
+    const avail = body - 2;
+    const top = Math.min(state.scroll, Math.max(0, lines.length - avail));
+    const range =
+      lines.length > avail ? `${top + 1}-${Math.min(lines.length, top + avail)} of ${lines.length}` : undefined;
+    panels = panel(st, width, body, lines.slice(top, top + avail), {
+      title: `Job · ${jobTitle(job)}`,
+      note: notes(range, sideways(widthOf(lines), inner)),
       hints: [
         ['n/p', 'next/prev'],
         ['esc', 'back'],
       ],
       focused: true,
+      pan: hscroll,
     });
   } else if (state.view === 'log') {
     const lines = ctx.store.log(state.wholeLog ? undefined : job);
@@ -967,12 +1168,12 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const top = state.follow ? max : Math.min(state.scroll, max);
     const range =
       shown.length > avail ? `lines ${top + 1}-${Math.min(shown.length, top + avail)} of ${shown.length}` : '';
-    const note = [range, state.follow && 'following'].filter(Boolean).join(' · ') || undefined;
     panels = panel(st, width, body, shown.slice(top, top + avail), {
       title,
-      note,
+      note: notes(range, state.follow ? 'following' : undefined, sideways(widthOf(lines), inner)),
       hints: [['L', state.wholeLog ? 'this job only' : 'whole log']],
       focused: true,
+      pan: hscroll,
     });
   } else {
     // Jobs on top; the highlighted job's detail below when there is room for both.
@@ -981,32 +1182,29 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     const split = job && body - detailMin >= 5;
     const jobsH = split ? Math.min(body - detailMin, wanted) : body;
     let lines: string[];
+    let hidden: string | undefined;
     if (list.length === 0) {
-      lines = [
-        st.muted(
-          jobs.length === 0
-            ? 'Jobs appear here as the daemon reviews PRs, or run one with: review-relay run --repo owner/name --pr N, or review a branch with: review-relay review -d'
-            : 'no job matches the filter',
-        ),
-      ];
+      lines = wrapped(
+        jobs.length === 0
+          ? 'Jobs appear here as the daemon reviews PRs, or run one with: review-relay run --repo owner/name --pr N, or review a branch with: review-relay review -d'
+          : 'no job matches the filter',
+        inner,
+        '',
+      ).map((l) => st.muted(l));
     } else {
-      const [head, ...rows] = renderStatus(list, {
-        dataDir: ctx.store.dataDir,
-        reviewers: ctx.reviewers,
-        color: st.color,
-        styles: st,
-        now: ctx.now,
-        reports: list.map((j) => ctx.store.report(j)),
-        prStates: list.map((j) => ctx.store.prState(j)),
-      });
+      const [head, ...rows] = listRows(state, ctx, st);
+      // The table pans as one, the cursor marker staying at the edge.
+      hidden = sideways(widthOf([head!, ...rows]), rowWidth(ctx));
       const marked = rows.map((r, i) =>
-        i === cursor ? fill(`${st.tone('success', '▌')} ${r}`, inner, st.base('selectionBg', 'selectionFg')) : `  ${r}`,
+        i === cursor
+          ? fill(`${st.tone('success', '▌')} ${pan(r, hscroll)}`, inner, st.base('selectionBg', 'selectionFg'))
+          : `  ${pan(r, hscroll)}`,
       );
-      lines = [`  ${head}`, ...windowed(marked, cursor, jobsH - 3, paintCode)];
+      lines = [`  ${pan(head!, hscroll)}`, ...windowed(marked, cursor, jobsH - 3, paintCode)];
     }
     panels = panel(st, width, jobsH, lines, {
       title: 'Jobs',
-      note: list.length > 1 ? `${cursor + 1} of ${list.length}` : undefined,
+      note: notes(list.length > 1 ? `${cursor + 1} of ${list.length}` : undefined, hidden),
       hints: [
         ['/', 'filter'],
         ['s', 'status'],
@@ -1023,7 +1221,8 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
     }
   }
 
-  return [row(header), row(status), ...panels.map(row), row(message), row(` ${hints(st, footer(state, list, job))}`)];
+  const keys = footer(state, list, job, overflow > 0);
+  return [row(header), row(status), ...panels.map(row), ...messages.map(row), row(` ${fitHints(st, keys, width - 1)}`)];
 }
 
 /** Opens `url` with the platform's opener; WSL goes through `wslview` when it is installed. */
