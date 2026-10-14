@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseConfig } from '../src/config.ts';
 import { execOrThrow } from '../src/exec.ts';
-import { LOCAL_DEPS, localTarget, reviewLocal } from '../src/local.ts';
+import { LOCAL_DEPS, localJobsIn, localTarget, reviewLocal } from '../src/local.ts';
 import { HARNESSES } from '../src/reviewers/index.ts';
 import type { Harness } from '../src/reviewers/types.ts';
 import type { RunnerDeps } from '../src/runner.ts';
@@ -196,5 +196,55 @@ describe('sweepLocal', () => {
       'o__r-pr7-abcdef12',
     ]);
     expect(await git(dir, 'worktree', 'list')).not.toContain(`local${dead}`);
+  });
+});
+
+describe('cancel', () => {
+  test('a cancel request stops a local review, records it cancelled, and writes no report', async () => {
+    const dir = await clone('cancelled');
+    const c = parseConfig({
+      repos: [{ fullName: 'acme/gadget', localPath: dir }],
+      dataDir: root,
+      reviewers: ['claude'],
+    });
+    const target = await localTarget(c, dir);
+    const path = join(root, 'state.json');
+    // Reviewers that run until they are stopped.
+    const slow: RunnerDeps = {
+      ...deps(true),
+      harnesses: Object.fromEntries(
+        Object.keys(HARNESSES).map((name) => [
+          name,
+          {
+            ...HARNESSES[name as HarnessName],
+            run: (input) =>
+              new Promise((resolve) => {
+                const stopped = () => resolve({ code: 143, stdout: '', stderr: '', timedOut: false, raw: '' });
+                if (input.signal?.aborted) stopped();
+                else input.signal?.addEventListener('abort', stopped);
+              }),
+          } satisfies Harness,
+        ]),
+      ) as RunnerDeps['harnesses'],
+    };
+    const logged: string[] = [];
+    const run = reviewLocal(target, c, {
+      state: new StateStore(path),
+      log: (m) => logged.push(m),
+      deps: slow,
+      cancelPollMs: 5,
+    });
+    const key = `acme/gadget@${target.job.headSha}:local`;
+    // The checkout this review runs in is how `cancel` finds it.
+    const other = new StateStore(path);
+    expect(localJobsIn(other.list(), dir).map((r) => r.key)).toEqual([key]);
+    expect(localJobsIn(other.list(), dir, 'main')).toEqual([]);
+    expect(other.requestCancel(key)).toBe(true);
+    const outcome = await run;
+    expect(outcome.cancelled).toBe(true);
+    expect(outcome.reportDir).toBeUndefined();
+    expect(other.get(key)).toMatchObject({ status: 'cancelled' });
+    expect(localJobsIn(other.list(), dir)).toEqual([]);
+    expect(logged.slice(1).map((l) => l.replace(/^.*: /, ''))).toEqual(['cancel requested, stopping', 'cancelled']);
   });
 });

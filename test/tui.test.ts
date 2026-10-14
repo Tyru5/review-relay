@@ -330,7 +330,7 @@ describe('frame', () => {
     expect(frame[27]).toMatch(/^╰─+╯$/);
     expect(frame[28]).toBe(' '.repeat(160));
     expect(frame[29]).toBe(
-      ' [↑↓] move   [enter] open   [l] log   [r] re-run   [o] open PR   [y] copy url   [/] filter   [s] status   [?] help   [q] quit'.padEnd(
+      ' [↑↓] move   [enter] open   [l] log   [c] cancel   [o] open PR   [y] copy url   [/] filter   [s] status   [?] help   [q] quit'.padEnd(
         160,
       ),
     );
@@ -540,7 +540,7 @@ describe('list view', () => {
     expect(visible(press(ctx, ['/', ...'timed', 'space', ...'out', 'enter']), ctx.store.jobs)).toEqual([FAILED]);
     expect(render(press(ctx, ['/', ...'zzz']), ctx)).toContain('no job matches the filter');
 
-    const cycle = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded', undefined];
+    const cycle = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded', 'cancelled', undefined];
     let state = initialState();
     for (const status of cycle) {
       state = reduce(state, 's', ctx);
@@ -862,6 +862,41 @@ describe('actions', () => {
     expect(press(ctx, ['down', 'enter', 'r', 'y']).effect).toEqual({ kind: 'rerun', job: DONE });
   });
 
+  test('c asks before cancelling a queued or running review, y cancels it in job state; finished jobs refuse', () => {
+    // Started now by a live process, so it reads as running rather than as left by a process that died.
+    const live = { ...RUNNING, pid: process.ppid, startedAt: new Date().toISOString() };
+    const dir = dataDir([live, DONE]);
+    const ctx = ctxFor(dir);
+    const asked = press(ctx, ['c']);
+    expect(asked.confirm).toEqual({ action: 'cancel', key: live.key });
+    const text = render(asked, ctx);
+    expect(text).toContain(' ! cancel the review of acme/app #7? its reviewers stop and nothing is posted');
+    expect(text).toContain(' [y] cancel review   [any other key] keep it running');
+    const kept = press(ctx, ['n'], asked);
+    expect(kept.effect).toBeUndefined();
+    expect(render(kept, ctx)).toContain(' ○ left it running');
+    const go = press(ctx, ['y'], asked);
+    expect(go.effect).toEqual({ kind: 'cancel', job: live });
+
+    const config = parseConfig({ repos: [{ fullName: 'acme/app', localPath: '/tmp/app' }], dataDir: dir });
+    expect(perform(go.effect!, config, join(dir, 'config.json'))).toEqual({
+      text: 'cancelling acme/app #7; its reviewers stop within a few seconds',
+      tone: 'success',
+    });
+    ctx.store.refresh();
+    expect(ctx.store.jobs[0]).toMatchObject({ status: 'running', cancelRequested: true });
+    // The list shows the request until the process running the job stops it, and c doesn't ask twice.
+    expect(render(initialState(), ctx)).toMatch(/▌ cancelling\s/);
+    expect(render(press(ctx, ['c']), ctx)).toContain('acme/app #7 is already being cancelled');
+
+    // The job finished while the question was open, or was never running: nothing to cancel.
+    writeFileSync(join(dir, 'state.json'), JSON.stringify([{ ...live, status: 'done' }, DONE]));
+    ctx.store.refresh();
+    expect(render(press(ctx, ['y'], asked), ctx)).toContain('acme/app #7 already finished');
+    expect(render(press(ctx, ['down', 'c']), ctx)).toContain('is not queued or running, so there is nothing to cancel');
+    expect(perform({ kind: 'cancel', job: live }, config, join(dir, 'config.json')).tone).toBe('warning');
+  });
+
   test('acting on the top job pins it, and the confirmation stays bound to the job it asked about', () => {
     const dir = dataDir([DONE, FAILED]);
     const ctx = ctxFor(dir);
@@ -1048,7 +1083,7 @@ describe('small terminals', () => {
     // The daemon's details go first; the counts stay while they fit.
     expect(rows[1]).toBe(' ✓ daemon running  │  4 jobs · 1 running · 1 done · 1 failed · 1 skipped'.padEnd(80));
     expect(rows.at(-1)).toBe(
-      ' [↑↓] move   [←→] sideways   [enter] open   [l] log   [r] re-run   …   [?] help'.padEnd(80),
+      ' [↑↓] move   [←→] sideways   [enter] open   [l] log   [c] cancel   …   [?] help'.padEnd(80),
     );
     expect(render(initialState(), { ...wide, width: 50 })).toContain(' ✓ daemon running  │  4 jobs ');
 

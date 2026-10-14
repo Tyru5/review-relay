@@ -223,11 +223,12 @@ review-relay stop                                   # SIGTERM so temporary repo 
 review-relay restart                                # stop, then start -d
 review-relay status [--limit N] [--page N]          # daemon (pid, uptime, endpoint, health), forwarders, jobs (20/page); exit 3 if stopped
 review-relay cost [--repo owner/name] [--pr N]     # what each review cost, per reviewer, with totals; --json for scripts
-review-relay tui                                    # live job list; enter opens a job, r re-reviews, o opens the PR, / filters
+review-relay tui                                    # live job list; enter opens a job, r re-reviews, c cancels, o opens the PR, / filters
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
 review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
 review-relay review [-d] [--base origin/main]       # score the current branch before opening a PR; see below
+review-relay cancel --repo owner/name --pr 123      # cancel the PR's queued or running review; no flags: this checkout's local review
 review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
 review-relay mcp                                    # MCP server on stdio, so agents can request and read reviews; see below
@@ -235,6 +236,10 @@ review-relay info                                   # resolved config with defau
 review-relay config                                 # resolved config as JSON (info --json)
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
+
+### Cancelling a review
+
+`review-relay cancel --repo owner/name --pr 123` cancels the PR's queued or running reviews; run with no flags in a checkout, it cancels the [local reviews](#reviewing-before-a-pr) running there (`--head <branch>` narrows it to one branch). The TUI's `c` does the same for the highlighted job. The request goes into `state.json`, and whichever process runs the review (the daemon, `run`, or a background local review) notices within a second, stops its reviewers, posts nothing, and records the job as `cancelled`; `cancel` waits for that and exits 1 when there was nothing to cancel or a review did not stop in time. Triggers leave a cancelled commit alone; `run`, a mention, or `r` in the TUI reviews it again. A daemon older than this release ignores the request, so restart it after upgrading.
 
 ### Review costs
 
@@ -266,7 +271,7 @@ review-relay review --route risky                    # use a route's reviewers a
 - Both ways record the job, so `status` and the TUI list it with its branch in the PR column and `local` as its source, and write the report to `<dataDir>/reports/<owner>__<repo>/local/<sha>/`. It posts nothing. In the TUI, `r` reviews the branch's current head again in the background, in the checkout it ran in; `o` and `y` have no PR to open.
 - The repo's config entry applies when one names the clone. Any other clone still works, named from its origin remote or its folder.
 - Routes pick the reviewers as for a PR, with source `local` and the base's branch name (`main` for `origin/main`). A skip route never applies, and `sources: ["local"]` can send local reviews to their own reviewers. `--reviewers` runs the listed ids instead of routing.
-- `--min-score N` exits 1 when the confidence is under N, for a pre-push hook or script; a review where every reviewer failed exits 1 too. `--json` prints the score, each reviewer's result, and the merged findings. Both need the foreground. Ctrl-C (or SIGTERM to a background review) stops the reviewers, removes the worktree, and records the job as failed.
+- `--min-score N` exits 1 when the confidence is under N, for a pre-push hook or script; a review where every reviewer failed exits 1 too. `--json` prints the score, each reviewer's result, and the merged findings. Both need the foreground. Ctrl-C (or SIGTERM to a background review) stops the reviewers, removes the worktree, and records the job as failed. `review-relay cancel` from the same checkout, or `c` in the TUI, stops a foreground or background review the same way and records it as `cancelled`; a foreground review then exits 1.
 - Each local review is its own process, so `maxConcurrent` doesn't limit them: five `review -d` runs start five panels at once.
 
 ### MCP server
@@ -293,7 +298,7 @@ Other clients take the same command in their MCP config, such as `{"mcpServers":
 
 Colors follow `NO_COLOR` / `FORCE_COLOR` and whether stdout is a terminal. `review-relay --help` groups the commands with examples.
 
-`review-relay tui` takes over the terminal with the job table in a panel taking about four fifths of the screen, the highlighted job's detail in a panel below it (dropped when the terminal is too short for both), and the daemon's state in the status line, refreshing as the daemon writes `state.json`. Enter expands a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), or a [local review](#reviewing-before-a-pr)'s branch, `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
+`review-relay tui` takes over the terminal with the job table in a panel taking about four fifths of the screen, the highlighted job's detail in a panel below it (dropped when the terminal is too short for both), and the daemon's state in the status line, refreshing as the daemon writes `state.json`. Enter expands a job: its score, each reviewer's score, model, and time, the merged findings with their file and line, and the comment that was posted (or the job's daemon log lines while it runs or after it fails). `l` follows a job's log lines, `L` the whole log, `/` filters by repo, PR, commit, status, source, route, or error text, and `s` cycles the status filter. `r` reviews the PR again (it asks first, then runs `review-relay run` in the background and logs to `daemon.log`), or a [local review](#reviewing-before-a-pr)'s branch, `c` cancels a queued or running review (it asks first; see `cancel` below), `o` opens the PR in the browser, `y` copies its URL, and `?` lists every key. The TUI reads the same files `status` does, so it works whether or not the daemon is running.
 
 On a narrow terminal the table, a job's detail, and the log pan sideways: `←` and `→` move by half a panel when a row is wider than the screen, the panel's top edge counts the columns hidden on each side (`← 40 more · 85 more →`), and the arrows only pan, stopping at the edges (Enter opens a job, `n`/`p` move between jobs, Esc goes back). A long message, such as an error, wraps onto up to three rows instead of being cut. The status line and footer drop their least important parts before anything is cut off; the footer ends in `… [?] help` when it can't fit every key, and the key help (`?`) scrolls when it outgrows the screen. The layout needs at least 40 × 10; below that it only asks for more room.
 
@@ -355,6 +360,8 @@ Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` (`local/
 6. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
 7. Run the route's reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any reviewer, in `reviewers` or a route, whose CLI isn't on PATH.
 8. Write reports, remove the worktree, and post or update the PR comment if the commit is still the PR's head. Posts to one PR happen one at a time.
+
+A [cancel](#cancelling-a-review) stops a review at any of these steps: a queued one never starts, and a running one kills its reviewers, removes the worktree, and posts nothing.
 
 Reviewers are spawned directly, not through your shell, so shell aliases (for example a `codex` alias that bypasses the sandbox) do not apply.
 

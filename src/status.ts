@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PrState } from './github.ts';
 import { reportDirFor } from './report.ts';
-import { activeJob, jobTarget, type JobRecord } from './state.ts';
+import { activeJob, jobTarget, shownStatus, type JobRecord } from './state.ts';
 import type { ReviewerId } from './types.ts';
 import { fmtDuration, sanitize, type Styles, type Tone } from './ui.ts';
 import { fmtCost, recordedUsage, totalCost, type CostTotal, type Price, type Usage } from './usage.ts';
@@ -87,6 +87,8 @@ const STATUS_COLORS: Record<string, string> = {
   running: YELLOW,
   skipped: CYAN,
   superseded: DIM,
+  cancelled: DIM,
+  cancelling: YELLOW,
 };
 const scoreColor = (n: number) => (n >= 4 ? GREEN : n === 3 ? YELLOW : RED);
 const countCell = (n: number, color: string): Cell => (n > 0 ? { text: String(n), color } : { text: '0', color: DIM });
@@ -146,8 +148,9 @@ export function renderStatus(records: JobRecord[], opts: StatusOptions): string[
     });
     const failures = rep?.reviewers.filter((m) => !m.ok && m.error).map((m) => `${m.name}: ${m.error}`) ?? [];
     const prState = opts.prStates?.[i];
+    const status = shownStatus(r);
     return [
-      { text: r.status, color: STATUS_COLORS[r.status] },
+      { text: status, color: STATUS_COLORS[status] },
       ...(opts.prStates
         ? [
             {

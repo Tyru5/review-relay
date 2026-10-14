@@ -167,7 +167,9 @@ describe('protocol', () => {
     expect(bad.content[0].text).toBe('limit must be a whole number from 1 to 100');
     const status = await server(configFor(seeded('bad-status'))).tool('list_reviews', { status: 'completed' });
     expect(status.isError).toBe(true);
-    expect(status.content[0].text).toBe('status must be one of queued, running, done, failed, skipped, superseded');
+    expect(status.content[0].text).toBe(
+      'status must be one of queued, running, done, failed, skipped, superseded, cancelled',
+    );
   });
 
   test('answers a batch with one array of replies, and a batch of notifications with nothing', async () => {

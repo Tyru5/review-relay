@@ -1,7 +1,7 @@
 import { normalizeLogin, type RepoConfig } from './config.ts';
 import { BOT_NAMES, type BotStartJob, type Classified } from './match.ts';
 import type { ReviewOutcome } from './runner.ts';
-import type { StateStore } from './state.ts';
+import { CANCEL_POLL_MS, type StateStore } from './state.ts';
 import { jobKey, type Bot, type ResolvedJob, type ReviewJob, type TriggerMode } from './types.ts';
 
 /** The PR a bot start names only by its head commit. */
@@ -47,10 +47,15 @@ export interface SchedulerDeps {
   prAuthor: (repo: string, pr: number) => Promise<string>;
   /** Reviews that run at once; later ones wait as `queued`, oldest first. Unlimited when unset. */
   maxConcurrent?: number;
+  /** How often job state is read for cancel requests while a job is queued or running; CANCEL_POLL_MS when unset. */
+  cancelPollMs?: number;
   log?: (message: string) => void;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
 }
+
+/** The abort reason of a cancelled review, apart from a newer head's SHA, which supersedes one. */
+const CANCEL = Symbol('cancelled');
 
 /**
  * Applies each repo's trigger mode:
@@ -62,7 +67,8 @@ export interface SchedulerDeps {
  * Mentions and manual runs always run and bypass the per-commit dedupe and the repo's `authors` list.
  *
  * At most `maxConcurrent` reviews run at once. When a job's turn comes, it runs only if its commit is still the PR's
- * head, and then stops any review of an older commit on the same PR.
+ * head, and then stops any review of an older commit on the same PR. A queued or running job stops when someone asks
+ * to cancel it in job state.
  */
 export class Scheduler {
   /** GitHub fallbacks waiting out the grace period, by job key, with the PR each one knows. */
@@ -76,6 +82,10 @@ export class Scheduler {
   private readonly active = new Set<Promise<void>>();
   /** Running reviews by job key, so a review of the PR's new head can stop ones of its older commits. */
   private readonly inflight = new Map<string, { job: ResolvedJob; controller: AbortController }>();
+  /** This scheduler's queued and running jobs by key, with the controller that stops each one. */
+  private readonly owned = new Map<string, { controller: AbortController; tag: string }>();
+  /** Reads job state for cancel requests while any job is owned. */
+  private cancelPoll?: ReturnType<typeof setInterval>;
   /** Turns handed out to queued jobs as running ones finish. */
   private readonly waiting: (() => void)[] = [];
   private slotsUsed = 0;
@@ -252,28 +262,64 @@ export class Scheduler {
       headSha: resolved.headSha,
       source: resolved.source,
     });
-    if (this.slotsUsed >= this.maxConcurrent) {
-      this.log(`[${repo.fullName}] PR #${resolved.pr} @ ${resolved.headSha.slice(0, 8)}: queued (${resolved.reason})`);
-    }
-    await this.acquireSlot();
+    const tag = `[${repo.fullName}] PR #${resolved.pr} @ ${resolved.headSha.slice(0, 8)}`;
+    const controller = new AbortController();
+    this.own(key, controller, tag);
     try {
-      await this.review(repo, resolved, key);
+      if (this.slotsUsed >= this.maxConcurrent) this.log(`${tag}: queued (${resolved.reason})`);
+      if (!(await this.acquireSlot(controller.signal))) {
+        this.deps.state.finish(key, { status: 'cancelled' });
+        return this.log(`${tag}: cancelled while queued`);
+      }
+      try {
+        await this.review(repo, resolved, key, controller);
+      } finally {
+        this.releaseSlot();
+      }
     } finally {
-      this.releaseSlot();
+      this.disown(key);
     }
   }
 
-  private async review(repo: RepoConfig, job: ResolvedJob, key: string): Promise<void> {
+  /** Starts watching job state for a cancel of `key`, which aborts its controller with CANCEL. */
+  private own(key: string, controller: AbortController, tag: string): void {
+    this.owned.set(key, { controller, tag });
+    this.cancelPoll ??= setInterval(() => {
+      for (const asked of this.deps.state.cancelsAmong(this.owned.keys())) {
+        const owner = this.owned.get(asked);
+        if (!owner || owner.controller.signal.aborted) continue;
+        this.log(`${owner.tag}: cancel requested, stopping`);
+        owner.controller.abort(CANCEL);
+      }
+    }, this.deps.cancelPollMs ?? CANCEL_POLL_MS);
+    // Polling alone must not keep `run` alive once its review is over.
+    (this.cancelPoll as { unref?: () => void }).unref?.();
+  }
+
+  private disown(key: string): void {
+    this.owned.delete(key);
+    if (this.owned.size > 0 || !this.cancelPoll) return;
+    clearInterval(this.cancelPoll);
+    this.cancelPoll = undefined;
+  }
+
+  private async review(repo: RepoConfig, job: ResolvedJob, key: string, controller: AbortController): Promise<void> {
     const tag = `[${repo.fullName}] PR #${job.pr}`;
     const supersede = (head: string, what: string) => {
       this.deps.state.finish(key, { status: 'superseded', supersededBy: head });
       this.log(`${tag} @ ${job.headSha.slice(0, 8)}: ${what}, the PR is now at ${head.slice(0, 8)}`);
     };
+    const cancelled = () => controller.signal.reason === CANCEL;
+    const cancel = (route?: string) => {
+      this.deps.state.finish(key, { status: 'cancelled', route });
+      this.log(`${tag} @ ${job.headSha.slice(0, 8)}: cancelled, nothing posted`);
+    };
     this.deps.state.begin(key);
-    const controller = new AbortController();
     try {
+      if (cancelled()) return cancel();
       const head = await this.deps.prHead(job);
       if (head !== job.headSha) return supersede(head, 'not reviewed');
+      if (cancelled()) return cancel();
       // This commit is the PR's head, so a review still running on an older one is stale.
       for (const other of this.inflight.values()) {
         if (other.job.repo === job.repo && other.job.pr === job.pr && other.job.headSha !== head) {
@@ -289,6 +335,8 @@ export class Scheduler {
         this.deps.state.finish(key, { status: 'skipped', route: route?.name });
         return this.log(`${tag}: ${via}skipped`);
       }
+      // The runner reports any abort as a newer head; one that posted before the cancel landed is done.
+      if (supersededBy && cancelled()) return cancel(route?.name);
       if (supersededBy) {
         this.deps.state.finish(key, { status: 'superseded', supersededBy, reportDir, route: route?.name });
         return this.log(
@@ -299,6 +347,7 @@ export class Scheduler {
       this.log(`${tag}: ${via}done${reportDir ? ` -> ${reportDir}` : ''}`);
     } catch (err) {
       // An aborted review fails in whatever step it was in; the abort is the real outcome.
+      if (cancelled()) return cancel();
       if (controller.signal.aborted) return supersede(String(controller.signal.reason), 'stopped');
       const error = err instanceof Error ? err.message : String(err);
       this.deps.state.finish(key, { status: 'failed', error });
@@ -312,13 +361,27 @@ export class Scheduler {
     this.log(`[${repo.fullName}] PR #${job.pr} ${job.reason} ignored (author ${job.author} not in authors)`);
   }
 
-  /** Resolves when this job may run; slots pass straight to the oldest waiting job as they free up. */
-  private acquireSlot(): Promise<void> {
+  /**
+   * Resolves true when this job may run; slots pass straight to the oldest waiting job as they free up. Resolves false,
+   * holding no slot, when `signal` aborts first.
+   */
+  private acquireSlot(signal: AbortSignal): Promise<boolean> {
     if (this.slotsUsed < this.maxConcurrent) {
       this.slotsUsed++;
-      return Promise.resolve();
+      return Promise.resolve(true);
     }
-    return new Promise((resolve) => this.waiting.push(resolve));
+    return new Promise((resolve) => {
+      const turn = () => {
+        signal.removeEventListener('abort', leave);
+        resolve(true);
+      };
+      const leave = () => {
+        this.waiting.splice(this.waiting.indexOf(turn), 1);
+        resolve(false);
+      };
+      this.waiting.push(turn);
+      signal.addEventListener('abort', leave, { once: true });
+    });
   }
 
   private releaseSlot(): void {

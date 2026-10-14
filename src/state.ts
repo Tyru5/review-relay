@@ -7,9 +7,13 @@ import { isLocal, type JobSource } from './types.ts';
 
 /**
  * `queued`: waiting for a free review slot. `skipped`: a skip route matched, so nothing ran. `superseded`: the PR moved
- * to a newer commit first, so the review stopped or its comment was not posted.
+ * to a newer commit first, so the review stopped or its comment was not posted. `cancelled`: someone cancelled it
+ * before it finished, so nothing was posted.
  */
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'superseded';
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'superseded' | 'cancelled';
+
+/** How often a process running reviews reads job state for cancel requests (`StateStore.requestCancel`). */
+export const CANCEL_POLL_MS = 1_000;
 
 /** True for a job that hasn't finished: queued or running. */
 export const activeJob = (job: { status: JobStatus }) => job.status === 'queued' || job.status === 'running';
@@ -31,6 +35,8 @@ export interface JobRecord {
   supersededBy?: string;
   /** The process that queued the job, so other processes can tell a live job from one whose process died. */
   pid?: number;
+  /** Someone asked to cancel this queued or running job; the process running it stops it and records `cancelled`. */
+  cancelRequested?: boolean;
   /** A local review's branch (or short SHA when detached), the ref its base was, and the checkout it ran in. */
   branch?: string;
   base?: string;
@@ -140,6 +146,10 @@ function readRecords(path: string): Map<string, JobRecord> {
 const newestFirst = (records: Map<string, JobRecord>) =>
   [...records.values()].toSorted((a, b) => b.startedAt.localeCompare(a.startedAt));
 
+/** The job's status as shown: `cancelling` for a queued or running job someone asked to cancel. */
+export const shownStatus = (job: Pick<JobRecord, 'status' | 'cancelRequested'>): JobStatus | 'cancelling' =>
+  job.cancelRequested && activeJob(job) ? 'cancelling' : job.status;
+
 /** What a job reviewed: `#12` for a PR, the branch name for a local review. */
 export const jobTarget = (job: Pick<JobRecord, 'pr' | 'source' | 'branch'>) =>
   isLocal(job) ? (job.branch ?? 'local') : `#${job.pr}`;
@@ -167,12 +177,15 @@ export class StateStore {
   }
 
   /**
-   * True when this commit was reviewed, skipped by a route, or is queued or being reviewed. Failed and superseded
-   * runs may retry, since neither left a comment for the commit.
+   * True when this commit was reviewed, skipped by a route, cancelled, or is queued or being reviewed. Failed and
+   * superseded runs may retry, since neither left a comment for the commit; a cancelled one runs again only when asked.
    */
   isHandled(key: string): boolean {
     const record = this.current(key);
-    return !!record && (record.status === 'done' || record.status === 'skipped' || activeJob(record));
+    return (
+      !!record &&
+      (record.status === 'done' || record.status === 'skipped' || record.status === 'cancelled' || activeJob(record))
+    );
   }
 
   /** True while the commit is queued or being reviewed. */
@@ -191,6 +204,33 @@ export class StateStore {
     if (record) this.records.set(key, record);
     else this.records.delete(key);
     return record;
+  }
+
+  /** The record as the file has it now. */
+  get(key: string): JobRecord | undefined {
+    return this.current(key);
+  }
+
+  /**
+   * Asks the process running the job to stop it, and returns whether the job was queued or running under a live
+   * process. That process sees the request on its next poll (`cancelsAmong`), stops, and records `cancelled`.
+   */
+  requestCancel(key: string, alive: (pid: number) => boolean = isAlive): boolean {
+    return this.write((current) => {
+      const held = current.get(key);
+      if (!held || !activeJob(held) || orphaned(held, false, alive)) return false;
+      held.cancelRequested = true;
+      return true;
+    });
+  }
+
+  /** The keys among `keys` whose queued or running job someone asked to cancel, read from the file once. */
+  cancelsAmong(keys: Iterable<string>): string[] {
+    const records = this.path ? readRecords(this.path) : this.records;
+    return [...keys].filter((key) => {
+      const record = records.get(key);
+      return !!record?.cancelRequested && activeJob(record);
+    });
   }
 
   /** Records a review waiting for a slot. A re-review replaces the commit's earlier record. */
@@ -229,6 +269,7 @@ export class StateStore {
     const record = this.records.get(key);
     if (!record) return;
     Object.assign(record, patch, { finishedAt: new Date().toISOString() });
+    delete record.cancelRequested;
     this.save(key);
   }
 
@@ -272,7 +313,13 @@ export class StateStore {
         const answer = decide(merged);
         for (const changed of this.dirty) {
           const record = this.records.get(changed);
-          if (record) merged.set(changed, record);
+          if (!record) continue;
+          // A cancel asked for since this store last read the job stays asked for until the job ends.
+          const disk = merged.get(changed);
+          if (disk?.cancelRequested && activeJob(disk) && activeJob(record) && disk.pid === record.pid) {
+            record.cancelRequested = true;
+          }
+          merged.set(changed, record);
         }
         this.prune(merged);
         const tmp = `${path}.${randomUUID()}.tmp`;

@@ -2,7 +2,7 @@
  * `review-relay tui`: a live terminal view of the review jobs. It reads what the daemon writes (`state.json`, the
  * report folders, `daemon.log`) and polls for changes, since the daemon exposes no query API. From the list a job
  * opens into its scores, findings, and the posted comment, or into its log lines; a PR can be re-reviewed, opened in
- * the browser, or have its URL copied.
+ * the browser, or have its URL copied, and a queued or running review cancelled.
  *
  * Like `setup`, the screen is a pure state machine: `reduce` applies a key, `renderTui` draws, and side effects
  * (spawning a run, opening a browser) come back as an `effect` the loop performs.
@@ -17,7 +17,7 @@ import { renderMarkdownView, wrapSpans, type MarkdownDetails } from './markdown.
 import { sumTotals } from './cost.ts';
 import { reportDirFor } from './report.ts';
 import { localTag } from './local.ts';
-import { activeJob, jobTarget, orphaned, type JobRecord, type JobStatus } from './state.ts';
+import { activeJob, jobTarget, orphaned, shownStatus, StateStore, type JobRecord, type JobStatus } from './state.ts';
 import { readReport, renderStatus, type ReportSummary } from './status.ts';
 import { clip, colorDepth, fill, moved, pan, rgb, runScreen, windowed } from './term.ts';
 import {
@@ -35,14 +35,16 @@ import { isLocal } from './types.ts';
 import { DEFAULT_PRICES, fmtCost, fmtUsage, type Price } from './usage.ts';
 import { mergeFindings, type Finding, type MergedFinding, type Verdict } from './verdict.ts';
 
-const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded'];
-const STATUS_TONES: Record<JobStatus, Tone> = {
+const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded', 'cancelled'];
+const STATUS_TONES: Record<JobStatus | 'cancelling', Tone> = {
   queued: 'muted',
   running: 'warning',
   done: 'success',
   failed: 'danger',
   skipped: 'info',
   superseded: 'muted',
+  cancelled: 'muted',
+  cancelling: 'warning',
 };
 /** Log lines kept per job view; the file itself is read from the end. */
 const LOG_LINES = 300;
@@ -110,6 +112,9 @@ const readJson = (path: string): any => {
 };
 
 const isFinished = (job: JobRecord) => !activeJob(job);
+
+/** Why a job can't be cancelled. */
+const notActiveText = (job: JobRecord) => `${jobTitle(job)} is not queued or running, so there is nothing to cancel`;
 
 /** Why a queued or running job can't be re-reviewed yet. */
 const busyText = (job: JobRecord) =>
@@ -264,6 +269,7 @@ export type View = 'list' | 'detail' | 'log' | 'help';
 
 export type Effect =
   | { kind: 'rerun'; job: JobRecord }
+  | { kind: 'cancel'; job: JobRecord }
   | { kind: 'open'; url: string }
   | { kind: 'copy'; text: string }
   | { kind: 'theme'; theme: ThemeName };
@@ -291,7 +297,7 @@ export interface TuiState {
   /** The log view keeps its end in view as lines arrive. */
   follow: boolean;
   /** A pending question, bound to the job it was asked about, so a list change can't retarget the answer. */
-  confirm?: { action: 'rerun'; key: string };
+  confirm?: { action: 'rerun' | 'cancel'; key: string };
   flash?: { text: string; tone: Tone; until: number };
   /** A side effect for the loop to perform and clear. */
   effect?: Effect;
@@ -408,6 +414,10 @@ function jobKeys(state: TuiState, key: string, ctx: TuiContext): TuiState | unde
     case 'r':
       if (activeJob(job)) return flash(pinned, busyText(job), ctx, 'warning');
       return { ...pinned, confirm: { action: 'rerun', key: job.key } };
+    case 'c':
+      if (!activeJob(job)) return flash(pinned, notActiveText(job), ctx, 'warning');
+      if (job.cancelRequested) return flash(pinned, `${jobTitle(job)} is already being cancelled`, ctx, 'muted');
+      return { ...pinned, confirm: { action: 'cancel', key: job.key } };
     case 'o':
       if (isLocal(job)) return flash(pinned, NO_PR, ctx, 'warning');
       return { ...pinned, effect: { kind: 'open', url: prUrl(job) } };
@@ -477,11 +487,16 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
   if (key === 'ctrl-c') return { ...state, done: true };
   const base: TuiState = { ...state, effect: undefined };
   if (state.confirm) {
+    const { action } = state.confirm;
     const next = { ...base, confirm: undefined };
-    if (key !== 'y') return flash(next, 'cancelled', ctx, 'muted');
-    // The job as it is now, not as it was when asked: it may have gone, or a review of it may have started since.
+    if (key !== 'y') return flash(next, action === 'cancel' ? 'left it running' : 'cancelled', ctx, 'muted');
+    // The job as it is now, not as it was when asked: it may have gone, or a review of it may have started or ended.
     const job = ctx.store.jobs.find((j) => j.key === state.confirm!.key);
     if (!job) return flash(next, 'that job is no longer listed', ctx, 'warning');
+    if (action === 'cancel') {
+      if (!activeJob(job)) return flash(next, `${jobTitle(job)} already finished`, ctx, 'warning');
+      return { ...next, effect: { kind: 'cancel', job } };
+    }
     if (activeJob(job)) return flash(next, busyText(job), ctx, 'warning');
     return { ...next, effect: { kind: 'rerun', job } };
   }
@@ -622,7 +637,7 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
   const took = fmtDuration(end - Date.parse(job.startedAt));
   const field = (label: string, value: string) => `  ${st.muted(label.padEnd(10))}${value}`;
   const lines = [
-    `${st.bold(jobTitle(job))}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[job.status], job.status)}${prBadge}`,
+    `${st.bold(jobTitle(job))}  ${st.muted(job.headSha.slice(0, 8))}  ${st.badge(STATUS_TONES[shownStatus(job)], shownStatus(job))}${prBadge}`,
     ...(isLocal(job)
       ? [field('branch', `${job.branch} against ${job.base}`), field('checkout', tildify(job.localPath ?? ''))]
       : [field('url', prUrl(job))]),
@@ -678,6 +693,7 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
     const head = job.supersededBy ? ` (${job.supersededBy.slice(0, 8)})` : '';
     lines.push('', st.muted(`  the PR moved to a newer commit${head} first, so nothing was posted`));
   }
+  if (job.status === 'cancelled') lines.push('', st.muted('  cancelled before it finished, so nothing was posted'));
   if (detail.comment.length) {
     // Two for the panel's padding and border on each side, two for the section indent.
     const width = Math.max(20, ctx.width - 6);
@@ -691,7 +707,7 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
     lines.push('', st.section(heading));
     sections = comment.sections.map((s) => ({ ...s, line: s.line + lines.length }));
     lines.push(...comment.lines.map((l) => `  ${l}`));
-  } else if (activeJob(job) || job.status === 'failed') {
+  } else if (activeJob(job) || job.status === 'failed' || job.status === 'cancelled') {
     const log = ctx.store.log(job);
     lines.push(
       '',
@@ -707,6 +723,13 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
 /** The message row's text: a pending question (with a shorter form for narrow terminals) or a live flash. */
 function message(state: TuiState, ctx: TuiContext): { text: string; short?: string; tone: Tone } | undefined {
   const asked = state.confirm && ctx.store.jobs.find((j) => j.key === state.confirm!.key);
+  if (asked && state.confirm!.action === 'cancel') {
+    return {
+      text: `cancel the review of ${jobTitle(asked)}? its reviewers stop and nothing is posted`,
+      short: `cancel ${jobTitle(asked)}?`,
+      tone: 'warning',
+    };
+  }
   if (asked) {
     return {
       text: `review ${jobTitle(asked)} again with the configured reviewers?`,
@@ -758,10 +781,11 @@ export const HELP_LINES: [string, string][] = [
   ['1 2 tab', 'switch between the Jobs and Log tabs'],
   ['t', 'cycle theme: dark, light, terminal (syncs terminal colors); saves to config'],
   ['r', 'review the PR or local branch again (asks first); runs in the background and logs to daemon.log'],
+  ['c', 'cancel a queued or running review (asks first); its reviewers stop and nothing is posted'],
   ['o', 'open the PR in the browser'],
   ['y', "copy the PR's URL to the clipboard"],
   ['/', 'filter by repo, PR, commit, status, source, route, or error text'],
-  ['s', 'cycle the status filter: queued, running, done, failed, skipped, superseded, all'],
+  ['s', 'cycle the status filter: queued, running, done, failed, skipped, superseded, cancelled, all'],
   ['esc', 'back; on the list it clears the filters, then quits'],
   ['q', 'quit'],
 ];
@@ -965,17 +989,23 @@ function footer(
 ): [string, string][] {
   const side: [string, string][] = wide ? [['←→', 'sideways']] : [];
   if (state.confirm)
-    return [
-      ['y', 're-run'],
-      ['any other key', 'cancel'],
-    ];
+    return state.confirm.action === 'cancel'
+      ? [
+          ['y', 'cancel review'],
+          ['any other key', 'keep it running'],
+        ]
+      : [
+          ['y', 're-run'],
+          ['any other key', 'cancel'],
+        ];
   if (state.filtering) {
     return [['type', 'to filter'], ['↑↓', 'move'], ...side, ['enter', 'keep filter'], ['esc', 'clear it']];
   }
   const job: [string, string][] = list.length
     ? [
         ['l', 'log'],
-        ['r', 're-run'],
+        // A queued or running job can be cancelled, not re-run.
+        (selected && activeJob(selected) ? ['c', 'cancel'] : ['r', 're-run']) as [string, string],
         // A local review has no PR to open or link.
         ...(selected && isLocal(selected)
           ? []
@@ -1280,6 +1310,13 @@ export function perform(effect: Effect, config: Config, configPath: string): { t
         text: `re-reviewing ${job.repo} #${job.pr} in the background (pid ${pid}); press l to follow`,
         tone: 'success',
       };
+    }
+    case 'cancel': {
+      const { job } = effect;
+      if (!new StateStore(join(config.dataDir, 'state.json')).requestCancel(job.key)) {
+        return { text: `${jobTitle(job)} already finished`, tone: 'warning' };
+      }
+      return { text: `cancelling ${jobTitle(job)}; its reviewers stop within a few seconds`, tone: 'success' };
     }
     case 'open':
       openInBrowser(effect.url);

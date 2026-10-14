@@ -38,7 +38,7 @@ const START_WAIT_MS = 15_000;
 const PID_CHECK_MS = 5_000;
 
 /** The statuses a job can have, which `list_reviews` filters by. */
-const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded'];
+const STATUSES: JobStatus[] = ['queued', 'running', 'done', 'failed', 'skipped', 'superseded', 'cancelled'];
 
 /** What the server touches outside itself. Tests stand in for them. */
 export interface McpDeps {

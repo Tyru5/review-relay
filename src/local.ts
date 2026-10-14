@@ -4,7 +4,7 @@ import type { Config, RepoConfig } from './config.ts';
 import { exec, execOrThrow } from './exec.ts';
 import { parseGithubRemote } from './repos.ts';
 import { RUNNER_DEPS, runReview, type ReviewOutcome, type RunnerDeps } from './runner.ts';
-import type { StateStore } from './state.ts';
+import { activeJob, CANCEL_POLL_MS, type JobRecord, type StateStore } from './state.ts';
 import { jobKey, type ResolvedJob } from './types.ts';
 
 export interface LocalOptions {
@@ -153,14 +153,32 @@ export interface LocalRun {
   /** Aborting stops the reviewers; the job is recorded as failed and no report is written. */
   signal?: AbortSignal;
   deps?: RunnerDeps;
+  /** How often job state is read for a cancel request; CANCEL_POLL_MS when unset. */
+  cancelPollMs?: number;
+}
+
+/** A local review's outcome; `cancelled` when a cancel request stopped it, so it wrote no report. */
+export type LocalOutcome = ReviewOutcome & { cancelled?: boolean };
+
+/** The queued or running local reviews in the checkout at `dir`, of the `branch` when given. */
+export function localJobsIn(records: JobRecord[], dir: string, branch?: string): JobRecord[] {
+  const top = real(dir);
+  return records.filter(
+    (r) =>
+      r.source === 'local' &&
+      activeJob(r) &&
+      !!r.localPath &&
+      real(r.localPath) === top &&
+      (branch === undefined || r.branch === branch),
+  );
 }
 
 /**
  * Runs a local review and records it in job state as it goes, so `status` and the TUI list it whether it runs in the
  * foreground or the background. Throws, after recording the failure, when the review fails, and without touching
- * the record when another live process is already reviewing the same commit.
+ * the record when another live process is already reviewing the same commit. A cancel request in job state stops it.
  */
-export async function reviewLocal(target: LocalTarget, config: Config, run: LocalRun): Promise<ReviewOutcome> {
+export async function reviewLocal(target: LocalTarget, config: Config, run: LocalRun): Promise<LocalOutcome> {
   const { job, repo } = target;
   const key = jobKey(job);
   const tag = localTag({ ...job, branch: job.headRef });
@@ -179,8 +197,22 @@ export async function reviewLocal(target: LocalTarget, config: Config, run: Loca
   if (!claimed) throw new Error(`${busyLocal(job)}; wait for it to finish or follow it in review-relay tui`);
   run.state.begin(key);
   run.log(`${tag}: reviewing (${job.reason})`);
+  const cancel = new AbortController();
+  const poll = setInterval(() => {
+    if (cancel.signal.aborted || run.state.cancelsAmong([key]).length === 0) return;
+    run.log(`${tag}: cancel requested, stopping`);
+    cancel.abort('cancelled');
+  }, run.cancelPollMs ?? CANCEL_POLL_MS);
+  const cancelled = (outcome: ReviewOutcome = {}): LocalOutcome => {
+    run.state.finish(key, { status: 'cancelled', route: outcome.route?.name });
+    run.log(`${tag}: cancelled`);
+    return { route: outcome.route, cancelled: true };
+  };
+  const signal = run.signal ? AbortSignal.any([run.signal, cancel.signal]) : cancel.signal;
   try {
-    const outcome = await runReview(job, repo, config, run.deps ?? LOCAL_DEPS, run.signal);
+    const outcome = await runReview(job, repo, config, run.deps ?? LOCAL_DEPS, signal);
+    // A review that wrote its report before the cancel landed is done.
+    if (cancel.signal.aborted && !outcome.reportDir) return cancelled(outcome);
     if (run.signal?.aborted) {
       run.state.finish(key, { status: 'failed', error: 'stopped before finishing', route: outcome.route?.name });
       run.log(`${tag}: stopped before finishing`);
@@ -191,9 +223,13 @@ export async function reviewLocal(target: LocalTarget, config: Config, run: Loca
     run.log(`${tag}: ${via}done -> ${outcome.reportDir}`);
     return outcome;
   } catch (err) {
+    // A step the cancel cut short fails in its own way; the cancel is the real outcome.
+    if (cancel.signal.aborted) return cancelled();
     const error = err instanceof Error ? err.message : String(err);
     run.state.finish(key, { status: 'failed', error });
     run.log(`${tag}: failed: ${error}`);
     throw err;
+  } finally {
+    clearInterval(poll);
   }
 }

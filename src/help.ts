@@ -59,7 +59,7 @@ export const HELP_GROUPS: Group[] = [
         summary: 'Live terminal view of the review jobs: open one, read its findings, re-run it',
         detail: [
           'Lists every job in state.json with its score per reviewer, cost, and finding counts, refreshing as the daemon writes; the status bar adds up what they cost. Enter opens a job (scores, merged findings, the posted comment, or its log lines while running); / filters; s cycles the status filter.',
-          "r reviews the PR, or a local review's branch, again in the background; o opens the PR in the browser, y copies its URL. Local reviews from review-relay review show here too. Press ? inside for every key.",
+          "r reviews the PR, or a local review's branch, again in the background; c cancels a queued or running review; o opens the PR in the browser, y copies its URL. Local reviews from review-relay review show here too. Press ? inside for every key.",
         ],
         examples: ['review-relay tui'],
       },
@@ -153,6 +153,25 @@ export const HELP_GROUPS: Group[] = [
           'review-relay review -d',
           'review-relay review --base origin/main --min-score 4',
           'review-relay review --reviewers claude,codex --json',
+        ],
+      },
+      {
+        name: 'cancel',
+        args: '[--repo <owner/name> --pr <N>] [--head <branch>]',
+        summary: 'Cancel a queued or running review',
+        detail: [
+          "With --repo and --pr, cancels the PR's queued or running reviews. With neither, cancels the local reviews running in the checkout you run it from; --head narrows that to one branch.",
+          'Whichever process runs the review (the daemon, run, or a local review) stops its reviewers within a few seconds, posts nothing, and records the job as cancelled. Waits for that, and exits 1 when there was nothing to cancel or a review did not stop in time. Triggers leave a cancelled commit alone; run, a mention, or r in the TUI reviews it again.',
+        ],
+        options: [
+          { flag: '--repo <owner/name>', description: 'A repo from the config' },
+          { flag: '--pr <n>', description: 'Pull request number' },
+          { flag: '--head <branch>', description: "Only this branch's local review" },
+        ],
+        examples: [
+          'review-relay cancel --repo owner/repo --pr 42',
+          'review-relay cancel',
+          'review-relay cancel --head feature',
         ],
       },
       {

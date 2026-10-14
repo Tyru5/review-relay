@@ -339,8 +339,8 @@ function Docs() {
               </li>
               <li>
                 <strong>Resolve and deduplicate.</strong> The scheduler keys automatic reviews by repository and head
-                commit. Completed, skipped, queued, and in-progress jobs suppress duplicates. Failed jobs can retry on
-                another trigger. At most <code>maxConcurrent</code> reviews run at once; the rest wait as{' '}
+                commit. Completed, skipped, cancelled, queued, and in-progress jobs suppress duplicates. Failed jobs can
+                retry on another trigger. At most <code>maxConcurrent</code> reviews run at once; the rest wait as{' '}
                 <code>queued</code>.
               </li>
               <li>
@@ -362,6 +362,10 @@ function Docs() {
                 per PR at a time, so a slow review of an older commit never replaces a newer one&rsquo;s comment.
               </li>
             </ol>
+            <p>
+              A <a href="#cancel">cancel</a> stops a job at any of these steps: a queued job never starts, and a running
+              one kills its reviewers, removes the worktree, posts nothing, and is recorded as <code>cancelled</code>.
+            </p>
             <p>
               GitHub PR events ignore drafts and closed PRs. Explicit mentions and manual runs require an open PR but
               can review a draft. They bypass completed-job deduplication, but not an already-running job in the same
@@ -438,14 +442,17 @@ function Docs() {
             <Note title="Gate a push on the score">
               <code>--min-score</code> exits 1 when the confidence is under the threshold, and a review where every
               reviewer failed exits 1 too, so a pre-push hook or script can stop on it. It and <code>--json</code> need
-              the foreground. Ctrl-C stops the reviewers, removes the worktree, and records the job as failed.
+              the foreground. Ctrl-C stops the reviewers, removes the worktree, and records the job as failed;{' '}
+              <code>review-relay cancel</code> from the same checkout stops it the same way and records it as{' '}
+              <code>cancelled</code>.
             </Note>
             <p>
               Both ways record the job, so <code>status</code> and <code>tui</code> list it with its branch in the PR
               column and <code>local</code> as its source, and save the report under{' '}
               <code>&lt;dataDir&gt;/reports/&lt;owner__repo&gt;/local/&lt;sha8&gt;/</code>. In <code>tui</code>,{' '}
-              <code>r</code> reviews the branch&rsquo;s current head again in the background, in the checkout it ran in.
-              Each local review is its own process, so <code>maxConcurrent</code> does not limit them.
+              <code>r</code> reviews the branch&rsquo;s current head again in the background, in the checkout it ran in,
+              and <code>c</code> cancels it while it runs. Each local review is its own process, so{' '}
+              <code>maxConcurrent</code> does not limit them.
             </p>
           </Section>
 
@@ -546,6 +553,31 @@ function Docs() {
                 least 40 columns by 10 rows.
               </p>
             </details>
+            <h3 id="cancel">Cancel a review</h3>
+            <Snippet
+              label="Stop a queued or running review"
+              code={
+                'review-relay cancel --repo acme/widget --pr 42\nreview-relay cancel\nreview-relay cancel --head feature'
+              }
+            />
+            <p>
+              With <code>--repo</code> and <code>--pr</code>, <code>cancel</code> stops the PR&rsquo;s queued or running
+              reviews. With neither, it stops the local reviews running in the checkout you run it from, and{' '}
+              <code>--head</code> narrows that to one branch. In <code>tui</code>, <code>c</code> does the same for the
+              highlighted job, after asking.
+            </p>
+            <p>
+              The request is written to <code>state.json</code>. Whichever process runs the review (the daemon,{' '}
+              <code>run</code>, or a local review) notices within a second, stops its reviewers, removes the worktree,
+              posts nothing, and records the job as <code>cancelled</code>; until then the job shows as{' '}
+              <code>cancelling</code>. <code>cancel</code> waits up to 20 seconds for that, and exits 1 when there was
+              nothing to cancel or a review did not stop in time. Triggers leave a cancelled commit alone, while{' '}
+              <code>run</code>, a mention, or <code>r</code> in the TUI reviews it again.
+            </p>
+            <Note title="Restart the daemon after upgrading">
+              A daemon started before cancel existed ignores the request, so its reviews keep running. Run{' '}
+              <code>review-relay restart</code> once after upgrading.
+            </Note>
             <h3>Preview or force a route</h3>
             <Snippet
               label="Explain routing without running agents"

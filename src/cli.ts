@@ -31,7 +31,7 @@ import { describeStats, diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
 import { openPrForCommit, prAuthor, prHead, resolveJob } from './github.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
-import { busyLocal, localTag, localTarget, reviewLocal } from './local.ts';
+import { busyLocal, localJobsIn, localTag, localTarget, reviewLocal } from './local.ts';
 import { renderMarkdown } from './markdown.ts';
 import { MCP_DEPS, serveMcp } from './mcp.ts';
 import { renderDaemon, renderInfo } from './overview.ts';
@@ -42,10 +42,11 @@ import { RUNNER_DEPS, runReview } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
-import { StateStore } from './state.ts';
+import { activeJob, jobTarget, StateStore, type JobRecord } from './state.ts';
 import { paginate, renderStatus } from './status.ts';
 import { tui } from './tui.ts';
-import { jobKey, type JobSource } from './types.ts';
+import { exec } from './exec.ts';
+import { isLocal, jobKey, type JobSource } from './types.ts';
 import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
 import { mergeFindings } from './verdict.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
@@ -446,6 +447,56 @@ async function runOnce(
   await scheduler.idle();
 }
 
+/** How long `cancel` waits for the processes running the reviews to stop them. */
+const CANCEL_WAIT_MS = 20_000;
+
+/**
+ * Cancels queued and running reviews: the PR's with --repo and --pr, else the local reviews running in this checkout
+ * (of one branch with --head). The process running each one stops its reviewers and records it `cancelled`; this
+ * waits for that, and exits 1 when there was nothing to cancel or a review didn't stop in time.
+ */
+async function cancel(config: Config, opts: Options) {
+  const state = new StateStore(join(config.dataDir, 'state.json'));
+  let jobs: JobRecord[];
+  let what: string;
+  if (opts.repo !== undefined || opts.pr !== undefined) {
+    if (opts.repo === undefined || opts.pr === undefined) {
+      return fail('cancel takes --repo and --pr together, or neither to cancel a local review in this checkout');
+    }
+    if (opts.head !== undefined) return fail('--head names a local review; drop --repo and --pr to use it');
+    const repo = findRepo(config, opts.repo);
+    if (!repo) return fail(unknownRepo(config, opts.repo));
+    const pr = positiveInt('--pr', opts.pr, 1);
+    jobs = state.list().filter((r) => activeJob(r) && !isLocal(r) && r.repo === repo.fullName && r.pr === pr);
+    what = `${repo.fullName} #${pr}`;
+  } else {
+    const top = await exec(['git', 'rev-parse', '--show-toplevel']);
+    if (top.code !== 0) return fail('run cancel in the checkout a local review runs in, or pass --repo and --pr');
+    const dir = top.stdout.trim();
+    jobs = localJobsIn(state.list(), dir, opts.head);
+    what = opts.head ? `branch ${opts.head} in ${tildify(dir)}` : tildify(dir);
+  }
+  const title = (job: JobRecord) => `${job.repo} ${jobTarget(job)} @ ${job.headSha.slice(0, 8)}`;
+  const asked = jobs.filter((job) => state.requestCancel(job.key));
+  if (asked.length === 0) {
+    warn(`nothing to cancel: no queued or running review of ${what}`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(st.muted(`cancelling ${asked.map(title).join(', ')}... `));
+  const deadline = Date.now() + CANCEL_WAIT_MS;
+  while (Date.now() < deadline && asked.some((job) => state.isActive(job.key))) await Bun.sleep(250);
+  console.log();
+  for (const job of asked) {
+    const now = state.get(job.key);
+    if (now?.status === 'cancelled') ok(`cancelled ${title(job)}`);
+    else if (now && activeJob(now)) {
+      warn(`${title(job)} is still ${now.status}; pid ${now.pid} has not stopped it yet (an older daemon? restart it)`);
+      process.exitCode = 1;
+    } else warn(`${title(job)} finished as ${now?.status ?? 'unknown'} before it could stop`);
+  }
+}
+
 /**
  * Aborts on ctrl-c or SIGTERM, so the reviewers stop and the worktree is removed; a second ctrl-c quits at once.
  * `release` removes the handlers.
@@ -554,6 +605,10 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
   if (signal.aborted) {
     note(err.badge('warning', 'interrupted; no report written'));
     process.exit(130);
+  }
+  if (outcome.cancelled) {
+    note(err.badge('warning', 'cancelled; no report written'));
+    process.exit(1);
   }
 
   const results = outcome.results ?? [];
@@ -717,6 +772,7 @@ const COMMANDS = [
   'logs',
   'run',
   'review',
+  'cancel',
   'route',
   'replay',
   'mcp',
@@ -780,6 +836,8 @@ async function main() {
       return runOnce(config, opts.repo, opts.pr, opts.route, opts.head);
     case 'review':
       return reviewBranch(config, configPath, opts);
+    case 'cancel':
+      return cancel(config, opts);
     case 'route':
       return explain(config, opts.repo, opts.pr, opts.source);
     case 'replay':

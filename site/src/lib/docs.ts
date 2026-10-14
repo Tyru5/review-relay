@@ -166,7 +166,7 @@ export const COMMANDS: ReferenceRow[] = [
   [
     'tui',
     'No flags',
-    'Live terminal view of the jobs, local reviews included. Enter opens scores, findings, and the posted comment; r re-reviews a PR or branch, o opens the PR, / filters.',
+    'Live terminal view of the jobs, local reviews included. Enter opens scores, findings, and the posted comment; r re-reviews a PR or branch, c cancels a running review, o opens the PR, / filters.',
   ],
   ['logs', '[N], -f, --follow', 'Read the last N log lines, default 50. Use -f to follow new output.'],
   [
@@ -178,6 +178,11 @@ export const COMMANDS: ReferenceRow[] = [
     'review',
     '[-d] [--base <ref>] [--head <ref>] [--route <name> | --reviewers <ids>] [--min-score <n>] [--json]',
     'Score the checked-out branch before opening a PR. Prints the report and exits 1 under --min-score, or with -d runs in the background and shows in tui. Posts nothing.',
+  ],
+  [
+    'cancel',
+    '[--repo <owner/name> --pr <n>] [--head <branch>]',
+    'Cancel the PR’s queued or running reviews, or with neither flag the local reviews running in this checkout. The reviewers stop, nothing is posted, and the job is recorded as cancelled.',
   ],
   [
     'route',
@@ -234,7 +239,7 @@ export const MCP_TOOLS: ReferenceRow[] = [
   [
     'list_reviews',
     'repo, pr, status, limit',
-    'Recent jobs, newest first, with status, score, finding counts, and cost. status is queued, running, done, failed, skipped, or superseded.',
+    'Recent jobs, newest first, with status, score, finding counts, and cost. status is queued, running, done, failed, skipped, superseded, or cancelled.',
   ],
 ];
 
@@ -250,8 +255,9 @@ export const TUI_KEYS: ReferenceRow[] = [
   ['l', 'Any', 'Follow the job’s lines from the daemon log as they arrive.'],
   ['L', 'Any', 'The whole daemon log.'],
   ['/', 'Job list', 'Filter by repo, PR, commit, status, source, route, or error text.'],
-  ['s', 'Job list', 'Cycle the status filter: queued, running, done, failed, skipped, superseded, all.'],
+  ['s', 'Job list', 'Cycle the status filter: queued, running, done, failed, skipped, superseded, cancelled, all.'],
   ['r', 'Any', 'Review the PR, or a local review’s branch, again in the background. Asks first.'],
+  ['c', 'Any', 'Cancel a queued or running review. Asks first; its reviewers stop and nothing is posted.'],
   ['o', 'Any', 'Open the PR in the browser.'],
   ['y', 'Any', 'Copy the PR’s URL.'],
   ['t', 'Any', 'Cycle the theme: dark, light, terminal. Saved to the config without restarting the daemon.'],

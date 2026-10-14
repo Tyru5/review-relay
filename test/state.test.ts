@@ -220,3 +220,27 @@ test('a lock whose owner is gone is taken over; a live owner’s lock is waited 
     await child.exited;
   }
 });
+
+test('a cancel request reaches the store running the job, survives its next write, and ends with the job', () => {
+  const path = statePath();
+  const daemon = new StateStore(path);
+  const cli = new StateStore(path);
+  daemon.queue(job('pr'));
+  expect(cli.requestCancel('pr')).toBe(true);
+  expect(daemon.cancelsAmong(['pr', 'other'])).toEqual(['pr']);
+  // The daemon's own copy of the record predates the request, so starting the job must not write it away.
+  daemon.begin('pr');
+  expect(cli.cancelsAmong(['pr'])).toEqual(['pr']);
+  expect(cli.get('pr')).toMatchObject({ status: 'running', cancelRequested: true });
+  daemon.finish('pr', { status: 'cancelled' });
+  expect(cli.get('pr')).toMatchObject({ status: 'cancelled' });
+  expect(cli.get('pr')?.cancelRequested).toBeUndefined();
+  // Automatic triggers leave a cancelled commit alone; a finished job has nothing to cancel.
+  expect(cli.isHandled('pr')).toBe(true);
+  expect(cli.requestCancel('pr')).toBe(false);
+
+  // Nor does a job whose process died, or one never recorded.
+  writeFileSync(path, JSON.stringify([{ ...job('dead'), status: 'running', startedAt: now(), pid: gonePid() }]));
+  expect(cli.requestCancel('dead')).toBe(false);
+  expect(cli.requestCancel('missing')).toBe(false);
+});

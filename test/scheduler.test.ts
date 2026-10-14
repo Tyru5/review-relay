@@ -622,6 +622,7 @@ describe('stale commits and the queue', () => {
       state,
       graceMs: 0,
       maxConcurrent: opts.maxConcurrent,
+      cancelPollMs: 5,
       resolve: async (j) => ({ ...j, headSha: SHA, baseRef: 'main' }),
       findPr: async () => null,
       prHead: async (j) => heads.get(j.pr) ?? j.headSha,
@@ -725,6 +726,32 @@ describe('stale commits and the queue', () => {
     await t.scheduler.idle();
     expect(t.runs).toHaveLength(3);
     expect([A, B, C].map((sha) => t.status(sha)?.status)).toEqual(['done', 'done', 'done']);
+  });
+
+  test('a cancel request stops a running review and drops a queued one, and the slot passes on', async () => {
+    const [A, B, C] = ['a', 'b', 'c'].map((c) => c.repeat(40)) as [string, string, string];
+    const t = gated({ maxConcurrent: 1 });
+    t.start(1, A);
+    t.start(2, B);
+    t.start(3, C);
+    await settle();
+    expect(t.runs.map((r) => r.headSha)).toEqual([A]);
+    const key = (sha: string) => t.status(sha)!.key;
+    expect(t.state.requestCancel(key(B))).toBe(true);
+    expect(t.state.requestCancel(key(A))).toBe(true);
+    await Bun.sleep(40);
+    expect(t.signals.get(A)?.aborted).toBe(true);
+    expect([A, B].map((sha) => t.status(sha)?.status)).toEqual(['cancelled', 'cancelled']);
+    // C gets the slot A gave up; B, cancelled while it waited, never ran and held none.
+    expect(t.runs.map((r) => r.headSha)).toEqual([A, C]);
+    t.finish(C);
+    await t.scheduler.idle();
+    expect(t.status(C)?.status).toBe('done');
+    expect(t.state.requestCancel(key(C))).toBe(false);
+    // A bot starting on a cancelled commit again leaves it alone.
+    t.start(1, A);
+    await t.scheduler.idle();
+    expect(t.runs).toHaveLength(2);
   });
 
   test('a queued commit whose PR moved on while it waited is dropped when its turn comes', async () => {
