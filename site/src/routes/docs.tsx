@@ -709,7 +709,9 @@ function Docs() {
             </p>
             <p>
               Reports and daemon logs can contain source code and findings. Protect <code>dataDir</code> accordingly.
-              Stop the daemon normally so the forwarders can remove their temporary repository webhooks.
+              GitHub removes each forwarder’s temporary repository webhook as soon as the forwarder’s connection closes.
+              On macOS and Linux, stopping the daemon leaves none behind; on Windows, end any leftover{' '}
+              <code>gh webhook forward</code> processes by hand.
             </p>
           </Section>
 
@@ -770,8 +772,11 @@ function Docs() {
                 starting again.
               </p>
               <p>
-                Forced exits and Windows shutdown can leave temporary webhooks behind. Inspect the repository’s Settings
-                → Webhooks and remove only hooks you can identify as stale relay forwarders.
+                A forwarder that outlives its daemon, after a crash or a forced stop, keeps its temporary webhook until
+                its connection closes: end the <code>gh webhook forward</code> process by hand; GitHub drops its webhook
+                within a second, and a forwarder standing by picks it up on its next try. A forwarder started while
+                another instance holds the repository logs that it is standing by and tries again every 30 seconds;{' '}
+                <code>status</code> shows it as <code>standby</code>.
               </p>
             </details>
             <details>

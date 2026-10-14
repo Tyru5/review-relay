@@ -40,7 +40,7 @@ GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` 
 - The TUI shows each PR's GitHub state (open, closed, merged), switches themes (dark, light, terminal) with `t`, and fits terminals down to 40 × 10 by panning wide rows sideways.
 - Distributed as standalone binaries attached to GitHub Releases at https://github.com/Tyru5/review-relay/releases (macOS and glibc Linux on x64/arm64, Windows x64), installed with `curl ... | bash` or `irm ... | iex`. Versions are published by tagging `v*.*.*`.
 - Code is sent to whichever providers the user's chosen agents and models use; the site must never claim code stays on the machine.
-- Windows: daemon shutdown may not clean up temporary repo webhooks.
+- Windows: a stopped daemon may leave its `gh webhook forward` processes running, and GitHub keeps their temporary repo webhooks until they exit.
 - Free to use and open source; installs and the site both point at the GitHub repo, so it must stay public.
 
 ## Brand Commitments

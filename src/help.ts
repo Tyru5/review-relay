@@ -37,7 +37,7 @@ export const HELP_GROUPS: Group[] = [
         args: '[-d]',
         summary: 'Watch the configured repos and review PRs as triggers arrive',
         detail: [
-          'Runs the webhook server on 127.0.0.1 and one `gh webhook forward` per repo. Each forwarder creates a temporary repo webhook and deletes it on shutdown.',
+          'Runs the webhook server on 127.0.0.1 and one `gh webhook forward` per repo. Each forwarder creates a temporary repo webhook, which GitHub removes when the forwarder exits. A forwarder started while another instance holds the repo stands by until the webhook is free.',
           'In the foreground, logs stream to the terminal until ctrl-c. With -d the daemon runs in the background and logs to <dataDir>/daemon.log.',
         ],
         options: [{ flag: '-d, --detach', description: 'Run in the background and print the status' }],
@@ -45,8 +45,10 @@ export const HELP_GROUPS: Group[] = [
       },
       {
         name: 'stop',
-        summary: 'Stop the background daemon and remove its temporary webhooks',
-        detail: ['Sends SIGTERM so the daemon can delete its repo webhooks; forces the exit after 20s.'],
+        summary: 'Stop the background daemon',
+        detail: [
+          "Sends SIGTERM for a clean exit and forces it after 20s; GitHub drops each forwarder's temporary webhook as it exits.",
+        ],
         examples: ['review-relay stop'],
       },
       {

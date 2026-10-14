@@ -219,7 +219,7 @@ Installed binary (`review-relay`) or repo checkout (`bun src/cli.ts`); both take
 ```sh
 review-relay start                                  # watch all configured repos in the foreground
 review-relay start -d                               # same, as a background daemon (pid + log in dataDir)
-review-relay stop                                   # SIGTERM so temporary repo webhooks get deleted; forces after 20s
+review-relay stop                                   # SIGTERM for a clean exit; forces after 20s
 review-relay restart                                # stop, then start -d
 review-relay status [--limit N] [--page N]          # daemon (pid, uptime, endpoint, health), forwarders, jobs (20/page); exit 3 if stopped
 review-relay cost [--repo owner/name] [--pr N]     # what each review cost, per reviewer, with totals; --json for scripts
@@ -346,6 +346,8 @@ git tag v0.2.0 && git push origin v0.2.0
 
 The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, version, and each `gh webhook forward` child), and `status`, `stop`, and `info` read that record, confirm the pid is still a review-relay process, and ping `GET /health`. `/health` also returns the daemon's pid and version in `x-review-relay-pid` / `x-review-relay-version` headers, so a daemon whose record is missing or fails the start-time check is still recognized, and `status` flags a daemon older than the installed CLI. Logs from `start -d` go to `<dataDir>/daemon.log`.
 
+Each forwarder creates a temporary repo webhook, named `cli` under the repo's Settings > Webhooks. GitHub deletes it within a second of the forwarder's connection closing, however the process ends, so a crash leaves nothing behind. A forwarder that outlives its daemon, after a crash or a forced stop, keeps the webhook until its connection closes; end the `gh webhook forward` process by hand; GitHub drops its webhook within a second, and a forwarder standing by picks it up on its next try, within 30 seconds. GitHub allows one such webhook per repo, so a forwarder started while another review-relay instance holds the repo stands by: it logs that once, tries again every 30 seconds, and logs again when it gets the webhook. `status` shows it as `standby`.
+
 From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 
 Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` (`local/<sha>/` for `review`) as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
@@ -385,7 +387,7 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 ## Limits
 
 - CodeRabbit's check-run signal is matched by app, not by check name, because CodeRabbit doesn't document the name (see [CodeRabbit](#coderabbit)). A self-hosted CodeRabbit running under a different app or bot name won't trigger reviews.
-- `gh webhook forward` is GitHub's development tool: one forwarder per repo at a time, and the machine must be online. Stop the daemon with Ctrl+C so it removes the temporary repo webhooks.
+- `gh webhook forward` is GitHub's development tool: one forwarder per repo at a time, github.com only, and the machine must be online. A forwarder started while another instance holds the repo stands by (see [Daemon control](#daemon-control)).
 - Fetching creates `refs/review-relay/pr-<n>` refs in your local clone.
 - The `maxConcurrent` limit and the one-post-per-PR lock hold within one process, so local reviews run outside the limit. A `run` started while the daemon reviews the same PR is checked against the PR head but can still post at the same moment as the daemon.
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.

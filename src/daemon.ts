@@ -346,7 +346,11 @@ export interface StopResult {
   clean: boolean;
 }
 
-/** SIGTERM so the daemon deletes its temporary webhooks; SIGKILL the daemon and forwarder groups after `graceMs`. */
+/**
+ * SIGTERM for a clean exit; SIGKILL the daemon and SIGINT its forwarder groups after `graceMs`. GitHub drops each
+ * forwarder's temporary webhook when its connection closes, so the forwarders are what matter. One that survives this
+ * keeps its webhook, and the user ends it by hand.
+ */
 export async function stopDaemon(state: DaemonState, dataDir: string, graceMs = 20_000): Promise<StopResult> {
   const pid = state.pid!;
   signal(pid, 'SIGTERM');
@@ -355,6 +359,7 @@ export async function stopDaemon(state: DaemonState, dataDir: string, graceMs = 
   const clean = !isAlive(pid);
   if (!clean) {
     signal(pid, 'SIGKILL');
+    // The daemon's exit handler never ran, so its forwarders are still up, in their own process groups.
     for (const f of state.forwarders) if (f.pid) signal(-f.pid, 'SIGINT');
   }
   // A daemon started meanwhile owns the record now; leave it alone.

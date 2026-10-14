@@ -9,7 +9,7 @@ case "$cmd" in
   start) exec bun "$ROOT/src/cli.ts" start --detach "$@" ;;
   killall)
     # Stops every daemon on the box (installed binary, worktrees, foreground runs), not just the pidfile one.
-    # SIGTERM first so forwarders remove their temporary webhooks; SIGKILL whatever is left after 10s.
+    # SIGTERM first for a clean exit; SIGKILL whatever is left after 10s. GitHub drops a forwarder's webhook as it exits.
     pat='^(\S*/)?(review-relay|bun \S*/src/cli\.ts) start'
     read -ra pids <<< "$(pgrep -f "$pat" | tr '\n' ' ')"
     ((${#pids[@]})) || { echo "no daemons running"; exit 0; }

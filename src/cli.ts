@@ -243,7 +243,7 @@ async function stop(config: Config): Promise<boolean> {
   if (result.clean) ok(`stopped (pid ${result.pid})`);
   else {
     warn(`no clean exit after 20s; killed pid ${result.pid}`);
-    warn('temporary GitHub webhooks may remain; check each repo under Settings > Webhooks');
+    warn('a gh webhook forward process that survived keeps its repo webhook; end any still running by hand');
   }
   return true;
 }
