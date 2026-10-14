@@ -29,6 +29,8 @@ export interface ForwarderInfo {
   since: string;
   /** How many times the forwarder has been respawned since the daemon started. */
   restarts: number;
+  /** Another forwarder holds this repo's hook; this one tries again every half minute. Unset in older records. */
+  standby?: boolean;
 }
 
 export interface DaemonInfo {
