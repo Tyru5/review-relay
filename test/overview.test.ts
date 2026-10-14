@@ -89,6 +89,14 @@ describe('renderDaemon', () => {
     expect(text).toContain('1 of 2 forwarders down');
   });
 
+  test('a standby forwarder is neither up nor down', () => {
+    const standby = { ...running.forwarders[1]!, standby: true };
+    const { lines } = renderDaemon({ ...running, forwarders: [running.forwarders[0]!, standby] }, opts, plain);
+    const text = lines.join('\n');
+    expect(text).toContain('● o/r            pull_request  no process • standby: another forwarder holds this repo');
+    expect(text).not.toContain('forwarders down');
+  });
+
   test('legacy daemon without a record explains the empty forwarder list', () => {
     const { lines } = renderDaemon({ ...running, version: null, forwarders: [] }, opts, plain);
     expect(lines.join('\n')).toContain('started by an older version');

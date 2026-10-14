@@ -78,17 +78,21 @@ export function renderDaemon(
     const now = opts.now ?? Date.now();
     const repoW = Math.max(...state.forwarders.map((f) => f.repo.length));
     for (const f of state.forwarders) {
-      const tone = f.alive ? 'success' : 'danger';
+      const tone = f.standby ? 'warning' : f.alive ? 'success' : 'danger';
       const meta = [
         f.pid ? `pid ${f.pid}` : 'no process',
-        f.alive ? `up ${fmtDuration(now - Date.parse(f.since))}` : 'restarting',
+        f.standby
+          ? 'standby: another forwarder holds this repo'
+          : f.alive
+            ? `up ${fmtDuration(now - Date.parse(f.since))}`
+            : 'restarting',
         f.restarts ? `${f.restarts} restart${f.restarts === 1 ? '' : 's'}` : null,
       ]
         .filter(Boolean)
         .join(' • ');
       lines.push(`  ${st.dot(tone)} ${padVisible(f.repo, repoW)}  ${st.muted(f.events)}  ${st.muted(meta)}`);
     }
-    const dead = state.forwarders.filter((f) => !f.alive).length;
+    const dead = state.forwarders.filter((f) => !f.alive && !f.standby).length;
     if (dead) lines.push(`  ${st.badge('warning', `${dead} of ${state.forwarders.length} forwarders down`)}`);
   }
   return { lines, exitCode: 0 };

@@ -974,8 +974,9 @@ function daemonLine(ctx: TuiContext, st: Styles): string {
   if (!d) return st.muted('daemon …');
   if (!d.running) return `${st.badge('danger', 'daemon stopped')}  ${st.muted('start it with review-relay start -d')}`;
   const up = d.uptimeMs === null ? '' : ` · up ${fmtDuration(d.uptimeMs)}`;
+  const standby = d.forwarders.filter((f) => f.standby).length;
   const forwarders = d.forwarders.length
-    ? ` · ${d.forwarders.filter((f) => f.alive).length}/${d.forwarders.length} forwarders`
+    ? ` · ${d.forwarders.filter((f) => f.alive && !f.standby).length}/${d.forwarders.length} forwarders${standby ? `, ${standby} standby` : ''}`
     : '';
   return `${st.badge('success', 'daemon running')}  ${st.muted(`pid ${d.pid}${up}${forwarders}`)}`;
 }
