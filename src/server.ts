@@ -38,6 +38,10 @@ export function startServer(config: Config, scheduler: Scheduler, secret: string
       if (req.method !== 'POST' || url.pathname !== '/hook') return new Response('not found', { status: 404 });
       const body = await req.text();
       if (!verifySignature(secret, body, req.headers.get('x-hub-signature-256'))) {
+        // Each daemon has its own secret, so this is usually a forwarder an earlier daemon left running.
+        console.error(
+          'rejected a /hook delivery with a bad signature; is a forwarder from an earlier daemon still running?',
+        );
         return new Response('bad signature', { status: 401 });
       }
       const event = req.headers.get('x-github-event') ?? '';
