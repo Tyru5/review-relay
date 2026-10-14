@@ -246,11 +246,7 @@ export const TUI_KEYS: ReferenceRow[] = [
     'Job',
     'Select the previous or next Details or Dimension notes section; enter or space expands or collapses it.',
   ],
-  [
-    '← →',
-    'Any',
-    'Pan a table or line wider than the screen. At the edges, → opens or moves on and ← leaves a job or the log.',
-  ],
+  ['← →', 'Any', 'Pan a table or line wider than the screen. They only pan, and stop at the edges.'],
   ['l', 'Any', 'Follow the job’s lines from the daemon log as they arrive.'],
   ['L', 'Any', 'The whole daemon log.'],
   ['/', 'Job list', 'Filter by repo, PR, commit, status, source, route, or error text.'],

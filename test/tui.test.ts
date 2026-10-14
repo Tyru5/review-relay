@@ -721,7 +721,7 @@ describe('detail view', () => {
     expect(press(ctx, ['p', 'p'], failed).selected).toBe(RUNNING.key);
     expect(press(ctx, ['p', 'p', 'p'], failed).selected).toBe(RUNNING.key);
     expect(press(ctx, ['escape'], failed).view).toBe('list');
-    expect(press(ctx, ['left'], failed).view).toBe('list');
+    expect(press(ctx, ['backspace'], failed).view).toBe('list');
   });
 
   test('shows what each reviewer cost in the list, the detail, and the status bar', () => {
@@ -1092,7 +1092,7 @@ describe('small terminals', () => {
     expect(empty).toContain('review -d');
   });
 
-  test('← → pan a table that is wider than the panel and keep their other meanings at the edges', () => {
+  test('← → pan a table that is wider than the panel and only pan, stopping at the edges', () => {
     const ctx = ctxFor(undefined, { width: 80 });
     const start = render(initialState(), ctx);
     expect(start).toMatch(/╭─ Jobs ─+ 1 of 4 · \d+ more →  \[\/] filter {3}\[s] status ─╮/);
@@ -1107,11 +1107,12 @@ describe('small terminals', () => {
     expect(panned).toContain('SCORE');
     expect(panned).not.toContain('STATUS');
     expect(panned).toMatch(/^│ ▌ /m);
-    // Past the last column → opens the job, as it does on a wide terminal; the detail starts unpanned.
+    // Held past the last column, → stays on the list instead of opening a job; enter opens it, unpanned.
     let state = once;
     while (render(state, ctx).includes('more →')) state = press(ctx, ['right'], state);
     expect(render(state, ctx)).toContain('codex: timed out');
-    const opened = press(ctx, ['right'], state);
+    expect(press(ctx, ['right', 'right', 'right'], state)).toEqual(press(ctx, ['x'], state));
+    const opened = press(ctx, ['enter'], state);
     expect(opened.view).toBe('detail');
     expect(opened.hscroll).toBe(0);
     expect(press(ctx, ['left'], once).hscroll).toBe(0);
@@ -1119,14 +1120,14 @@ describe('small terminals', () => {
     expect(press(ctx, ['down', 'right']).selected).toBe(DONE.key);
     expect(press(ctx, ['/', 'right']).hscroll).toBe(37);
     expect(render(press(ctx, ['/', 'right']), ctx)).toContain('[←→] sideways');
-    // A wide terminal shows everything, so the hint and note are absent and → opens.
+    // A wide terminal shows everything, so the hint and note are absent and → does nothing.
     const wide = ctxFor();
     expect(render(initialState(), wide)).not.toContain('sideways');
     expect(render(initialState(), wide)).not.toContain('more →');
-    expect(press(wide, ['right']).view).toBe('detail');
+    expect(press(wide, ['right'])).toEqual(press(wide, ['x']));
   });
 
-  test('the detail and log views pan too; ← at the left edge goes back and → at the right edge moves on', () => {
+  test('the detail and log views pan too, and held arrows never leave the job or the log', () => {
     const ctx = ctxFor(undefined, { width: 48, height: 24 });
     const detail = press(ctx, ['down', 'enter']);
     const text = render(detail, ctx);
@@ -1140,10 +1141,11 @@ describe('small terminals', () => {
     expect(panned.hscroll).toBeGreaterThan(0);
     expect(render(panned, ctx)).toContain('← ');
     expect(press(ctx, ['left'], panned)).toEqual({ ...panned, hscroll: 0 });
-    expect(press(ctx, ['left'], detail).view).toBe('list');
+    expect(press(ctx, ['left', 'left'], detail)).toEqual(press(ctx, ['x'], detail));
     let end = panned;
     while (render(end, ctx).includes('more →')) end = press(ctx, ['right'], end);
-    expect(press(ctx, ['right'], end).selected).toBe(FAILED.key);
+    expect(press(ctx, ['right', 'right'], end)).toEqual(press(ctx, ['x'], end));
+    expect(press(ctx, ['right'], end).selected).toBe(DONE.key);
     expect(press(ctx, ['n'], end).hscroll).toBe(end.hscroll);
 
     expect(render(press(ctx, ['L']), ctx)).toContain(' [↑↓] scroll   [←→] sideways   …   [esc] back');
@@ -1152,7 +1154,10 @@ describe('small terminals', () => {
     expect(press(ctx, ['right'], log).hscroll).toBeGreaterThan(0);
     expect(render(press(ctx, ['right'], log), ctx)).toContain('aaaaaaaa: reviewing (opened)');
     expect(render(press(ctx, ['right'], log), ctx)).not.toContain('11:00:00');
-    expect(press(ctx, ['left'], log).view).toBe('list');
+    expect(press(ctx, ['left'], log).view).toBe('log');
+    let logEnd = press(ctx, ['right'], log);
+    while (render(logEnd, ctx).includes('more →')) logEnd = press(ctx, ['right'], logEnd);
+    expect(press(ctx, ['right', 'right'], logEnd)).toEqual(press(ctx, ['x'], logEnd));
     expect(press(ctx, ['escape'], press(ctx, ['right'], log)).hscroll).toBe(0);
   });
 
@@ -1165,9 +1170,9 @@ describe('small terminals', () => {
     expect(text).toContain('STATUS');
     expect(text).not.toContain('more →');
     expect(text).not.toContain('← ');
-    // On the wide terminal the arrows have nothing to pan, so they mean what they always did there.
-    expect(press(wide, ['left'], state).view).toBe('list');
-    expect(press(wide, ['right'], state).view).toBe('detail');
+    // On the wide terminal the arrows have nothing to pan, so they stay on the list and settle the pan at 0.
+    expect(press(wide, ['left'], state)).toMatchObject({ view: 'list', hscroll: 0 });
+    expect(press(wide, ['right'], state)).toMatchObject({ view: 'list', hscroll: 0 });
     // Back on the narrow terminal the pan is clamped to what there is to see, never past the last column.
     expect(render({ ...state, hscroll: 10_000 }, narrow)).toContain('codex: timed out');
     expect(render({ ...state, hscroll: 10_000 }, narrow)).not.toContain('more →');

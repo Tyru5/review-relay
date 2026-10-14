@@ -368,16 +368,14 @@ const wrapped = (text: string, width: number, indent: string) =>
   wrapSpans([{ text }], width, styles(false), indent, indent);
 
 /**
- * Pans the view sideways when `key` is an arrow with columns hidden on that side; undefined otherwise, so at the
- * edges the arrows keep their other meanings (open, next, back). Each step is half the panel.
+ * Pans the view sideways by half the panel for an arrow, stopping at the edges. The arrows only ever pan: held past an
+ * edge, they must not open, switch, or leave a job.
  */
-function panned(state: TuiState, key: string, widest: number, inner: number): TuiState | undefined {
+function panned(state: TuiState, key: 'left' | 'right', widest: number, inner: number): TuiState {
   const max = Math.max(0, widest - inner);
   const at = Math.min(state.hscroll, max);
   const step = Math.max(8, Math.floor(inner / 2));
-  if (key === 'right' && at < max) return { ...state, hscroll: Math.min(max, at + step) };
-  if (key === 'left' && at > 0) return { ...state, hscroll: Math.max(0, at - step) };
-  return undefined;
+  return { ...state, hscroll: key === 'right' ? Math.min(max, at + step) : Math.max(0, at - step) };
 }
 
 /** The widest row of the current view and the columns it has, for panning; nothing pans in the help view. */
@@ -493,8 +491,7 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
   }
   if (key === 'left' || key === 'right') {
     const { widest, inner } = extent(state, ctx);
-    const shifted = panned(base, key, widest, inner);
-    if (shifted) return shifted;
+    return panned(base, key, widest, inner);
   }
   if (state.filtering) return filtered(base, key, ctx);
   if (key === 't') {
@@ -521,7 +518,6 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
         return { ...base, status: STATUSES[at] };
       }
       case 'enter':
-      case 'right':
         return list.length
           ? { ...base, selected: list[cursorOf(state, list)]!.key, view: 'detail', scroll: 0, details: undefined }
           : base;
@@ -573,13 +569,11 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
     const at = cursorOf(state, list);
     switch (key) {
       case 'n':
-      case 'right':
         return at < list.length - 1 ? { ...base, selected: list[at + 1]!.key, scroll: 0, details: undefined } : base;
       case 'p':
         return at > 0 ? { ...base, selected: list[at - 1]!.key, scroll: 0, details: undefined } : base;
       case 'escape':
       case 'q':
-      case 'left':
       case 'backspace':
         return { ...base, view: 'list' };
       case '?':
@@ -598,7 +592,6 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
       return { ...base, wholeLog: !state.wholeLog, follow: true, scroll: 0 };
     case 'escape':
     case 'q':
-    case 'left':
     case 'backspace':
       return { ...base, view: 'list' };
     case '?':
@@ -754,7 +747,7 @@ export const HELP_LINES: [string, string][] = [
   ['↑↓ j k', 'move · g/G top and bottom · pgup/pgdn page'],
   [
     '← →',
-    'pan a table or line that is wider than the screen; at its edges they mean what they usually do in the view (→ opens or moves on, ← leaves a job or the log)',
+    'pan a table or line that is wider than the screen; they only pan, so enter opens a job, n/p move between jobs, and esc goes back',
   ],
   ['enter', 'open the job: scores, findings, and the posted comment'],
   ['[ ]', 'previous/next Details or Dimension notes section in the comment'],
