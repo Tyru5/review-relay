@@ -156,8 +156,11 @@ function table(rows: string[], width: number, st: Styles): string[] {
 }
 
 export interface MarkdownDetails {
-  /** Source line numbers, stable when an earlier section is collapsed or the terminal is resized. */
-  collapsed?: readonly number[];
+  /**
+   * Source line numbers of the open sections, stable when an earlier section is collapsed or the terminal is
+   * resized. Unset leaves every section open.
+   */
+  open?: readonly number[];
   selected?: number;
 }
 
@@ -223,7 +226,7 @@ export function renderMarkdownView(md: string, width: number, st: Styles, detail
     const summary = /<summary>(.*?)<\/summary>/i.exec(line);
     if (summary) {
       blank();
-      const collapsed = details.collapsed?.includes(i);
+      const collapsed = details.open ? !details.open.includes(i) : false;
       const selected = details.selected === i;
       sections.push({ id: i, line: out.length });
       const lead = ' '.repeat(indent);

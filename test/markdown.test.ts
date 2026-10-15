@@ -150,7 +150,7 @@ describe('renderMarkdown', () => {
       '</details>',
       'Visible footer.',
     ].join('\n');
-    const collapsed = renderMarkdownView(md, 24, plain, { collapsed: [1], selected: 12 });
+    const collapsed = renderMarkdownView(md, 24, plain, { open: [12], selected: 12 });
     expect(collapsed.sections).toEqual([
       { id: 1, line: 0 },
       { id: 12, line: 2 },
@@ -165,12 +165,12 @@ describe('renderMarkdown', () => {
       '',
       'Visible footer.',
     ]);
-    const expanded = renderMarkdownView(md, 80, plain, { collapsed: [6], selected: 12 });
+    const expanded = renderMarkdownView(md, 80, plain, { open: [1, 12], selected: 12 });
     expect(expanded.sections.map((s) => s.id)).toEqual([1, 6, 12]);
     expect(expanded.lines.join('\n')).not.toContain('Hidden inner body.');
     expect(expanded.lines.join('\n')).toContain('Hidden outer tail.');
     expect(expanded.lines.join('\n')).toContain('› ▾ Last section with a long label');
-    expect(renderMarkdownView(md, 80, plain, { collapsed: [1, 12] }).lines).toEqual([
+    expect(renderMarkdownView(md, 80, plain, { open: [] }).lines).toEqual([
       '▸ Outer',
       '',
       '▸ Last section with a long label',

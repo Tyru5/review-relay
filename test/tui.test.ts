@@ -600,19 +600,20 @@ describe('detail view', () => {
         'Middle body.',
         '</details>',
         '<details><summary>Last</summary>',
-        ...Array.from({ length: 20 }, (_, i) => `- Last body ${i}`),
+        'Last body.',
         '</details>',
+        ...Array.from({ length: 20 }, (_, i) => `- After ${i}`),
       ].join('\n'),
     );
     const ctx = ctxFor(dir, { height: 14 });
     const detail = press(ctx, ['down', 'enter']);
     let middle = detail;
-    for (let i = 0; i < 100 && !lines(middle, ctx)[3]!.includes('▾ Middle'); i++) {
+    for (let i = 0; i < 100 && !lines(middle, ctx)[3]!.includes('▸ Middle'); i++) {
       middle = press(ctx, ['down'], middle);
     }
-    expect(lines(middle, ctx)[3]).toContain('▾ Middle');
+    expect(lines(middle, ctx)[3]).toContain('▸ Middle');
     const bottom = press(ctx, ['G'], detail);
-    expect(render(bottom, ctx)).not.toContain('▾');
+    expect(render(bottom, ctx)).not.toContain('▸');
     for (const key of [']', 'enter', 'space']) {
       for (const [state, expected] of [
         [detail, 0],
@@ -622,7 +623,7 @@ describe('detail view', () => {
       ] as const) {
         const next = press(ctx, [key], state);
         expect(next.details?.selected).toBe(expected);
-        expect(next.details?.collapsed).toEqual(key === ']' ? [] : [expected]);
+        expect(next.details?.open).toEqual(key === ']' ? [] : [expected]);
       }
     }
   });
@@ -655,34 +656,41 @@ describe('detail view', () => {
       ].join('\n'),
     );
     const ctx = ctxFor(dir, { height: 70 });
+    // Every section starts collapsed, as on GitHub; the text around them stays.
     const detail = press(ctx, ['down', 'enter']);
-    expect(render(detail, ctx)).toContain('▾ Details');
-    expect(render(detail, ctx)).toContain('First explanation.');
+    const start = render(detail, ctx);
+    expect(start).toContain('▸ Details');
+    expect(start).toContain('▸ Dimension notes');
+    expect(start).not.toContain('▾');
+    for (const body of ['First explanation.', 'First fix.', 'Second explanation.', 'Dimension explanation.']) {
+      expect(start).not.toContain(body);
+    }
+    expect(start).toContain('Second finding');
+    expect(start).toContain('After all details.');
     const first = press(ctx, [']', 'enter'], detail);
-    const collapsed = render(first, ctx);
-    expect(collapsed).toContain('▸ Details');
-    expect(collapsed).not.toContain('First explanation.');
-    expect(collapsed).not.toContain('First fix.');
-    expect(collapsed).toContain('Second explanation.');
-    expect(collapsed).toContain('Dimension explanation.');
-    expect(collapsed).toContain('After all details.');
+    const opened = render(first, ctx);
+    expect(opened).toContain('▾ Details');
+    expect(opened).toContain('First explanation.');
+    expect(opened).toContain('First fix.');
+    expect(opened).not.toContain('Second explanation.');
+    expect(opened).not.toContain('Dimension explanation.');
     const second = press(ctx, [']', 'space'], first);
-    expect(render(second, ctx)).not.toContain('Second explanation.');
-    const reopened = press(ctx, ['[', 'enter'], second);
-    expect(render(reopened, ctx)).toContain('First explanation.');
-    expect(render(reopened, ctx)).toContain('First fix.');
-    expect(render(reopened, ctx)).not.toContain('Second explanation.');
-    expect(render(press(ctx, ['n', 'p'], second), ctx)).toContain('Second explanation.');
+    expect(render(second, ctx)).toContain('Second explanation.');
+    const reclosed = press(ctx, ['[', 'enter'], second);
+    expect(render(reclosed, ctx)).not.toContain('First explanation.');
+    expect(render(reclosed, ctx)).toContain('Second explanation.');
+    // Another job, or coming back to this one, starts collapsed again.
+    expect(render(press(ctx, ['n', 'p'], second), ctx)).not.toContain('Second explanation.');
 
-    // Selection reveals off-screen summaries; collapse and resize keep the viewport in range.
+    // Selection reveals off-screen summaries; expanding and resizing keep the viewport in range.
     const small = { ...ctx, height: 14, width: 65 };
     const selected = press(small, [']'], detail);
-    expect(render(selected, small)).toContain('▾ Details');
+    expect(render(selected, small)).toContain('▸ Details');
     expect(render(selected, small)).toContain('[enter] toggle');
     const toggled = press(small, ['enter'], selected);
-    expect(render(toggled, small)).toContain('▸ Details');
-    expect(render(press(small, ['enter'], toggled), small)).toContain('First explanation.');
-    expect(render(press(ctx, ['G', 'enter'], selected), ctx)).toContain('▸ Details');
+    expect(render(toggled, small)).toContain('First explanation.');
+    expect(render(press(small, ['enter'], toggled), small)).not.toContain('First explanation.');
+    expect(render(press(ctx, ['G', 'enter'], selected), ctx)).toContain('▾ Details');
   });
 
   test('shows the job, its reviewers, the merged findings, and the comment; n/p walk the list', () => {

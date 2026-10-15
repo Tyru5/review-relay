@@ -308,7 +308,7 @@ Press `t` to cycle Dark → Light → Terminal. The header shows the current the
 
 The daemon, `run`, and local reviews all record jobs in `state.json`. Each saves only the records it changed, under a lock, and records its pid with each job. A queued or running job whose process has exited, or that started before the machine last booted, shows as failed. A local review killed before it could clean up leaves its worktree behind; the next local review of that clone removes it.
 
-Within a job, `[` and `]` select the previous or next Details or Dimension notes section and scroll it into view. Enter or Space toggles the selected section. Sections start expanded, with `▾` for expanded and `▸` for collapsed.
+Within a job, `[` and `]` select the previous or next Details or Dimension notes section and scroll it into view. Enter or Space toggles the selected section. Sections start collapsed, as on GitHub, with `▸` for collapsed and `▾` for expanded.
 
 ## Development
 

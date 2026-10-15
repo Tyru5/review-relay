@@ -567,13 +567,9 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
             ? at
             : (at + (key === ']' ? 1 : -1) + sections.length) % sections.length;
       const section = sections[index]!;
-      let collapsed = details.collapsed ?? [];
-      if (toggle) {
-        collapsed = collapsed.includes(section.id)
-          ? collapsed.filter((id) => id !== section.id)
-          : [...collapsed, section.id];
-      }
-      const next = { ...base, details: { ...details, selected: section.id, collapsed } };
+      let open = details.open ?? [];
+      if (toggle) open = open.includes(section.id) ? open.filter((id) => id !== section.id) : [...open, section.id];
+      const next = { ...base, details: { ...details, selected: section.id, open } };
       const updated = detailContent(job, ctx, styles(false), next.details);
       // Put the selected header near the top so its body is visible after expansion.
       return { ...next, scroll: Math.max(0, Math.min(section.line - 1, updated.lines.length - room(next, ctx))) };
@@ -702,7 +698,8 @@ function detailContent(job: JobRecord, ctx: TuiContext, st: Styles, details?: Tu
       detail.comment.join('\n'),
       width,
       st,
-      details?.job === cacheKey(job) ? details : undefined,
+      // Sections start collapsed, like the posted comment on GitHub.
+      { open: [], ...(details?.job === cacheKey(job) ? details : {}) },
     );
     lines.push('', st.section(heading));
     sections = comment.sections.map((s) => ({ ...s, line: s.line + lines.length }));
