@@ -33,7 +33,9 @@ GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` 
 ## Capabilities and Constraints
 
 - Trigger modes per repo: `auto`, `greptile`, `coderabbit`, `github`. Each commit is reviewed once; mentions and `run` review again. Drafts are skipped.
-- One PR comment, edited in place on later reviews, with findings linked to exact lines.
+- One PR comment, edited in place on later reviews, with findings linked to exact lines. Each finding names its dimension and, when several reviewers ran, how many agree (consensus, majority, minority, or one alone); within a severity the agreed-on ones come first.
+- Every review of a PR is tracked against the PR's last reviewed commit: findings are marked new or open since the commit they first appeared on, and earlier findings no reviewer repeated are listed as fixed. Tracked findings land in `findings.json` and come back from `get_review`.
+- `review-relay scorecard` judges each reviewer by what the PR's next commit did about its findings (addressed, attempted, ignored, or dropped without anyone acting on it), with how many of its findings were unique and acted on, how its scores lean against the panel, and cost per addressed finding.
 - `review-relay review` scores the checked-out branch against a base before any PR exists: same panel and score, nothing posted, no daemon or GitHub access needed. Runs in the foreground (prints the review; `--min-score` exits 1 under a threshold) or in the background with `-d`, tracked in `status` and the TUI.
 - `review-relay mcp` serves the same reviews to agents over the Model Context Protocol on stdio (`review_branch`, `review_pr`, `get_review`, `list_reviews`), so Claude Code, Codex, or any MCP client can score its own branch and act on the findings. Reviews run in background processes and show in `status` and the TUI.
 - Every review records what each reviewer cost; `review-relay cost` totals it per review and per reviewer, and `status` and the TUI show a cost column. Claude Code reports its own cost; Codex costs are estimated from tokens at list price; other CLIs show none yet.

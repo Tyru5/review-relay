@@ -233,9 +233,10 @@ describe('reading reviews', () => {
     const byKey = (await tool('get_review', { key: 'o/r@aaaaaaaa11' })).structuredContent;
     expect(byKey).toMatchObject({ pr: 7, status: 'done', score: 3, findingCounts: { minor: 2 } });
     expect(byKey.findings).toEqual([
-      { ...finding('Same', 3), reviewers: ['claude', 'codex'] },
-      { ...finding('Other', 40), reviewers: ['codex'] },
+      { ...finding('Same', 3), reviewers: ['claude', 'codex'], agreement: 'consensus' },
+      { ...finding('Other', 40), reviewers: ['codex'], agreement: 'single' },
     ]);
+    expect(byKey).toMatchObject({ priorSha: null, fixed: [] });
     expect(byKey.reviewers).toEqual([
       expect.objectContaining({ name: 'claude', ok: true, score: 4, summary: 'Adds b.txt.', scoreRationale: 'Small.' }),
       expect.objectContaining({ name: 'codex', ok: true, score: 3 }),

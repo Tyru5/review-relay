@@ -3,12 +3,15 @@ import { parseNumstat } from '../src/diffstats.ts';
 import { combinedScore, commentBody } from '../src/report.ts';
 import { HARNESSES } from '../src/reviewers/index.ts';
 import type { ResolvedJob, ReviewerResult } from '../src/types.ts';
+import { matchFindings, sameFinding, trackFindings } from '../src/lifecycle.ts';
 import {
+  agreementOf,
   DIMENSIONS,
   finalScore,
   findVerdictJson,
   mergeFindings,
   parseVerdict,
+  titleSimilarity,
   type Finding,
   type Verdict,
 } from '../src/verdict.ts';
@@ -78,16 +81,178 @@ describe('finalScore caps', () => {
   });
 });
 
+test('mergeFindings merges file-level findings only when their titles are alike', () => {
+  const merged = mergeFindings([
+    { reviewer: 'a', findings: [{ ...finding('minor', 'src/a.ts', null), title: 'Missing tests for retries' }] },
+    {
+      reviewer: 'b',
+      findings: [
+        { ...finding('major', 'src/a.ts', null), title: 'SQL built by string concat' },
+        { ...finding('minor', 'src/a.ts', 7), title: 'Tests missing for retries' },
+      ],
+    },
+  ]);
+  // The two file-level remarks stay apart; the one at a line merges with the alike file-level title and keeps the line.
+  expect(merged.map((f) => [f.title, f.line, f.reviewers])).toEqual([
+    ['SQL built by string concat', null, ['b']],
+    ['Missing tests for retries', 7, ['a', 'b']],
+  ]);
+});
+
 test('mergeFindings combines nearby findings across reviewers and keeps the worse severity', () => {
   const merged = mergeFindings([
     { reviewer: 'Codex', findings: [finding('minor', 'src/a.ts', 10), finding('major', 'src/b.ts', 5)] },
     { reviewer: 'Claude', findings: [finding('major', 'src/a.ts', 12), finding('minor', 'src/c.ts', null)] },
   ]);
-  expect(merged.map((f) => [f.severity, f.file, f.reviewers])).toEqual([
-    ['major', 'src/a.ts', ['Codex', 'Claude']],
-    ['major', 'src/b.ts', ['Codex']],
-    ['minor', 'src/c.ts', ['Claude']],
+  expect(merged.map((f) => [f.severity, f.file, f.reviewers, f.agreement])).toEqual([
+    ['major', 'src/a.ts', ['Codex', 'Claude'], 'consensus'],
+    ['major', 'src/b.ts', ['Codex'], 'single'],
+    ['minor', 'src/c.ts', ['Claude'], 'single'],
   ]);
+});
+
+test('mergeFindings puts the findings more reviewers agree on first within a severity, and tags the dimension', () => {
+  const tagged = { ...finding('major', 'src/b.ts', 5), dimension: 'security' as const };
+  const merged = mergeFindings([
+    { reviewer: 'a', findings: [finding('major', 'src/a.ts', 1), finding('major', 'src/b.ts', 5)] },
+    { reviewer: 'b', findings: [tagged] },
+    { reviewer: 'c', findings: [tagged] },
+  ]);
+  expect(merged.map((f) => [f.file, f.agreement, f.dimension])).toEqual([
+    ['src/b.ts', 'consensus', 'security'],
+    ['src/a.ts', 'single', undefined],
+  ]);
+});
+
+test('agreementOf: all is consensus, more than half majority, several minority, one single; one reviewer has none', () => {
+  expect(agreementOf(1, 1)).toBeUndefined();
+  expect(agreementOf(2, 2)).toBe('consensus');
+  expect(agreementOf(2, 3)).toBe('majority');
+  expect(agreementOf(1, 2)).toBe('single');
+  expect(agreementOf(1, 4)).toBe('single');
+  expect(agreementOf(2, 4)).toBe('minority');
+  expect(agreementOf(3, 6)).toBe('minority');
+});
+
+test('parseVerdict keeps a known dimension and drops an invented one', () => {
+  const raw = verdict(4, [
+    { ...finding('minor'), dimension: 'security' },
+    { ...finding('minor'), dimension: 'vibes' as never },
+  ]);
+  const [a, b] = parseVerdict(JSON.stringify(raw)).findings;
+  expect(a!.dimension).toBe('security');
+  expect(b).not.toHaveProperty('dimension');
+});
+
+test('titleSimilarity compares the words of two titles', () => {
+  expect(titleSimilarity('Missing null check on user', 'Null check missing for user input')).toBeCloseTo(4 / 6);
+  expect(titleSimilarity('Off by one', 'Race in cache eviction')).toBe(0);
+  expect(titleSimilarity('', 'x')).toBe(0);
+});
+
+describe('trackFindings', () => {
+  const merged = (f: Finding, ...reviewers: string[]) => ({ ...f, reviewers });
+  const prior = {
+    headSha: 'aaaaaaaa1111',
+    findings: [
+      merged({ ...finding('major', 'src/a.ts', 10), title: 'Missing null check on user' }, 'codex', 'claude'),
+      merged({ ...finding('minor', 'src/b.ts', 5), title: 'Unused import' }, 'codex'),
+      merged({ ...finding('minor', 'src/c.ts', 1), title: 'Typo in log' }, 'claude'),
+    ],
+  };
+
+  test('matches by title when lines moved, by spot when titles differ, and lists the rest as fixed', () => {
+    const now = [
+      // Same bug, retitled and 30 lines down.
+      merged({ ...finding('major', 'src/a.ts', 40), title: 'Null check missing for user input' }, 'claude'),
+      // Same spot, different words: still the same finding unless the dimensions disagree.
+      merged({ ...finding('minor', 'src/b.ts', 7), title: 'Dead code' }, 'codex'),
+      merged({ ...finding('critical', 'src/d.ts', 2), title: 'SQL injection' }, 'codex', 'claude'),
+    ];
+    const report = trackFindings('bbbbbbbb2222', now, prior, ['codex', 'claude']);
+    expect(report.prior).toBe('aaaaaaaa1111');
+    expect(report.findings.map((f) => [f.title, f.status, f.since])).toEqual([
+      ['Null check missing for user input', 'open', 'aaaaaaaa1111'],
+      ['Dead code', 'open', 'aaaaaaaa1111'],
+      ['SQL injection', 'new', undefined],
+    ]);
+    expect(report.fixed).toEqual([
+      {
+        severity: 'minor',
+        file: 'src/c.ts',
+        line: 1,
+        title: 'Typo in log',
+        reviewers: ['claude'],
+        since: 'aaaaaaaa1111',
+        lastSeen: 'aaaaaaaa1111',
+      },
+    ]);
+  });
+
+  test('a finding open since an earlier commit keeps that commit, and disagreeing dimensions keep two findings apart', () => {
+    const older = {
+      headSha: 'bbbbbbbb2222',
+      findings: [
+        {
+          ...merged({ ...finding('major', 'src/a.ts', 10), dimension: 'security' }, 'codex'),
+          status: 'open' as const,
+          since: 'aaaaaaaa1111',
+        },
+      ],
+    };
+    const now = [
+      merged({ ...finding('major', 'src/a.ts', 10), title: 'Totally different', dimension: 'testing' }, 'codex'),
+      merged({ ...finding('major', 'src/a.ts', 11), title: 'major issue', dimension: 'security' }, 'claude'),
+    ];
+    const report = trackFindings('cccccccc3333', now, older, ['codex', 'claude']);
+    expect(report.findings.map((f) => [f.title, f.status, f.since])).toEqual([
+      ['Totally different', 'new', undefined],
+      ['major issue', 'open', 'aaaaaaaa1111'],
+    ]);
+    expect(report.fixed).toEqual([]);
+  });
+
+  test('a prior finding whose reviewers all failed this time is carried forward, neither open nor fixed', () => {
+    const report = trackFindings('bbbbbbbb2222', [], prior, ['claude']);
+    // Claude ran and dropped its two; codex failed, so its lone finding is carried rather than called fixed.
+    expect(report.fixed.map((f) => f.title)).toEqual(['Missing null check on user', 'Typo in log']);
+    expect(report.carried).toEqual([
+      { ...prior.findings[1]!, status: 'open', since: 'aaaaaaaa1111', lastSeen: 'aaaaaaaa1111' },
+    ]);
+    // Fixed on the review after that: linked where it was last seen, not at the review that carried it.
+    const later = { headSha: 'bbbbbbbb2222', findings: [...report.findings, ...report.carried!] };
+    expect(trackFindings('cccccccc3333', [], later, ['codex']).fixed).toMatchObject([
+      { title: 'Unused import', since: 'aaaaaaaa1111', lastSeen: 'aaaaaaaa1111' },
+    ]);
+    const none = trackFindings('bbbbbbbb2222', [], prior, []);
+    expect(none.fixed).toEqual([]);
+    expect(none.carried?.map((f) => f.since)).toEqual(['aaaaaaaa1111', 'aaaaaaaa1111', 'aaaaaaaa1111']);
+  });
+
+  test('matchFindings takes title matches first, so a nearby stranger never steals a repeated finding', () => {
+    const p1 = merged({ ...finding('major', 'src/a.ts', 10), title: 'Null deref on user' }, 'codex');
+    const p2 = merged({ ...finding('minor', 'src/a.ts', 12), title: 'Unchecked index into users' }, 'codex');
+    const stranger = merged({ ...finding('major', 'src/a.ts', 11), title: 'Totally other words' }, 'codex');
+    const repeat = merged({ ...finding('major', 'src/a.ts', 40), title: 'Null pointer deref on user' }, 'codex');
+    const matches = matchFindings([p1, p2], [stranger, repeat]);
+    expect(matches.get(repeat)).toBe(p1);
+    // The stranger falls back to the nearest prior left, whichever order the lists come in.
+    expect(matches.get(stranger)).toBe(p2);
+    expect(matchFindings([p2, p1], [repeat, stranger]).get(repeat)).toBe(p1);
+  });
+
+  test('a finding without a line matches on title alone, so two general remarks are not one finding', () => {
+    const a = { ...finding('minor', 'src/a.ts', null), title: 'Missing tests for retries' };
+    const b = { ...finding('minor', 'src/a.ts', null), title: 'Commit message vague' };
+    expect(sameFinding(a, b)).toBe(false);
+    expect(sameFinding(a, { ...a, line: 5 })).toBe(true);
+    expect(sameFinding({ ...a, file: '' }, { ...b, file: '' })).toBe(false);
+  });
+
+  test('without a prior review nothing is marked', () => {
+    const report = trackFindings('x', [merged(finding('minor'), 'codex')], null, ['codex']);
+    expect(report).toEqual({ headSha: 'x', prior: null, findings: [merged(finding('minor'), 'codex')], fixed: [] });
+  });
 });
 
 test('parseNumstat counts tests and wide-impact files', () => {
@@ -175,6 +340,35 @@ describe('commentBody', () => {
     expect(body).toContain('| Blast radius | 5 | 5 |');
     expect(body).toContain(`[\`src/a.ts:10\`](https://github.com/Tyru5/Agendex/blob/${job.headSha}/src/a.ts#L10)`);
     expect(body).toContain('**Major**');
+  });
+
+  test('shows agreement, dimension, what is new or still open, and what was fixed', () => {
+    const tagged = { ...finding('major'), dimension: 'security' as const };
+    const results = [result('codex', verdict(5, [tagged])), result('claude', verdict(5, [tagged]))];
+    const merged = mergeFindings(results.map((r) => ({ reviewer: r.name, findings: r.verdict!.findings })));
+    const prior = {
+      headSha: 'aaaaaaaa1111',
+      findings: [
+        { ...finding('minor', 'src/z.ts', 1), title: 'Stale comment', reviewers: ['codex'] },
+        { ...tagged, reviewers: ['claude'], status: 'open' as const, since: '9999999900' },
+      ],
+    };
+    const tracked = trackFindings(job.headSha, merged, prior, ['codex', 'claude']);
+    const body = commentBody(job, results, stats, { tracked });
+    expect(body).toContain('### Findings (1)\n\n<sub>Since `aaaaaaaa`: 0 new · 1 still open · 1 fixed</sub>');
+    expect(body).toContain('- **Major · consensus** [`src/a.ts:10`]');
+    expect(body).toContain('_(Codex, Claude · security)_ · open since `99999999`');
+    expect(body).toContain('<details><summary>Fixed since `aaaaaaaa` (1)</summary>');
+    // Linked at the prior commit, where the fixed finding's line still exists.
+    expect(body).toContain('- ~~Minor [`src/z.ts:1`](https://github.com/Tyru5/Agendex/blob/aaaaaaaa1111/src/z.ts#L1)');
+    expect(body).toContain('Stale comment~~ _(Codex, open since `aaaaaaaa`)_');
+  });
+
+  test('marks nothing when the PR has no earlier review, and a lone reviewer gets no agreement badge', () => {
+    const body = commentBody(job, [result('claude', verdict(4, [finding('minor')]))], stats);
+    expect(body).toContain('### Findings (1)\n\n- **Minor** [`src/a.ts:10`]');
+    expect(body).not.toContain('Since `');
+    expect(body).not.toContain(' · new');
   });
 
   test('a failed reviewer is shown and excluded from the score', () => {

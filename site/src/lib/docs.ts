@@ -164,6 +164,11 @@ export const COMMANDS: ReferenceRow[] = [
     'What each finished review cost, per reviewer, with totals. Claude Code reports its own cost; Codex costs are estimated from tokens (marked ~).',
   ],
   [
+    'scorecard',
+    '[--repo <owner/name>] [--json]',
+    'How each reviewer’s findings fared on the PR’s next commit: addressed, attempted, ignored, or dropped by the reviewer itself. Judged by diffing consecutive reviewed commits in the local clone.',
+  ],
+  [
     'tui',
     'No flags',
     'Live terminal view of the jobs, local reviews included. Enter opens scores, findings, and the posted comment; r re-reviews a PR or branch, c cancels a running review, o opens the PR, / filters.',

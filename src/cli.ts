@@ -14,6 +14,7 @@ import {
   type Config,
 } from './config.ts';
 import { renderCosts, renderSpend, reviewCosts, spend } from './cost.ts';
+import { listReports, renderScorecard, renderScorecardNotes, scorecard } from './scorecard.ts';
 import {
   clearDaemonInfo,
   inspectDaemon,
@@ -351,6 +352,35 @@ function showCosts(config: Config, opts: Options) {
     ...renderCosts(page.items, { reviewers: config.reviewers, color: st.color }).map((l) => `  ${l}`),
     ...more,
     ...(reviews.length > 0 ? ['', st.section(scope ? `Total for ${scope}` : 'Total'), ...renderSpend(total, st)] : []),
+  ]);
+}
+
+async function showScorecard(config: Config, opts: Options) {
+  const reports = listReports(config.dataDir, opts.repo, pricesFor(config));
+  const card = await scorecard(config, reports);
+  if (opts.json) {
+    return console.log(
+      JSON.stringify(
+        {
+          reviews: card.reviews,
+          pairs: card.pairs,
+          unknownPairs: card.unknownPairs,
+          reviewers: card.reviewers.map(({ cost, ...s }) => ({
+            ...s,
+            costUsd: cost?.costUsd ?? null,
+            costPerAddressedUsd: cost && s.outcomes.addressed ? cost.costUsd / s.outcomes.addressed : null,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  print([
+    `${st.section('Reviewer scorecard')}${opts.repo ? `  ${opts.repo}` : ''}`,
+    ...renderScorecard(card, { color: st.color }).map((l) => `  ${l}`),
+    '',
+    ...renderScorecardNotes(card, st),
   ]);
 }
 
@@ -768,6 +798,7 @@ const COMMANDS = [
   'restart',
   'status',
   'cost',
+  'scorecard',
   'tui',
   'logs',
   'run',
@@ -828,6 +859,8 @@ async function main() {
       return showStatus(config, configPath, undefined, opts.limit, opts.page);
     case 'cost':
       return showCosts(config, opts);
+    case 'scorecard':
+      return showScorecard(config, opts);
     case 'tui':
       return tui(config, configPath, version);
     case 'logs':

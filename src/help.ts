@@ -99,6 +99,24 @@ export const HELP_GROUPS: Group[] = [
         ],
       },
       {
+        name: 'scorecard',
+        args: '[--repo <owner/name>] [--json]',
+        summary: 'How each reviewer’s findings fared on the PR’s next commit',
+        detail: [
+          'Pairs every PR review with the next review of the same PR and judges each finding of the first by the second: addressed when the next commit changed the lines it named and no reviewer reported it again, attempted when the lines changed but it came back, ignored when the lines stayed and it came back, and dropped when the lines stayed and no reviewer repeated it, which points at noise. A finding that names no file is unknown; one whose reviewers all failed on the next commit waits for a later pair.',
+          'Per reviewer it adds how many of its findings no other reviewer had and how many of those were addressed, how often others agreed, how many critical or major findings went ignored or dropped, how its score leans against the panel’s mean, and what each addressed finding cost. Reviews that no later review followed are not judged. Diffs run in the repo’s local clone; a pair whose commits are gone from it counts as unknown.',
+        ],
+        options: [
+          { flag: '--repo <owner/name>', description: 'Only reviews of this repo' },
+          { flag: '--json', description: 'Print the scorecard as JSON' },
+        ],
+        examples: [
+          'review-relay scorecard',
+          'review-relay scorecard --repo owner/repo',
+          'review-relay scorecard --json',
+        ],
+      },
+      {
         name: 'logs',
         args: '[N] [-f]',
         summary: 'Show the daemon log',

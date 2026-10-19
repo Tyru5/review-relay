@@ -1,6 +1,6 @@
 import { describeStats, type DiffStats } from './diffstats.ts';
 import { isLocal, type ResolvedJob } from './types.ts';
-import { VERDICT_SCHEMA } from './verdict.ts';
+import { DIMENSIONS, VERDICT_SCHEMA } from './verdict.ts';
 import { baseRemoteRef } from './worktree.ts';
 
 export interface PromptOptions {
@@ -45,7 +45,7 @@ Overall score (merge confidence) from 1 to 5:
 
 Findings: report only real problems. Skip style nits unless they break a documented repo rule.
 Severity: critical = will break production, security, or data; major = likely bug or significant risk; minor = small correctness or maintainability issue.
-For each finding give the file path relative to the repo root, the line in the new version (null if not line-specific), a short title, what goes wrong, and a concrete suggested fix.
+For each finding give the dimension it counts against (one of ${DIMENSIONS.join(', ')}), the file path relative to the repo root, the line in the new version (null if not line-specific), a short title, what goes wrong, and a concrete suggested fix.
 summary: two or three sentences on what the PR does and its overall state. scoreRationale: one or two sentences on why the overall score.
 ${opts.diff ? `\n${opts.diff}\n` : ''}
 ${answer}`;

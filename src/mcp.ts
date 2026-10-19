@@ -13,6 +13,7 @@ import { checkRoute, findRepo, loadConfig, pricesFor, withReviewers, type Config
 import { commandLine, isAlive, logFilePath, readRange, spawnDetached } from './daemon.ts';
 import { diffStats } from './diffstats.ts';
 import { prHead } from './github.ts';
+import type { TrackedReport } from './lifecycle.ts';
 import { localTarget } from './local.ts';
 import { pickRoute } from './routes.ts';
 import { activeJob, StateStore, type JobRecord, type JobStatus } from './state.ts';
@@ -229,9 +230,12 @@ function jobDetail(record: JobRecord, config: Config) {
       findings: (r.ok ? (file?.verdict?.findings ?? []) : []) as Finding[],
     };
   });
-  const findings = mergeFindings(
-    reviewers.filter((r) => r.ok).map((r) => ({ reviewer: r.name, findings: r.findings })),
-  );
+  // The tracked findings when the review wrote them: each marked new or open since a commit, with the fixed ones.
+  const tracked = readJson(join(dir, 'findings.json')) as TrackedReport | null;
+  const findings =
+    tracked && Array.isArray(tracked.findings)
+      ? tracked.findings
+      : mergeFindings(reviewers.filter((r) => r.ok).map((r) => ({ reviewer: r.name, findings: r.findings })));
   return {
     ...summary,
     findingCounts: summary.findings,
@@ -239,6 +243,8 @@ function jobDetail(record: JobRecord, config: Config) {
     ...(record.supersededBy ? { supersededBy: record.supersededBy } : {}),
     reviewers: reviewers.map(({ findings: _findings, ...r }) => r),
     findings,
+    priorSha: tracked?.prior ?? null,
+    fixed: tracked?.fixed ?? [],
   };
 }
 
@@ -565,7 +571,7 @@ export const TOOLS: Tool[] = [
     name: 'get_review',
     title: 'Get a review',
     description:
-      "A review's status and, once it is done, its 1-5 merge confidence score, each reviewer's score and summary, and the findings merged across reviewers (severity, file, line, detail, suggestion). Names the job by key, by repo and pr for the PR's latest review, or by neither for the most recent job. waitSeconds waits for a running review to finish.",
+      "A review's status and, once it is done, its 1-5 merge confidence score, each reviewer's score and summary, and the findings merged across reviewers (severity, dimension, file, line, detail, suggestion, which reviewers agree, and whether each is new or still open since an earlier commit of the PR, plus the prior findings now fixed). Names the job by key, by repo and pr for the PR's latest review, or by neither for the most recent job. waitSeconds waits for a running review to finish.",
     inputSchema: {
       type: 'object',
       properties: {

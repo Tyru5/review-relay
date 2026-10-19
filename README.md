@@ -223,6 +223,7 @@ review-relay stop                                   # SIGTERM for a clean exit; 
 review-relay restart                                # stop, then start -d
 review-relay status [--limit N] [--page N]          # daemon (pid, uptime, endpoint, health), forwarders, jobs (20/page); exit 3 if stopped
 review-relay cost [--repo owner/name] [--pr N]     # what each review cost, per reviewer, with totals; --json for scripts
+review-relay scorecard [--repo owner/name]          # how each reviewer's findings fared on the PR's next commit; --json for scripts
 review-relay tui                                    # live job list; enter opens a job, r re-reviews, c cancels, o opens the PR, / filters
 review-relay logs [N] [-f]                          # last N daemon log lines (default 50); -f follows
 review-relay run --repo owner/name --pr 123         # review an open PR now
@@ -249,6 +250,30 @@ Every review records what each reviewer spent in its report's `meta.json` (`revi
 - **Codex** reports only tokens (`codex exec --json`), so the cost is those tokens at the model's list price, marked `~`. Built-in prices cover `gpt-6-astra`, `gpt-6-sol`, `gpt-6.1-sol`, and `gpt-6-luna`; `pricing` in the config adds models or changes a price. Long-context surcharges aren't modeled. The price is applied when the review runs, so a later change leaves earlier costs as they were; a run whose model had no price then is priced when it is read, so adding a price covers earlier reviews too.
 - Other CLIs don't report usage yet, so their columns show `-`, and a total that leaves out a run with no cost (one that timed out, for example) is marked `+`.
 - A re-review of the same commit replaces its report, cost included, so `cost` counts the latest run of each commit. Reviews from before costs were recorded show `-`.
+
+### Finding history
+
+A PR usually gets reviewed more than once, and the second comment should say what changed, not restate the first. Every review of a PR is tracked against the PR's last reviewed commit (for `review`, against the branch's last local review): each merged finding is marked **new** or **open since** the commit it was first reported on, and the earlier findings no reviewer reported again are listed as **fixed**. The comment gets a line under the findings heading, `Since abc12345: 2 new · 1 still open · 3 fixed`, each finding's status after its reviewers, and a collapsed list of the fixed ones. The first review of a PR marks nothing.
+
+Two findings count as the same when they name the same file and either their titles are alike (the words of three or more letters they share make up at least half of all the words in both, a Jaccard similarity of 0.5), or both name lines within 3 of each other and their dimensions don't disagree (a finding without a line matches on title alone). Lines move as commits land, so the title carries the most weight. Pairs are taken most alike in title first, so a finding that merely sits near another never takes the one that repeats its title. It is a heuristic: a reviewer that re-describes a problem beyond recognition shows it as one fixed and one new, and when a route drops one of the reviewers that agreed on a finding, the remaining one not repeating it reads as a fix. A prior finding counts as fixed only when a reviewer that reported it succeeded this time; one whose reviewers all failed is carried forward unshown, open since the same commit, until a reviewer that reported it runs again, and a review where every reviewer failed is passed over as a prior. Fixed findings link to the commit they were last reported on, where their lines still exist. Reviews are ordered by when they finished, so a force-push back to an earlier commit reads as a change from the later one.
+
+The tracked findings land in the report as `findings.json`, next to `meta.json`, and `get_review` over MCP returns them with their `status`, `since`, and the `fixed` list, so an agent can act on what is new.
+
+### Reviewer scorecard
+
+`review-relay scorecard` judges the reviewers by what the PRs did about their findings. It pairs every PR review with the next review of the same PR, diffs the two commits in the repo's local clone, and sorts each finding of the first review into:
+
+| Outcome | The next commit... |
+| - | - |
+| addressed | changed the lines the finding named, and no reviewer reported it again |
+| attempted | changed those lines, but a reviewer reported it again |
+| ignored | left those lines alone, and a reviewer reported it again |
+| dropped | left those lines alone, and no reviewer repeated it: the finding was probably noise |
+| unknown | can't be told: the commits can't be diffed, or the finding names no file |
+
+A finding without a line counts its whole file, and a change within 3 lines of a finding's line counts as its lines. A review where every reviewer failed is skipped, so the reviews either side of it are paired. A finding whose reviewers all failed on the next commit is not judged there; the review carries it forward (see [Finding history](#finding-history)) and the pair where one of them runs again judges it, so the scorecard and the comment judge the same findings. Per reviewer the table shows its findings and their outcomes, how many of them no other reviewer had (and how many of those were addressed), how often another reviewer agreed, how many critical or major findings went ignored or dropped, how its score leans against the panel's mean (`+0.5` means half a point more generous), and what each addressed finding cost, from the costs `cost` tracks. Under the table it flags a reviewer that drops most of its own findings, one whose unique findings never get addressed, and one whose severe findings mostly go nowhere. Use it to pick which reviewers earn their place on a [route](#routing).
+
+A review that no later review of its PR followed is not judged, since nothing says what became of its findings. A pair whose commits are gone from the clone, or whose repo is not in the config, counts its findings as unknown. Reviews pair in the order they finished, so a force-push back to an earlier commit is judged as if it came after. `--repo` narrows it; `--json` prints it all.
 
 ### Reviewing before a PR
 
@@ -289,7 +314,7 @@ Other clients take the same command in their MCP config, such as `{"mcpServers":
 | - | - |
 | `review_branch` | Starts a [local review](#reviewing-before-a-pr) of a checkout's branch, like `review -d`: `path` (default: the directory the client started the server in), `base`, `head`, and `route` or `reviewers`. Posts nothing. |
 | `review_pr` | Starts a review of an open PR in a configured repo, like `run`: `repo`, `pr`, and `route`. Posts the comment when the repo has `postToPr` on. |
-| `get_review` | A job's status and, once it finishes, its score, each reviewer's score, summary, and dimension notes, and the merged findings with file, line, detail, and suggestion. Names the job by `key`, by `repo` and `pr` for the PR's latest review, or by neither for the newest job. |
+| `get_review` | A job's status and, once it finishes, its score, each reviewer's score, summary, and dimension notes, and the merged findings with dimension, file, line, detail, suggestion, which reviewers agree, and whether each is new or open since an earlier commit, plus the prior findings now fixed (see [Finding history](#finding-history)). Names the job by `key`, by `repo` and `pr` for the PR's latest review, or by neither for the newest job. |
 | `list_reviews` | Recent jobs, newest first, with status, score, finding counts, and cost; filters by `repo`, `pr`, and `status`. |
 
 - A review takes minutes, longer than many clients wait for one tool call, so the start tools return the job's `key` at once and a background process runs the review, as `review -d` and the TUI's `r` do. Until that process records the job, its status is `starting`. `get_review` with `waitSeconds` (up to 600) waits for it to finish, through `starting` too; the start tools take `waitSeconds` as well. A process that exits before recording the job fails the call with the lines it logged. While it waits, the server sends progress notifications to clients that ask for them.
@@ -350,7 +375,7 @@ Each forwarder creates a temporary repo webhook, named `cli` under the repo's Se
 
 From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 
-Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` (`local/<sha>/` for `review`) as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
+Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` (`local/<sha>/` for `review`) as `comment.md`, one `<id>.json` per reviewer, `findings.json`, and `meta.json`.
 
 ## How a review runs
 
@@ -382,7 +407,9 @@ Each reviewer reads the repo's own standards (AGENTS.md, CLAUDE.md, CONTRIBUTING
 
 The reviewer also gives an overall merge confidence (5 = merge as is, 4 = minor issues, 3 = fix before merging, 2 = critical issue or wide blast radius with weak tests, 1 = should not merge). Code then applies caps so the number matches the findings: a critical finding limits it to 2, a major finding to 3, and it can be at most one above the weakest dimension.
 
-The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Local copies land in the report directory as `comment.md`, one `<id>.json` per reviewer, and `meta.json`.
+Each finding names the dimension it counts against, so a reviewer's findings can be read next to its scores.
+
+The PR comment headline is the lowest score among reviewers that succeeded. It also shows each reviewer's score, the dimension table, findings merged across reviewers (with links to the exact lines at the reviewed commit), and dimension notes. Findings that several reviewers reported on the same spot (same file, lines within 3; a finding without a line merges only with one whose title is alike) merge into one with the worst severity reported, and when more than one reviewer ran, each finding carries how many agree: **consensus** when every reviewer reported it, **majority** when more than half did, **minority** when more than one but half or fewer did, and no badge when one reviewer alone did. Agreement is a signal, not proof: models share blind spots, and a finding one reviewer alone caught is often the one worth reading first. Within a severity, the findings more reviewers agree on come first. Local copies land in the report directory as `comment.md`, one `<id>.json` per reviewer, `findings.json` with the merged findings and their [history](#finding-history), and `meta.json`.
 
 ## Limits
 

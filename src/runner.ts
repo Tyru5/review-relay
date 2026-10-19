@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { pricesFor, type Config, type RepoConfig, type ReviewerEntry } from './config.ts';
 import { diffStats, promptDiff, type DiffStats } from './diffstats.ts';
 import { prHead, upsertComment } from './github.ts';
+import { priorReview, trackFindings } from './lifecycle.ts';
 import { reviewPrompt } from './prompt.ts';
 import { commentBody, routeLine, writeReport } from './report.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
@@ -10,7 +11,7 @@ import type { Harness, ReviewerInput } from './reviewers/types.ts';
 import { pickRoute, type RouteChoice } from './routes.ts';
 import { isLocal, type HarnessName, type ResolvedJob, type ReviewerId, type ReviewerResult } from './types.ts';
 import { priced, type Price } from './usage.ts';
-import { finalScore, VERDICT_SCHEMA } from './verdict.ts';
+import { finalScore, mergeFindings, VERDICT_SCHEMA } from './verdict.ts';
 import { baseRemoteRef, fetchPr, withCheckout, workName } from './worktree.ts';
 
 /** What a review touches outside its own logic: the CLIs, git, and GitHub. Tests stand in for them. */
@@ -217,8 +218,17 @@ export async function runReview(
 
   // The routing line shows only for configs that route, so a config without routes keeps its comment as it was.
   const routing = config.routes.length > 0 ? routeLine(pick.route, results) : undefined;
-  const body = commentBody(job, results, stats, routing);
-  const reportDir = await writeReport(config.dataDir, job, results, body, pick.route);
+  // Tracked against the PR's last reviewed commit, so the comment says what is new, still open, and fixed.
+  const ok = results.filter((r) => r.ok && r.verdict);
+  const merged = mergeFindings(ok.map((r) => ({ reviewer: r.name, findings: r.verdict!.findings })));
+  const tracked = trackFindings(
+    job.headSha,
+    merged,
+    priorReview(config.dataDir, job),
+    ok.map((r) => r.name),
+  );
+  const body = commentBody(job, results, stats, { routing, tracked });
+  const reportDir = await writeReport(config.dataDir, job, results, body, pick.route, tracked);
   if (results.every((r) => !r.ok)) {
     throw new Error(`all reviewers failed (${results.map((r) => `${r.name}: ${r.error}`).join('; ')})`);
   }

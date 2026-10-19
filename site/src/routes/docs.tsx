@@ -636,7 +636,7 @@ function Docs() {
             <Snippet
               label="Report directory"
               code={
-                '<dataDir>/reports/<owner__repo>/pr-<number>/<sha8>/\n  comment.md\n  <reviewer-id>.json\n  meta.json\n<dataDir>/reports/<owner__repo>/local/<sha8>/   # review, before a PR'
+                '<dataDir>/reports/<owner__repo>/pr-<number>/<sha8>/\n  comment.md\n  <reviewer-id>.json\n  findings.json\n  meta.json\n<dataDir>/reports/<owner__repo>/local/<sha8>/   # review, before a PR'
               }
             />
             <p>
@@ -650,6 +650,35 @@ function Docs() {
               One failed reviewer does not cancel the others. A partial result can publish with the failure noted. If
               all reviewers fail, local reports are saved but no comment is posted, and the job fails. A publishing
               failure also leaves the local report available.
+            </p>
+            <h3>Agreement, history, and a scorecard</h3>
+            <p>
+              Each finding names the dimension it counts against. Findings several reviewers reported on the same spot
+              merge into one with the worst severity, badged <strong>consensus</strong> when every reviewer had it and{' '}
+              <strong>majority</strong> when more than half did, and <strong>minority</strong> when more than one but
+              half or fewer did; a finding one reviewer alone caught carries no badge, and is often the one worth
+              reading first. Within a severity, the agreed-on findings come first.
+            </p>
+            <p>
+              A PR’s later reviews are tracked against its last reviewed commit: the comment says how many findings are
+              new, still open since the commit they first appeared on, and fixed (reported before, repeated by no
+              reviewer now), with the fixed ones in a collapsed list. Two findings match when they name the same file
+              and their titles are alike, or both name lines within 3 of each other and their dimensions don’t disagree.
+              The tracked findings are <code>findings.json</code>, and <code>get_review</code> returns them.
+            </p>
+            <Snippet
+              label="Judge the reviewers by what the next commit did"
+              code={'review-relay scorecard\nreview-relay scorecard --repo acme/widget --json'}
+            />
+            <p>
+              <code>scorecard</code> pairs each PR review with the next review of the same PR, diffs the two commits in
+              the local clone, and sorts each finding: <strong>addressed</strong> (its lines changed, nobody reported it
+              again), <strong>attempted</strong> (lines changed, reported again), <strong>ignored</strong> (lines
+              unchanged, reported again), or <strong>dropped</strong> (lines unchanged, no reviewer repeated it: likely
+              noise); a finding that names no file is unknown, and one whose reviewers all failed next time waits for a
+              later pair. Per reviewer it adds how many findings were its alone and acted on, how often others agreed,
+              how many critical or major findings went nowhere, how its scores lean against the panel, and the cost per
+              addressed finding. Reviews nothing followed are not judged.
             </p>
             <h3>What a review cost</h3>
             <Snippet

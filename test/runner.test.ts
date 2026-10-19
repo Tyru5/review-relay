@@ -103,6 +103,51 @@ describe('runReview', () => {
     expect(t.calls[0]!.scratchDir).toContain(`-local${process.pid}-1e210c5c`);
   });
 
+  test('a second review of a PR tracks its findings against the first and writes findings.json', async () => {
+    const t = setup({ reviewers: ['claude'] });
+    const first = await runReview(job, t.repo, t.config, t.deps);
+    const firstTracked = JSON.parse(readFileSync(join(first.reportDir!, 'findings.json'), 'utf8'));
+    expect(firstTracked).toMatchObject({ headSha: job.headSha, prior: null, fixed: [] });
+    expect(first.comment).not.toContain('Since `');
+
+    // The next commit: the off-by-one is gone, and a new finding shows up.
+    const fake = t.deps.harnesses.claude;
+    t.deps.harnesses.claude = {
+      ...fake,
+      run: async (input) => {
+        const out = await fake.run(input);
+        const v: Verdict = {
+          ...verdict,
+          findings: [
+            {
+              severity: 'major',
+              dimension: 'security',
+              file: 'src/b.ts',
+              line: 8,
+              title: 'Unescaped input',
+              detail: 'd',
+              suggestion: 's',
+            },
+          ],
+        };
+        return { ...out, verdict: v };
+      },
+    };
+    const next: ResolvedJob = { ...job, headSha: '2f3e4d5c6b7a8f9e0d1c2b3a4f5e6d7c8b9a0f1e' };
+    t.deps.prHead = async () => next.headSha;
+    const second = await runReview(next, t.repo, t.config, t.deps);
+    expect(second.comment).toContain('<sub>Since `1e210c5c`: 1 new · 0 still open · 1 fixed</sub>');
+    expect(second.comment).toContain('Unescaped input _(Claude · security)_ · new');
+    expect(second.comment).toContain('- ~~Minor [`src/a.ts:3`]');
+    const tracked = JSON.parse(readFileSync(join(second.reportDir!, 'findings.json'), 'utf8'));
+    expect(tracked).toMatchObject({
+      prior: job.headSha,
+      findings: [{ title: 'Unescaped input', status: 'new', reviewers: ['claude'] }],
+      fixed: [{ title: 'Off by one', since: job.headSha, reviewers: ['claude'] }],
+    });
+    expect(t.posts).toHaveLength(2);
+  });
+
   test('records each reviewer’s usage, priced at review time when the CLI reports no cost', async () => {
     const t = setup({
       reviewers: ['codex', 'claude', 'pro'],

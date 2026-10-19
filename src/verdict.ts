@@ -10,11 +10,23 @@ export const DIMENSION_LABELS: Record<Dimension, string> = {
   testing: 'Testing',
 };
 
+/** Short names, for a finding's dimension tag. */
+export const DIMENSION_NAMES: Record<Dimension, string> = {
+  correctness: 'correctness',
+  security: 'security',
+  codeQuality: 'code quality',
+  standards: 'standards',
+  blastRadius: 'blast radius',
+  testing: 'testing',
+};
+
 export type Severity = 'critical' | 'major' | 'minor';
 export const SEVERITIES: Severity[] = ['critical', 'major', 'minor'];
 
 export interface Finding {
   severity: Severity;
+  /** The dimension the finding counts against. Unset in reports from before it was asked for. */
+  dimension?: Dimension;
   file: string;
   line: number | null;
   title: string;
@@ -60,13 +72,14 @@ export const VERDICT_SCHEMA = {
         type: 'object',
         properties: {
           severity: { type: 'string', enum: SEVERITIES },
+          dimension: { type: 'string', enum: [...DIMENSIONS] },
           file: { type: 'string' },
           line: { type: ['integer', 'null'] },
           title: { type: 'string' },
           detail: { type: 'string' },
           suggestion: { type: 'string' },
         },
-        required: ['severity', 'file', 'line', 'title', 'detail', 'suggestion'],
+        required: ['severity', 'dimension', 'file', 'line', 'title', 'detail', 'suggestion'],
         additionalProperties: false,
       },
     },
@@ -91,6 +104,8 @@ export function parseVerdict(raw: unknown): Verdict {
   }
   const findings: Finding[] = (Array.isArray(v.findings) ? v.findings : []).map((f: Record<string, any>) => ({
     severity: SEVERITIES.includes(f.severity) ? f.severity : 'minor',
+    // A model without the schema may leave it out or invent one; the finding still counts, untagged.
+    ...(DIMENSIONS.includes(f.dimension) ? { dimension: f.dimension as Dimension } : {}),
     file: String(f.file ?? ''),
     line: Number.isInteger(f.line) && f.line > 0 ? f.line : null,
     title: String(f.title ?? ''),
@@ -160,32 +175,93 @@ export function finalScore(v: Verdict): number {
   return clampScore(Math.min(score, weakest + 1));
 }
 
+/**
+ * How many of the reviewers that ran reported a finding: `consensus` is every one of them, `majority` more than
+ * half, `minority` more than one but half or fewer, `single` one alone. Unset when one reviewer ran, since agreement
+ * means nothing then.
+ */
+export type Agreement = 'consensus' | 'majority' | 'minority' | 'single';
+
+export const agreementOf = (reviewers: number, total: number): Agreement | undefined =>
+  total < 2
+    ? undefined
+    : reviewers === total
+      ? 'consensus'
+      : reviewers * 2 > total
+        ? 'majority'
+        : reviewers > 1
+          ? 'minority'
+          : 'single';
+
 export interface MergedFinding extends Finding {
   reviewers: string[];
+  agreement?: Agreement;
 }
 
-/** Collapses findings that several reviewers reported on the same spot (same file, lines within 3). */
+const words = (title: string) =>
+  new Set(
+    title
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3),
+  );
+
+/** Titles this alike describe one problem, whatever the lines did. */
+export const SAME_TITLE = 0.5;
+
+/** Jaccard similarity of the words (3+ letters) in two titles, 0 to 1. */
+export function titleSimilarity(a: string, b: string): number {
+  const x = words(a);
+  const y = words(b);
+  if (x.size === 0 || y.size === 0) return 0;
+  let shared = 0;
+  for (const w of x) if (y.has(w)) shared++;
+  return shared / (x.size + y.size - shared);
+}
+
+/** Two reviewers, or two reviews, reported the same spot: same file and both lines within `within` of each other. */
+export const sameSpot = (a: Finding, b: Finding, within = 3) =>
+  a.file === b.file && a.line !== null && b.line !== null && Math.abs(a.line - b.line) <= within;
+
+/**
+ * Two reviewers reported one problem on one commit: the same spot, or, for a finding without a line (a remark on a
+ * whole file, or on the change in general), the same file and an alike title. Two file-level remarks on different
+ * things are not one finding.
+ */
+export const sameProblem = (a: Finding, b: Finding) =>
+  sameSpot(a, b) ||
+  (a.file === b.file && (a.line === null || b.line === null) && titleSimilarity(a.title, b.title) >= SAME_TITLE);
+
+/**
+ * Collapses findings that several reviewers reported on the same spot (same file, lines within 3; file-level ones
+ * when their titles are alike). Severity is the
+ * worst reported, the dimension the first tagged one. Sorted by severity, then by how many reviewers agree, then by
+ * place.
+ */
 export function mergeFindings(byReviewer: { reviewer: string; findings: Finding[] }[]): MergedFinding[] {
   const merged: MergedFinding[] = [];
   for (const { reviewer, findings } of byReviewer) {
     for (const f of findings) {
-      const match = merged.find(
-        (m) =>
-          m.file === f.file &&
-          !m.reviewers.includes(reviewer) &&
-          (m.line === f.line || (m.line !== null && f.line !== null && Math.abs(m.line - f.line) <= 3)),
-      );
+      const match = merged.find((m) => !m.reviewers.includes(reviewer) && sameProblem(m, f));
       if (!match) {
         merged.push({ ...f, reviewers: [reviewer] });
         continue;
       }
       match.reviewers.push(reviewer);
       if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(match.severity)) match.severity = f.severity;
+      if (!match.dimension && f.dimension) match.dimension = f.dimension;
+      // A file-level remark merged with one at a line keeps the line, whichever came first.
+      if (match.line === null && f.line !== null) match.line = f.line;
     }
+  }
+  for (const m of merged) {
+    const agreement = agreementOf(m.reviewers.length, byReviewer.length);
+    if (agreement) m.agreement = agreement;
   }
   return merged.toSorted(
     (a, b) =>
       SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) ||
+      b.reviewers.length - a.reviewers.length ||
       a.file.localeCompare(b.file) ||
       (a.line ?? 0) - (b.line ?? 0),
   );
