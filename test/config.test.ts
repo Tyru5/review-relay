@@ -19,6 +19,22 @@ test('theme defaults to dark and accepts only supported preferences', () => {
   for (const theme of ['', 'auto', 1, {}, []]) fails({ theme }).toThrow('theme must be one of dark, light, terminal');
 });
 
+test('remote presence is opt-in and requires an explicit registry and machine label', () => {
+  expect(parse({}).config.presence).toBeUndefined();
+  const presence = { repo: 'team/coordination', issue: 17, label: 'build-server' };
+  expect(parse({ presence }).config.presence).toEqual(presence);
+  for (const invalid of [
+    true,
+    {},
+    { ...presence, issue: 0 },
+    { ...presence, repo: 'bad' },
+    { ...presence, label: '' },
+    { ...presence, label: 'host\nsecret' },
+  ]) {
+    fails({ presence: invalid }).toThrow('presence');
+  }
+});
+
 describe('reviewer entries', () => {
   test('a config without custom entries resolves to the same reviewers and models as before', async () => {
     const example = JSON.parse(await Bun.file(join(import.meta.dir, '..', 'config.example.json')).text());

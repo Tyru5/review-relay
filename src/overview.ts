@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.ts';
 import { isOutdated, type DaemonState } from './daemon.ts';
+import { overlappingInstances, presenceNow, presenceState, type PresenceSnapshot } from './presence.ts';
 import { HARNESSES } from './reviewers/index.ts';
 import type { ReviewerId } from './types.ts';
 import { fmtDuration, padVisible, row, section, tildify, type Styles } from './ui.ts';
@@ -15,6 +16,58 @@ export interface OverviewOptions {
   configPath: string;
   logPath: string;
   now?: number;
+}
+
+/** Shared by `instances`, startup warnings and the TUI. Identity is authenticated; process health is reported. */
+export function renderInstances(
+  snapshot: PresenceSnapshot,
+  opts: { repos: string[]; ownSession?: string; now?: number },
+  st: Styles,
+): string[] {
+  if (snapshot.state === 'disabled')
+    return [
+      st.muted('Remote presence not configured.'),
+      'Set presence.repo, presence.issue and presence.label on each machine.',
+    ];
+  const now = opts.now ?? Date.now();
+  const peers = overlappingInstances(snapshot, opts.repos, opts.ownSession, now);
+  const lines =
+    snapshot.state === 'unknown'
+      ? [
+          st.badge('warning', `Remote presence unknown: ${snapshot.error ?? 'checking registry'}`),
+          st.muted('Cannot confirm whether another daemon is running. Entries below are last known.'),
+        ]
+      : [st.muted('GitHub-authenticated accounts; machine labels and forwarder states are self-reported.')];
+  if (peers.length)
+    lines.push(
+      st.badge(
+        'warning',
+        `${peers.length} other instance${peers.length === 1 ? '' : 's'} also watching configured repos; this daemon may stand by.`,
+      ),
+    );
+  if (
+    snapshot.state === 'ok' &&
+    opts.ownSession &&
+    !snapshot.instances.some(
+      (i) => i.sessionId === opts.ownSession && presenceState(i, presenceNow(snapshot, now)) === 'recent',
+    )
+  )
+    lines.push(st.badge('warning', 'Local daemon has no recent heartbeat. Check daemon.log for publication errors.'));
+  if (!snapshot.instances.length && snapshot.state === 'ok')
+    lines.push('No registered sessions seen in the last 24 hours. Older daemons may still hold webhooks.');
+  for (const i of snapshot.instances) {
+    const status = snapshot.state === 'unknown' ? 'last known' : presenceState(i, presenceNow(snapshot, now));
+    const age = fmtDuration(Math.max(0, presenceNow(snapshot, now) - Date.parse(i.updatedAt)));
+    const own = i.sessionId === opts.ownSession ? ' · this daemon' : '';
+    lines.push(
+      '',
+      `${st.bold(i.label)}  @${i.account}  v${i.version}${own}`,
+      `  ${st.badge(status === 'recent' ? 'success' : 'warning', status)} · last seen ${age} ago · session ${i.sessionId.slice(0, 8)}`,
+    );
+    for (const repo of i.repos)
+      lines.push(`  ${repo.name} · ${repo.state === 'running' ? 'forwarder process running' : repo.state}`);
+  }
+  return lines;
 }
 
 /** Lines for the daemon block of `status`; `exitCode` is 3 when the daemon is not running (scripts can test it). */

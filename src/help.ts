@@ -57,11 +57,23 @@ export const HELP_GROUPS: Group[] = [
         examples: ['review-relay restart'],
       },
       {
+        name: 'instances',
+        args: '[--json]',
+        summary: 'Remote daemon identities and recent heartbeats from the shared registry',
+        detail: [
+          'Opt in with presence.repo, presence.issue and presence.label, using the same existing issue in a private GitHub repository on every machine. Accounts are authenticated by GitHub; machine labels and forwarder states are self-reported.',
+          'Shows sessions updated in the last 24 hours. Heartbeats expire after three minutes. A failed lookup is unknown, not proof that no other daemon exists. Exits 2 when the registry cannot be checked. Does not stop or take over another daemon.',
+        ],
+        options: [{ flag: '--json', description: 'Print registry status and session records as JSON' }],
+        examples: ['review-relay instances', 'review-relay instances --json'],
+      },
+      {
         name: 'tui',
         summary: 'Live terminal view of the review jobs: open one, read its findings, re-run it',
         detail: [
           'Lists every job in state.json with its score per reviewer, cost, and finding counts, refreshing as the daemon writes; the status bar adds up what they cost. Enter opens a job (scores, merged findings, the posted comment, or its log lines while running); / filters; s cycles the status filter.',
           "r reviews the PR, or a local review's branch, again in the background; c cancels a queued or running review; o opens the PR in the browser, y copies its URL. Local reviews from review-relay review show here too. Press ? inside for every key.",
+          'i opens remote instances. With presence configured, the TUI warns when another recent session watches the same repos, or the registry cannot be checked.',
         ],
         examples: ['review-relay tui'],
       },

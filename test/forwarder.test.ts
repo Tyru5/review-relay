@@ -79,6 +79,66 @@ function start(modes: string[], options: { backoffMs?: number; standbyRetryMs?: 
 }
 
 describe('Forwarder', () => {
+  test('shutdown leaves a pid alone when its executable no longer has the forwarder identity', async () => {
+    const bin = fakeGh(['up']);
+    writeFileSync(
+      bin,
+      `#!/bin/sh\nexec "${process.execPath}" -e 'console.log("replacement ready"); setInterval(()=>{},1000)'\n`,
+    );
+    const logs: string[] = [];
+    const f = new Forwarder(repo, 'http://127.0.0.1:1/hook', 's', (m) => logs.push(m), undefined, { bin, settleMs: 1 });
+    forwarders.push(f);
+    f.start();
+    await until(() => logs.some((m) => m.includes('replacement ready')));
+    const pid = f.info().pid!;
+    try {
+      f.stopSync();
+      await Bun.sleep(100);
+      expect(isAlive(pid)).toBe(true);
+    } finally {
+      process.kill(pid, 'SIGKILL');
+      await until(() => f.info().pid === null);
+    }
+  });
+
+  test('a missing executable retries and recovers, and stop cancels retries', async () => {
+    const bin = fakeGh(['up']);
+    rmSync(bin);
+    const logs: string[] = [];
+    const f = new Forwarder(repo, 'http://127.0.0.1:1/hook', 'private-secret', (m) => logs.push(m), undefined, {
+      bin,
+      backoffMs: 20,
+    });
+    forwarders.push(f);
+    f.start();
+    await until(() => logs.some((m) => m.includes('restarting')));
+    writeFileSync(bin, '#!/bin/sh\necho "Forwarding Webhook events from GitHub"\nsleep 30\n', { mode: 0o755 });
+    await until(() => logs.some((m) => m.includes('gh: Forwarding')));
+    await f.stop();
+    const count = f.info().restarts;
+    await Bun.sleep(100);
+    expect(f.info().restarts).toBe(count);
+    expect(logs.join('\n')).not.toContain('private-secret');
+  });
+
+  test('stop cancels a pending spawn-failure retry', async () => {
+    const bin = fakeGh(['up']);
+    rmSync(bin);
+    const logs: string[] = [];
+    const f = new Forwarder(repo, 'http://127.0.0.1:1/hook', 's', (m) => logs.push(m), undefined, {
+      bin,
+      backoffMs: 100,
+    });
+    forwarders.push(f);
+    f.start();
+    await until(() => logs.some((m) => m.includes('restarting')));
+    await f.stop();
+    const count = logs.length;
+    await Bun.sleep(150);
+    expect(logs).toHaveLength(count);
+    expect(f.info().pid).toBeNull();
+  });
+
   test('a hook held once is tried again at once, without standing by', async () => {
     // After a quick restart the held hook is this forwarder's own, which GitHub drops a second later.
     const { f, logs } = start(['held', 'up']);

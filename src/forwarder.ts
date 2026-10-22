@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import type { RepoConfig } from './config.ts';
 import type { ForwarderInfo } from './daemon.ts';
 import type { TriggerMode } from './types.ts';
+import { matchesForwarder, processMembers, secretHash, signalTree } from './daemon-lifecycle.ts';
 
 /**
  * Event types each trigger mode needs. Greptile starts with a `check_run`; CodeRabbit sets a commit `status` (or, with
@@ -56,6 +57,7 @@ export interface ForwarderOptions {
 export class Forwarder {
   private proc: ChildProcess | null = null;
   private stopped = false;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private standby = false;
   /** Runs in a row that found the hook held. */
   private heldRuns = 0;
@@ -96,7 +98,7 @@ export class Forwarder {
   }
 
   start(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.proc) return;
     const events = EVENTS_BY_MODE[this.repo.trigger].join(',');
     const tag = `[${this.repo.fullName}]`;
     const startedAt = Date.now();
@@ -117,6 +119,8 @@ export class Forwarder {
       { detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     this.proc = proc;
+    // Never log the Error object: spawn errors include argv, including the webhook secret.
+    proc.on('error', () => {});
     if (!retry) this.log(`${tag} forwarding ${events} (trigger=${this.repo.trigger})`);
     this.onChange();
     // A run that finds the hook held says so only in its second line, and everything it prints is noise, so its
@@ -166,7 +170,7 @@ export class Forwarder {
         if (this.heldRuns === 1) {
           // Likely this forwarder's own hook from a run that just ended; GitHub drops it in about a second.
           this.onChange();
-          setTimeout(() => this.start(), this.heldRetryMs);
+          this.schedule(this.heldRetryMs);
           return;
         }
         if (!this.standby) {
@@ -176,7 +180,7 @@ export class Forwarder {
           );
         }
         this.onChange();
-        setTimeout(() => this.start(), this.standbyRetryMs);
+        this.schedule(this.standbyRetryMs);
         return;
       }
       // Ended for some other reason, so whatever is wrong is this forwarder's own: back to the ordinary path, where
@@ -187,26 +191,60 @@ export class Forwarder {
       this.onChange();
       if (Date.now() - startedAt > 60_000) this.backoffMs = 1_000;
       this.log(`${tag} forwarder exited (${code}); restarting in ${this.backoffMs / 1000}s`);
-      setTimeout(() => this.start(), this.backoffMs);
+      this.schedule(this.backoffMs);
       this.backoffMs = Math.min(this.backoffMs * 2, 60_000);
     });
+  }
+
+  private schedule(ms: number): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (!this.stopped)
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        this.start();
+      }, ms);
+  }
+
+  /** A child can exit before close, and Windows can reuse its pid before escalation. */
+  private signalOwned(pid: number, sig: NodeJS.Signals): void {
+    const verified = () =>
+      processMembers()?.filter(
+        (p) =>
+          (process.platform === 'win32' || p.group === pid) &&
+          matchesForwarder(
+            p.args,
+            this.repo.fullName,
+            EVENTS_BY_MODE[this.repo.trigger].join(','),
+            Number(new URL(this.url).port),
+            secretHash(this.secret),
+          ),
+      );
+    const proof = verified();
+    if (!proof?.length) return;
+    if (process.platform === 'win32') {
+      // An authenticated extension child is still ours even when the gh parent exited.
+      for (const member of proof) {
+        if (verified()?.some((p) => p.pid === member.pid)) signalTree(member.pid, sig);
+      }
+    } else signalTree(pid, sig);
   }
 
   /** Last-resort synchronous signal for `process.on('exit')`, where async cleanup cannot run. */
   stopSync(): void {
     this.stopped = true;
-    if (this.proc?.pid) signal(-this.proc.pid, 'SIGINT');
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.proc?.pid) this.signalOwned(this.proc.pid, 'SIGINT');
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
+    this.stopSync();
     const proc = this.proc;
     if (!proc?.pid) return;
-    const group = -proc.pid;
-    signal(group, 'SIGINT');
+    const group = process.platform === 'win32' ? proc.pid : -proc.pid;
     // The hook goes away when the socket closes, which exiting does; give the group a moment, then force it down.
     for (let waited = 0; waited < 5_000 && signal(group, 0); waited += 100) await Bun.sleep(100);
-    signal(group, 'SIGKILL');
+    this.signalOwned(proc.pid, 'SIGKILL');
+    for (let waited = 0; waited < 2_000 && signal(group, 0); waited += 100) await Bun.sleep(100);
   }
 }
 

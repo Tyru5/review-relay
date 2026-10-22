@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -16,17 +16,22 @@ import {
 import { renderCosts, renderSpend, reviewCosts, spend } from './cost.ts';
 import { listReports, renderScorecard, renderScorecardNotes, scorecard } from './scorecard.ts';
 import {
+  acquireDaemonLock,
   clearDaemonInfo,
   inspectDaemon,
   isOutdated,
   logFilePath,
   readLast,
   readRange,
+  readDaemonInfo,
+  reapForwarders,
+  secretHash,
   spawnDetached,
   stopDaemon,
   waitForStart,
   writeDaemonInfo,
   type DaemonState,
+  type CleanupResult,
 } from './daemon.ts';
 import { describeStats, diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
@@ -35,7 +40,15 @@ import { renderCommandHelp, renderHelp } from './help.ts';
 import { busyLocal, localJobsIn, localTag, localTarget, reviewLocal } from './local.ts';
 import { renderMarkdown } from './markdown.ts';
 import { MCP_DEPS, serveMcp } from './mcp.ts';
-import { renderDaemon, renderInfo } from './overview.ts';
+import { renderDaemon, renderInfo, renderInstances } from './overview.ts';
+import {
+  disabledPresence,
+  overlappingInstances,
+  presenceInstanceId,
+  PresenceRegistry,
+  watchPresence,
+  type PresenceSnapshot,
+} from './presence.ts';
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import { COMMENT_MARKER, combinedScore } from './report.ts';
 import { explainRoutes, pickRoute, SOURCES } from './routes.ts';
@@ -134,13 +147,23 @@ interface Options {
 
 /** The daemon itself: HTTP hook server plus one `gh webhook forward` per repo, until a signal arrives. */
 async function serve(config: Config, configPath: string) {
+  // Held until the process exits, including cleanup. Different HTTP ports cannot bypass it.
+  await acquireDaemonLock(config.dataDir);
   const existing = await inspectDaemon(config.dataDir, config.port);
   if (existing.running) fail(`already running (pid ${existing.pid}); use review-relay status or stop`);
   if (existing.foreign) fail(`port ${config.port} is already in use by something that is not review-relay`);
+  if (existing.stale && existing.pid !== null) {
+    const cleanup = await reapForwarders(config.dataDir, existing.pid);
+    if (!reportCleanup(cleanup))
+      fail('cannot safely replace the old daemon record; resolve the forwarders listed above first');
+    clearDaemonInfo(config.dataDir, existing.pid);
+  }
 
   const state = new StateStore(join(config.dataDir, 'state.json'));
   const scheduler = makeScheduler(config, state);
   const secret = randomBytes(24).toString('hex');
+  const sessionId = randomUUID();
+  const instanceId = config.presence ? presenceInstanceId(config.dataDir) : undefined;
   let server: ReturnType<typeof startServer>;
   try {
     server = startServer(config, scheduler, secret);
@@ -175,35 +198,64 @@ async function serve(config: Config, configPath: string) {
   }
 
   const forwarders: Forwarder[] = [];
-  const record = () =>
+  let stopping = false;
+  let stopPresence: (() => Promise<void>) | undefined;
+  const record = () => {
+    // Keep the pre-shutdown process identities until a later stop/start verifies their groups are gone.
+    if (stopping) return;
     writeDaemonInfo(config.dataDir, {
       pid: process.pid,
       port: server.port ?? config.port,
       startedAt,
       version,
       configPath,
+      secretHash: secretHash(secret),
+      sessionId,
       forwarders: forwarders.map((f) => f.info()),
     });
+  };
   for (const repo of config.repos) forwarders.push(new Forwarder(repo, url, secret, log, record));
-  record();
-  for (const f of forwarders) f.start();
 
-  let stopping = false;
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
     log('stopping forwarders (removes temporary repo webhooks)...');
-    await Promise.all(forwarders.map((f) => f.stop()));
+    await Promise.all([...forwarders.map((f) => f.stop()), stopPresence?.()]);
     server.stop(true);
-    clearDaemonInfo(config.dataDir);
     process.exit(0);
   };
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, shutdown);
   // Forwarders run in their own process groups, so they outlive a daemon that exits without cleanup.
   process.on('exit', () => {
     for (const f of forwarders) f.stopSync();
-    clearDaemonInfo(config.dataDir);
   });
+  record();
+  for (const f of forwarders) f.start();
+  if (config.presence) {
+    let previousWarning = '';
+    stopPresence = watchPresence(
+      config.presence,
+      () => ({
+        instanceId: instanceId!,
+        sessionId,
+        label: config.presence!.label,
+        version,
+        repos: forwarders.map((f) => {
+          const forwarder = f.info();
+          return { name: forwarder.repo, state: forwarder.standby ? 'standby' : forwarder.pid ? 'running' : 'down' };
+        }),
+      }),
+      (snapshot) => {
+        if (stopping) return;
+        const warning = remoteWarning(snapshot, config, sessionId);
+        if (warning && warning !== previousWarning) warn(warning);
+        if (!warning && previousWarning)
+          log('remote presence check recovered; no other recent session watches these repos');
+        previousWarning = warning;
+      },
+      log,
+    );
+  }
 }
 
 async function startDetached(config: Config, configPath: string) {
@@ -219,6 +271,9 @@ async function startDetached(config: Config, configPath: string) {
   }
   // Otherwise the health wait below would accept the other listener's reply and report a daemon that never bound.
   if (existing.foreign) fail(`port ${config.port} is already in use by something that is not review-relay`);
+  const presence = await readPresence(config);
+  const warning = remoteWarning(presence, config);
+  if (warning) warn(warning);
   const pid = spawnDetached(config.dataDir, ['start', '--config', configPath]);
   const problem = await waitForStart(config.dataDir, pid, config.port);
   if (problem) {
@@ -234,19 +289,77 @@ async function startDetached(config: Config, configPath: string) {
 async function stop(config: Config): Promise<boolean> {
   const state = await inspectDaemon(config.dataDir, config.port);
   if (!state.running) {
-    if (state.stale) clearDaemonInfo(config.dataDir);
-    warn(state.stale ? `not running (removed stale record for pid ${state.pid})` : 'not running');
+    const release = await acquireDaemonLock(config.dataDir);
+    try {
+      const current = await inspectDaemon(config.dataDir, config.port);
+      if (current.running) fail('a daemon started meanwhile; run stop again to stop it');
+      if (current.stale && current.pid !== null) {
+        if (!reportCleanup(await reapForwarders(config.dataDir, current.pid)))
+          fail('orphan cleanup incomplete; record kept for recovery');
+        clearDaemonInfo(config.dataDir, current.pid);
+      }
+      warn(current.stale ? `not running (cleaned stale record for pid ${current.pid})` : 'not running');
+    } finally {
+      await release();
+    }
     return false;
   }
   process.stdout.write(st.muted(`stopping pid ${state.pid}... `));
   const result = await stopDaemon(state, config.dataDir);
   console.log();
+  const cleaned = reportCleanup(result);
+  if (!result.daemonStopped) fail(`could not safely stop pid ${result.pid}; record kept`);
+  if (!cleaned) fail('daemon exited, but forwarder cleanup is incomplete; record kept for recovery');
   if (result.clean) ok(`stopped (pid ${result.pid})`);
-  else {
-    warn(`no clean exit after 20s; killed pid ${result.pid}`);
-    warn('a gh webhook forward process that survived keeps its repo webhook; end any still running by hand');
-  }
+  else warn(`forced stop (pid ${result.pid}); verified forwarder cleanup complete`);
   return true;
+}
+
+function reportCleanup(result: CleanupResult): boolean {
+  if (result.stopped.length) ok(`forwarder groups verified stopped: ${result.stopped.join(', ')}`);
+  if (result.survivors.length) warn(`forwarder groups still running: ${result.survivors.join(', ')}`);
+  if (result.unverified.length)
+    warn(`cannot verify ownership or exit of forwarder groups: ${result.unverified.join(', ')}; inspect them manually`);
+  return !result.survivors.length && !result.unverified.length;
+}
+
+const readPresence = (config: Config) =>
+  config.presence
+    ? new PresenceRegistry(config.presence, undefined, AbortSignal.timeout(15_000)).read()
+    : Promise.resolve(disabledPresence());
+
+function remoteWarning(snapshot: PresenceSnapshot, config: Config, sessionId?: string): string {
+  if (snapshot.state === 'unknown')
+    return `Remote presence unknown: ${snapshot.error}; cannot confirm whether another daemon is running`;
+  const peers = overlappingInstances(
+    snapshot,
+    config.repos.map((r) => r.fullName),
+    sessionId,
+  );
+  return peers.length
+    ? `Other review-relay sessions also watching configured repos: ${peers.map((i) => `${i.label} (@${i.account}, session ${i.sessionId.slice(0, 8)})`).join(', ')}. This daemon may stand by. Run review-relay instances for details.`
+    : '';
+}
+
+async function showInstances(config: Config, json: boolean) {
+  const snapshot = await readPresence(config);
+  if (json) console.log(JSON.stringify(snapshot, null, 2));
+  else {
+    const daemon = await inspectDaemon(config.dataDir, config.port);
+    const record = readDaemonInfo(config.dataDir);
+    print([
+      st.section('Instances'),
+      ...renderInstances(
+        snapshot,
+        {
+          repos: config.repos.map((r) => r.fullName),
+          ownSession: daemon.running && record?.pid === daemon.pid ? record.sessionId : undefined,
+        },
+        st,
+      ),
+    ]);
+  }
+  if (snapshot.state === 'unknown') process.exitCode = 2;
 }
 
 async function showStatus(
@@ -797,6 +910,7 @@ const COMMANDS = [
   'stop',
   'restart',
   'status',
+  'instances',
   'cost',
   'scorecard',
   'tui',
@@ -857,6 +971,8 @@ async function main() {
       return startDetached(config, configPath);
     case 'status':
       return showStatus(config, configPath, undefined, opts.limit, opts.page);
+    case 'instances':
+      return showInstances(config, opts.json);
     case 'cost':
       return showCosts(config, opts);
     case 'scorecard':

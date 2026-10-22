@@ -40,9 +40,10 @@ GitHub pull requests and their timeline, the `gh` CLI with the `cli/gh-webhook` 
 - `review-relay mcp` serves the same reviews to agents over the Model Context Protocol on stdio (`review_branch`, `review_pr`, `get_review`, `list_reviews`), so Claude Code, Codex, or any MCP client can score its own branch and act on the findings. Reviews run in background processes and show in `status` and the TUI.
 - Every review records what each reviewer cost; `review-relay cost` totals it per review and per reviewer, and `status` and the TUI show a cost column. Claude Code reports its own cost; Codex costs are estimated from tokens at list price; other CLIs show none yet.
 - The TUI shows each PR's GitHub state (open, closed, merged), switches themes (dark, light, terminal) with `t`, and fits terminals down to 40 × 10 by panning wide rows sideways.
+- Optional remote presence uses an existing issue in a shared private GitHub repository. `instances` and the TUI's `i` view show GitHub accounts, self-reported machine labels and heartbeat age; startup and the TUI warn about overlapping repos. This does not enforce single ownership across machines, and stale or unavailable presence cannot prove a daemon has stopped.
 - Distributed as standalone binaries attached to GitHub Releases at https://github.com/Tyru5/review-relay/releases (macOS and glibc Linux on x64/arm64, Windows x64), installed with `curl ... | bash` or `irm ... | iex`. Versions are published by tagging `v*.*.*`.
 - Code is sent to whichever providers the user's chosen agents and models use; the site must never claim code stays on the machine.
-- Windows: a stopped daemon may leave its `gh webhook forward` processes running, and GitHub keeps their temporary repo webhooks until they exit.
+- Orphan cleanup verifies recorded forwarder identities before stopping them, using process groups on Unix and process trees on Windows. Unverified survivors need manual recovery; GitHub keeps their temporary repo webhooks until they exit.
 - Free to use and open source; installs and the site both point at the GitHub repo, so it must stay public.
 
 ## Brand Commitments

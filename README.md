@@ -371,7 +371,31 @@ git tag v0.2.0 && git push origin v0.2.0
 
 The daemon records itself in `<dataDir>/daemon.json` (pid, port, start time, version, and each `gh webhook forward` child), and `status`, `stop`, and `info` read that record, confirm the pid is still a review-relay process, and ping `GET /health`. `/health` also returns the daemon's pid and version in `x-review-relay-pid` / `x-review-relay-version` headers, so a daemon whose record is missing or fails the start-time check is still recognized, and `status` flags a daemon older than the installed CLI. Logs from `start -d` go to `<dataDir>/daemon.log`.
 
-Each forwarder creates a temporary repo webhook, named `cli` under the repo's Settings > Webhooks. GitHub deletes it within a second of the forwarder's connection closing, however the process ends, so a crash leaves nothing behind. A forwarder that outlives its daemon, after a crash or a forced stop, keeps the webhook until its connection closes; end the `gh webhook forward` process by hand; GitHub drops its webhook within a second, and a forwarder standing by picks it up on its next try, within 30 seconds. GitHub allows one such webhook per repo, so a forwarder started while another review-relay instance holds the repo stands by: it logs that once, tries again every 30 seconds, and logs again when it gets the webhook. `status` shows it as `standby`.
+One daemon owns a data directory for its entire lifetime, even if a second start uses a different HTTP port. The lock reserves a loopback port derived from the canonical directory path; a hash collision or another listener on that port conservatively refuses startup. Process exit releases the lock automatically.
+
+Each forwarder creates a temporary repo webhook, named `cli` under the repo's Settings > Webhooks. GitHub deletes it when the forwarder's connection closes. A forwarder that outlives its daemon keeps the webhook until its connection closes. On the next `start` or `stop`, review-relay reaps recorded orphan process groups only after verifying the repo, event list, endpoint and secret fingerprint against their arguments. Ambiguous processes are left alone, and their record is kept for manual recovery rather than overwritten. Older records without a fingerprint may need manual cleanup. A missing `gh` executable retries with backoff instead of crashing the daemon.
+
+GitHub allows one such webhook per repo, so a forwarder started while another instance holds the repo stands by: it logs that once and tries again every 30 seconds. `status` shows it as `standby`. A held webhook alone does **not** identify a remote review-relay daemon: another tool can hold it too.
+
+### Identifying daemons on other machines
+
+Opt in by adding this object to your config on **every machine**, pointing at the same existing issue in a **private** GitHub repository. Use a different, non-sensitive label for each machine:
+
+```json
+"presence": {
+  "repo": "your-team/private-control",
+  "issue": 1,
+  "label": "work-laptop"
+}
+```
+
+Your `gh` account needs access to read the repository and read, create and edit issue comments. Review-relay does not create the repo or issue. Restart the daemon after configuring it. `review-relay instances` lists registered sessions; `--json` returns the registry status and records, with exit code 2 for an unknown result. Press **i** in the TUI for the same view. Startup and the TUI warn when another recent session watches an overlapping repo.
+
+Each daemon writes a separate session comment, updates it every minute, and attempts a final stopped update on shutdown. A heartbeat becomes **stale after three minutes**; stale does not mean the process is dead. Failed lookups are **unknown**, never evidence of absence. Listings cover comments updated in the last 24 hours. Older versions and machines without this configuration remain invisible. This is advisory presence, not a distributed lock: it neither stops a remote daemon nor prevents duplicate manual reviews.
+
+The GitHub comment's author identifies the account; the machine label, version, repo names and forwarder states are self-reported. Trust the members who can edit the registry: this is not executable attestation, and an edited comment retains its original GitHub author. Records contain random installation/session IDs, not hostnames, paths, PIDs or webhook secrets. Private repo membership controls who can see the labels and repo names. A running forwarder process does not prove its hook is healthy.
+
+Normal daemon heartbeats use about 240 API requests and 60 comment updates per hour (more when paginating); an open TUI adds about 120 reads per hour. GitHub rate-limit delays are respected, including during shutdown. If a create request's response is lost, the daemon looks for that session's comment before writing again; while its outcome remains uncertain it reports unknown rather than creating duplicates. Restart after checking the registry if that uncertainty never resolves.
 
 From a repo checkout, `scripts/relay <command>` (also `bun run relay:<command>`) forwards to `bun src/cli.ts <command>`, with `start` running in the background.
 

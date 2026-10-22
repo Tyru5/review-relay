@@ -20,6 +20,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { acquireDaemonLock, matchesForwarder, processMembers, signalTree } from './daemon-lifecycle.ts';
+export { acquireDaemonLock, secretHash } from './daemon-lifecycle.ts';
 
 export interface ForwarderInfo {
   repo: string;
@@ -40,6 +42,8 @@ export interface DaemonInfo {
   version: string;
   configPath: string;
   forwarders: ForwarderInfo[];
+  secretHash?: string;
+  sessionId?: string;
 }
 
 export const daemonInfoPath = (dataDir: string) => join(dataDir, 'daemon.json');
@@ -56,7 +60,8 @@ export function writeDaemonInfo(dataDir: string, info: DaemonInfo): void {
 }
 
 /** Removes the record; with `pid`, only while the record still names that pid (a newer daemon may own it now). */
-export function clearDaemonInfo(dataDir: string, pid?: number): void {
+export function clearDaemonInfo(dataDir: string, pid?: number, sessionId?: string): void {
+  if (sessionId !== undefined && readInfoFile(dataDir)?.sessionId !== sessionId) return;
   if (pid !== undefined) {
     const recorded = readInfoFile(dataDir)?.pid ?? readLegacyPid(dataDir);
     if (recorded !== null && recorded !== pid) return;
@@ -92,7 +97,15 @@ function powershell(script: string): string | null {
 function elapsedSeconds(pid: number): number | null {
   const out = Bun.spawnSync(['ps', '-o', 'etimes=', '-p', String(pid)], { stdout: 'pipe', stderr: 'ignore' });
   const n = Number(out.stdout.toString().trim());
-  return out.success && Number.isFinite(n) ? n : null;
+  if (out.success && out.stdout.toString().trim() && Number.isFinite(n)) return n;
+  // BSD/macOS ps has lstart but not etimes. Parse in a fixed locale.
+  const fallback = Bun.spawnSync(['ps', '-o', 'lstart=', '-p', String(pid)], {
+    stdout: 'pipe',
+    stderr: 'ignore',
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  const started = Date.parse(fallback.stdout.toString().trim());
+  return fallback.success && Number.isFinite(started) ? (Date.now() - started) / 1000 : null;
 }
 
 /** Command line and start time of a process, or null when it cannot be read (gone, or no permission). */
@@ -157,11 +170,15 @@ function readInfoFile(dataDir: string): DaemonInfo | null {
       version: raw.version ?? '',
       configPath: raw.configPath ?? '',
       forwarders: Array.isArray(raw.forwarders) ? raw.forwarders : [],
+      secretHash: typeof raw.secretHash === 'string' ? raw.secretHash : undefined,
+      sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
     };
   } catch {
     return null;
   }
 }
+
+export const readDaemonInfo = readInfoFile;
 
 function readLegacyPid(dataDir: string): number | null {
   try {
@@ -340,8 +357,89 @@ export async function waitForStart(
   return `no health response on :${port} after ${Math.round(timeoutMs / 1000)}s`;
 }
 
-export interface StopResult {
+export interface CleanupResult {
+  stopped: number[];
+  survivors: number[];
+  unverified: number[];
+}
+
+/** Reap only the unchanged record of a dead owner. Never delete the evidence here.
+ * Callers starting a daemon must hold acquireDaemonLock through cleanup and their entire lifetime.
+ */
+export async function reapForwarders(dataDir: string, expectedPid: number): Promise<CleanupResult> {
+  const result: CleanupResult = { stopped: [], survivors: [], unverified: [] };
+  const info = readDaemonInfo(dataDir);
+  if (!info || info.pid !== expectedPid) return result;
+  const snapshot = JSON.stringify(info);
+  const owned = () => JSON.stringify(readDaemonInfo(dataDir)) === snapshot && !isAlive(expectedPid);
+  for (const f of info.forwarders) {
+    if (!f.pid || !Number.isSafeInteger(f.pid) || f.pid <= 0) continue;
+    const group = f.pid;
+    const known = new Set([group]);
+    const members = () => {
+      const all = processMembers();
+      if (!all) return null;
+      // Windows has no PGID. Discover authenticated extension children even after gh has died.
+      if (process.platform !== 'win32') return all.filter((p) => p.group === group);
+      for (const p of all) {
+        if (matchesForwarder(p.args, f.repo, f.events, info.port, info.secretHash ?? '')) known.add(p.pid);
+      }
+      // Retain discovered descendants when their parent exits during taskkill.
+      let size: number;
+      do {
+        size = known.size;
+        for (const p of all) if (known.has(p.group)) known.add(p.pid);
+      } while (known.size !== size);
+      return all.filter((p) => known.has(p.pid));
+    };
+    if (!owned()) {
+      result.unverified.push(group);
+      continue;
+    }
+    const before = members();
+    if (!before) {
+      result.unverified.push(group);
+      continue;
+    }
+    if (!before.length) {
+      result.stopped.push(group);
+      continue;
+    }
+    const verified = () =>
+      members()?.filter(
+        (p) => info.secretHash && matchesForwarder(p.args, f.repo, f.events, info.port, info.secretHash),
+      );
+    if (!verified()?.length || !owned()) {
+      result.unverified.push(group);
+      continue;
+    }
+    const send = (sig: NodeJS.Signals) => {
+      if (!owned()) return;
+      const proof = verified();
+      if (!proof?.length) return;
+      if (process.platform === 'win32') {
+        for (const p of proof) {
+          if (owned() && verified()?.some((current) => current.pid === p.pid)) signalTree(p.pid, sig);
+        }
+      } else signalTree(group, sig);
+    };
+    send('SIGINT');
+    let deadline = Date.now() + 1_000;
+    while (Date.now() < deadline && members()?.length) await sleep(50);
+    if (members()?.length) send('SIGKILL');
+    deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && members()?.length) await sleep(50);
+    const after = members();
+    if (after === null) result.unverified.push(group);
+    else if (after.length) result.survivors.push(group);
+    else result.stopped.push(group);
+  }
+  return result;
+}
+
+export interface StopResult extends CleanupResult {
   pid: number;
+  daemonStopped: boolean;
   /** False when SIGTERM was not enough and the process was killed. */
   clean: boolean;
 }
@@ -353,18 +451,57 @@ export interface StopResult {
  */
 export async function stopDaemon(state: DaemonState, dataDir: string, graceMs = 20_000): Promise<StopResult> {
   const pid = state.pid!;
-  signal(pid, 'SIGTERM');
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('No daemon pid to stop');
+  const original = probeProcess(pid);
+  const recorded = readDaemonInfo(dataDir);
+  const startedAt = recorded?.pid === pid ? recorded.startedAt : state.startedAt;
+  // Health can confirm the owner when startup was slow or the wall clock drifted.
+  const health = await probeDaemon(state.port);
+  const confirmed =
+    (health.health === 'ok' && health.pid === pid) ||
+    (original?.startedMs !== null &&
+      original?.startedMs !== undefined &&
+      startedAt !== null &&
+      Math.abs(original.startedMs - Date.parse(startedAt)) <= RECORD_SKEW_MS);
+  // Refuse a reused or unreadable live pid, even when inspectDaemon was called earlier.
+  const sameProcess = () => {
+    const current = probeProcess(pid);
+    return (
+      original &&
+      current &&
+      current.commandLine === original.commandLine &&
+      current.startedMs !== null &&
+      original.startedMs !== null &&
+      Math.abs(current.startedMs - original.startedMs) < 2_000 &&
+      confirmed &&
+      isRelayCommand(current.commandLine)
+    );
+  };
+  if (isAlive(pid) && sameProcess()) signal(pid, 'SIGTERM');
   const deadline = Date.now() + graceMs;
-  while (Date.now() < deadline && isAlive(pid)) await sleep(200);
+  while (Date.now() < deadline && isAlive(pid) && sameProcess()) await sleep(200);
   const clean = !isAlive(pid);
-  if (!clean) {
+  if (!clean && sameProcess()) {
     signal(pid, 'SIGKILL');
-    // The daemon's exit handler never ran, so its forwarders are still up, in their own process groups.
-    for (const f of state.forwarders) if (f.pid) signal(-f.pid, 'SIGINT');
+    const killedDeadline = Date.now() + 2_000;
+    while (Date.now() < killedDeadline && isAlive(pid)) await sleep(50);
   }
-  // A daemon started meanwhile owns the record now; leave it alone.
-  clearDaemonInfo(dataDir, pid);
-  return { pid, clean };
+  const daemonStopped = !isAlive(pid);
+  if (!daemonStopped) return { pid, clean, daemonStopped, stopped: [], survivors: [], unverified: [] };
+  // The daemon released its lifetime lock on exit. Reacquire it before reading or removing recovery evidence.
+  const release = await acquireDaemonLock(dataDir);
+  try {
+    const cleanup = await reapForwarders(dataDir, pid);
+    if (
+      !cleanup.survivors.length &&
+      !cleanup.unverified.length &&
+      JSON.stringify(readDaemonInfo(dataDir)) === JSON.stringify(recorded)
+    )
+      clearDaemonInfo(dataDir, pid, recorded?.sessionId);
+    return { pid, clean, daemonStopped, ...cleanup };
+  } finally {
+    await release();
+  }
 }
 
 function signal(target: number, sig: NodeJS.Signals): void {

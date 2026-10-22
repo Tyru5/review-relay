@@ -47,8 +47,17 @@ export interface ReviewerEntry extends ModelConfig {
 export const THEMES = ['dark', 'light', 'terminal'] as const;
 export type ThemeName = (typeof THEMES)[number];
 
+export interface PresenceConfig {
+  /** A private repository and an existing issue shared by all participating machines. */
+  repo: string;
+  issue: number;
+  /** Explicitly chosen for publication; never inferred from the hostname. */
+  label: string;
+}
+
 export interface Config {
   port: number;
+  presence?: PresenceConfig;
   /** TUI colors; terminal inherits the terminal's configured palette. Defaults to dark. */
   theme?: ThemeName;
   /** How long `auto` mode waits for Greptile or CodeRabbit after a GitHub PR event before running anyway. */
@@ -277,8 +286,31 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
   const theme = c.theme ?? 'dark';
   if (!THEMES.includes(theme)) throw new Error(`theme must be one of ${THEMES.join(', ')}`);
 
+  let presence: PresenceConfig | undefined;
+  if (c.presence !== undefined) {
+    const p = c.presence;
+    if (
+      !isObject(p) ||
+      typeof p.repo !== 'string' ||
+      !/^[\w.-]+\/[\w.-]+$/.test(p.repo) ||
+      !Number.isSafeInteger(p.issue) ||
+      (p.issue as number) < 1 ||
+      typeof p.label !== 'string' ||
+      !p.label.trim() ||
+      p.label.length > 80 ||
+      // eslint-disable-next-line no-control-regex -- reject terminal control characters in published labels
+      /[\x00-\x1f\x7f-\x9f]/.test(p.label)
+    ) {
+      throw new Error(
+        'presence requires repo (owner/name), issue (positive integer), and label (1-80 printable characters)',
+      );
+    }
+    presence = { repo: p.repo, issue: p.issue as number, label: p.label.trim() };
+  }
+
   return {
     port: c.port ?? 9988,
+    ...(presence ? { presence } : {}),
     theme,
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,

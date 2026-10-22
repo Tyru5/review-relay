@@ -146,6 +146,49 @@ const press = (ctx: TuiContext, keys: string[], state: TuiState = initialState()
 const lines = (state: TuiState, ctx: TuiContext) => renderTui(state, ctx, themeStyles(false), '0.6.0');
 const render = (state: TuiState, ctx: TuiContext) => lines(state, ctx).join('\n');
 
+test('i opens remote identities, warns on overlap, and keeps unknown distinct from no peers', () => {
+  const ctx = ctxFor(undefined, {
+    watchedRepos: ['acme/app'],
+    ownSession: 'local',
+    presence: {
+      state: 'ok',
+      checkedAt: NOW,
+      serverTime: NOW,
+      instances: [
+        {
+          instanceId: 'installation',
+          sessionId: 'remote',
+          label: 'build-server',
+          account: 'alice',
+          version: '0.12.5',
+          commentId: 1,
+          updatedAt: new Date(NOW - 18_000).toISOString(),
+          stopped: false,
+          repos: [{ name: 'acme/app', state: 'running' }],
+        },
+      ],
+    },
+  });
+  expect(render(initialState(), ctx)).toContain('also watching');
+  const state = press(ctx, ['i']);
+  expect(state.view).toBe('instances');
+  expect(render(state, ctx)).toContain('build-server');
+  expect(render(state, ctx)).toContain('@alice');
+  expect(press(ctx, ['escape'], state).view).toBe('list');
+  expect(press(ctx, ['2'], state).view).toBe('log');
+  expect(press(ctx, ['tab'], state).view).toBe('log');
+  expect(press(ctx, ['/', 'i']).filter).toBe('i');
+  const unknown = { ...ctx, presence: { ...ctx.presence!, state: 'unknown' as const, error: 'offline' } };
+  expect(render(initialState(), unknown)).toContain('unknown');
+  expect(render(state, unknown)).toContain('last known');
+  for (const width of [40, 80, 160]) {
+    const rendered = lines(state, { ...unknown, width });
+    expect(rendered).toHaveLength(ctx.height);
+    expect(rendered.every((line) => visibleLength(line) === width)).toBe(true);
+    if (width === 40) expect(rendered.at(-1)).toContain('[←→] pan');
+  }
+});
+
 describe('readJobs and JobStore', () => {
   test('PR state refreshes independently of review status and is shared across commits, not repos', async () => {
     const other = job('other', { repo: 'acme/lib' });
@@ -330,7 +373,7 @@ describe('frame', () => {
     expect(frame[27]).toMatch(/^╰─+╯$/);
     expect(frame[28]).toBe(' '.repeat(160));
     expect(frame[29]).toBe(
-      ' [↑↓] move   [enter] open   [l] log   [c] cancel   [o] open PR   [y] copy url   [/] filter   [s] status   [?] help   [q] quit'.padEnd(
+      ' [↑↓] move   [enter] open   [l] log   [c] cancel   [o] open PR   [y] copy url   [/] filter   [s] status   [i] instances   [?] help   [q] quit'.padEnd(
         160,
       ),
     );
@@ -411,7 +454,7 @@ describe('frame', () => {
     expect(text).toContain('✗ daemon stopped  start it with review-relay start -d  │  no review jobs yet');
     expect(text).toContain('Jobs appear here as the daemon reviews PRs');
     expect(text).not.toContain('Job ·');
-    expect(text).toContain(' [↑↓] move   [/] filter   [s] status   [?] help   [q] quit');
+    expect(text).toContain(' [↑↓] move   [/] filter   [s] status   [i] instances   [?] help   [q] quit');
     expect(render(initialState(), ctxFor(dir, { daemon: null }))).toContain('daemon …');
   });
 });

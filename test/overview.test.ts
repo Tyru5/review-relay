@@ -2,11 +2,49 @@ import { describe, expect, test } from 'bun:test';
 import { parseConfig } from '../src/config.ts';
 import type { DaemonState } from '../src/daemon.ts';
 import { HELP_GROUPS, helpWidth, renderCommandHelp, renderHelp, wrap } from '../src/help.ts';
-import { renderDaemon, renderInfo } from '../src/overview.ts';
+import { renderDaemon, renderInfo, renderInstances } from '../src/overview.ts';
+import type { PresenceSnapshot } from '../src/presence.ts';
 import { fmtDuration, padVisible, sanitize, styles, summarizeList, visibleLength } from '../src/ui.ts';
 
 const plain = styles(false);
 const colored = styles(true);
+
+test('instances show authenticated identities, overlapping repos, stale peers, and unknown reads honestly', () => {
+  const now = Date.parse('2026-10-22T12:00:00Z');
+  const snapshot: PresenceSnapshot = {
+    state: 'ok',
+    checkedAt: now,
+    serverTime: now,
+    instances: [
+      {
+        instanceId: 'local-installation',
+        sessionId: 'other-session',
+        label: 'build-server',
+        account: 'alice',
+        version: '0.12.5',
+        commentId: 1,
+        updatedAt: new Date(now - 18_000).toISOString(),
+        stopped: false,
+        repos: [{ name: 'team/app', state: 'running' }],
+      },
+    ],
+  };
+  const opts = { repos: ['TEAM/app'], ownSession: 'this-session', now };
+  const text = renderInstances(snapshot, opts, plain).join('\n');
+  expect(text).toContain('build-server');
+  expect(text).toContain('@alice');
+  expect(text).toContain('18s');
+  expect(text).toContain('also watching');
+  expect(renderInstances(snapshot, { ...opts, now: now + 180_000 }, plain).join('\n')).toContain('stale');
+  const unknown = renderInstances({ ...snapshot, state: 'unknown', error: 'offline' }, opts, plain).join('\n');
+  expect(unknown).toContain('unknown');
+  expect(unknown).toContain('last known');
+  expect(unknown).not.toContain('also watching');
+  expect(renderInstances({ state: 'disabled', instances: [], checkedAt: now }, opts, plain).join('\n')).toContain(
+    'not configured',
+  );
+});
+
 const opts = {
   version: '0.2.0',
   configPath: '/home/x/.review-relay/config.json',

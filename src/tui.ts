@@ -11,8 +11,10 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pricesFor, THEMES, type Config, type ThemeName } from './config.ts';
-import { inspectDaemon, logFilePath, readLast, spawnDetached, type DaemonState } from './daemon.ts';
+import { inspectDaemon, logFilePath, readDaemonInfo, readLast, spawnDetached, type DaemonState } from './daemon.ts';
 import { prState, type PrState } from './github.ts';
+import { renderInstances } from './overview.ts';
+import { disabledPresence, overlappingInstances, PresenceRegistry, type PresenceSnapshot } from './presence.ts';
 import { renderMarkdownView, wrapSpans, type MarkdownDetails } from './markdown.ts';
 import { sumTotals } from './cost.ts';
 import { reportDirFor } from './report.ts';
@@ -265,7 +267,7 @@ export class JobStore {
   }
 }
 
-export type View = 'list' | 'detail' | 'log' | 'help';
+export type View = 'list' | 'detail' | 'log' | 'help' | 'instances';
 
 export type Effect =
   | { kind: 'rerun'; job: JobRecord }
@@ -307,6 +309,9 @@ export interface TuiState {
 export interface TuiContext {
   store: JobStore;
   daemon: DaemonState | null;
+  presence?: PresenceSnapshot;
+  watchedRepos?: string[];
+  ownSession?: string;
   reviewers: string[];
   now: number;
   height: number;
@@ -388,6 +393,8 @@ function panned(state: TuiState, key: 'left' | 'right', widest: number, inner: n
 function extent(state: TuiState, ctx: TuiContext): { widest: number; inner: number } {
   const st = styles(false);
   switch (state.view) {
+    case 'instances':
+      return { widest: widthOf(instanceLines(ctx, st)), inner: innerWidth(ctx) };
     case 'list':
       return { widest: widthOf(listRows(state, ctx, st)), inner: rowWidth(ctx) };
     case 'detail': {
@@ -512,6 +519,13 @@ function reduceKey(state: TuiState, key: string, ctx: TuiContext): TuiState {
   if (key === 't') {
     const theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length]!;
     return { ...base, theme, effect: { kind: 'theme', theme } };
+  }
+  if (key === 'i') return { ...base, view: 'instances', scroll: 0 };
+  if (state.view === 'instances' && key !== '2' && key !== 'tab') {
+    if (key === 'escape' || key === '1') return { ...base, view: 'list', scroll: 0 };
+    if (key === 'q') return { ...base, done: true };
+    if (key === '?') return { ...base, view: 'help', scroll: 0 };
+    return scrolled(base, key, instanceLines(ctx, styles(false)).length, room(base, ctx)) ?? base;
   }
   // The header's tabs: a digit picks one, tab moves to the other.
   const onLog = state.view === 'log';
@@ -735,7 +749,18 @@ function message(state: TuiState, ctx: TuiContext): { text: string; short?: stri
     };
   }
   const live = state.flash && state.flash.until > ctx.now ? state.flash : undefined;
-  return live && { text: live.text, tone: live.tone };
+  if (live) return { text: live.text, tone: live.tone };
+  if (state.view !== 'instances' && ctx.presence) {
+    if (ctx.presence.state === 'unknown')
+      return { text: 'Remote presence unknown. Press i for instances and connection details.', tone: 'warning' };
+    const peers = overlappingInstances(ctx.presence, ctx.watchedRepos ?? [], ctx.ownSession, ctx.now);
+    if (peers.length)
+      return {
+        text: `${peers.length} other instance${peers.length === 1 ? '' : 's'} also watching configured repos. Press i for identities.`,
+        tone: 'warning',
+      };
+  }
+  return undefined;
 }
 
 /**
@@ -776,6 +801,7 @@ export const HELP_LINES: [string, string][] = [
   ['l', "the job's lines from the daemon log, following as they arrive"],
   ['L', 'the whole daemon log'],
   ['1 2 tab', 'switch between the Jobs and Log tabs'],
+  ['i', 'remote instances: GitHub accounts, machine labels, heartbeats and watched repos'],
   ['t', 'cycle theme: dark, light, terminal (syncs terminal colors); saves to config'],
   ['r', 'review the PR or local branch again (asks first); runs in the background and logs to daemon.log'],
   ['c', 'cancel a queued or running review (asks first); its reviewers stop and nothing is posted'],
@@ -978,6 +1004,14 @@ function daemonLine(ctx: TuiContext, st: Styles): string {
   return `${st.badge('success', 'daemon running')}  ${st.muted(`pid ${d.pid}${up}${forwarders}`)}`;
 }
 
+function instanceLines(ctx: TuiContext, st: Styles): string[] {
+  return renderInstances(
+    ctx.presence ?? disabledPresence(),
+    { repos: ctx.watchedRepos ?? [], ownSession: ctx.ownSession, now: ctx.now },
+    st,
+  );
+}
+
 /** The footer's key hints for the current view; `wide` adds the panning hint when rows are wider than the panel. */
 function footer(
   state: TuiState,
@@ -1014,6 +1048,8 @@ function footer(
       ]
     : [];
   switch (state.view) {
+    case 'instances':
+      return [['↑↓', 'scroll'], ...(wide ? [['←→', 'pan'] as [string, string]] : []), ['esc', 'jobs']];
     case 'help':
       return [
         ['↑↓', 'scroll'],
@@ -1045,6 +1081,7 @@ function footer(
         ...job,
         ['/', 'filter'],
         ['s', 'status'],
+        ['i', 'instances'],
         ['?', 'help'],
         state.filter || state.status ? ['esc', 'clear filter'] : ['q', 'quit'],
       ];
@@ -1154,7 +1191,17 @@ export function renderTui(state: TuiState, ctx: TuiContext, st: Theme, version: 
   };
   const notes = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(' · ') || undefined;
 
-  if (state.view === 'help') {
+  if (state.view === 'instances') {
+    const lines = instanceLines(ctx, st);
+    const top = Math.min(state.scroll, Math.max(0, lines.length - (body - 2)));
+    panels = panel(st, width, body, lines.slice(top, top + body - 2), {
+      title: 'Instances',
+      note: sideways(widthOf(lines), inner),
+      hints: [['esc', 'jobs']],
+      focused: true,
+      pan: hscroll,
+    });
+  } else if (state.view === 'help') {
     const lines = helpLines(ctx, st);
     const avail = body - 2;
     const top = Math.min(state.scroll, Math.max(0, lines.length - avail));
@@ -1336,18 +1383,42 @@ export async function tui(config: Config, configPath: string, version: string): 
   const store = new JobStore(config.dataDir, prState, pricesFor(config));
   store.refresh();
   let daemon: DaemonState | null = await inspectDaemon(config.dataDir, config.port);
+  const controller = new AbortController();
+  const registry = config.presence ? new PresenceRegistry(config.presence, undefined, controller.signal) : undefined;
+  let presence: PresenceSnapshot = registry
+    ? { state: 'unknown', instances: [], checkedAt: Date.now(), error: 'checking registry' }
+    : disabledPresence();
+  let refreshing = false;
+  const refreshPresence = () => {
+    if (!registry || refreshing) return;
+    refreshing = true;
+    void registry
+      .read()
+      .then((snapshot) => {
+        presence = snapshot;
+      })
+      .finally(() => {
+        refreshing = false;
+      });
+  };
+  refreshPresence();
   let state = initialState(config.theme);
   let ticks = 0;
   const ctx = (height: number, width: number): TuiContext => ({
     store,
     daemon,
+    presence,
+    watchedRepos: config.repos.map((r) => r.fullName),
+    ownSession:
+      daemon?.running && readDaemonInfo(config.dataDir)?.pid === daemon.pid
+        ? readDaemonInfo(config.dataDir)?.sessionId
+        : undefined,
     reviewers: config.reviewers,
     now: Date.now(),
     height,
     width,
   });
   const size = () => [process.stdout.rows || 24, process.stdout.columns || 80] as const;
-  const controller = new AbortController();
   const refreshPrs = () => {
     const list = visible(state, store.jobs);
     const cursor = cursorOf(state, list);
@@ -1368,6 +1439,7 @@ export async function tui(config: Config, configPath: string, version: string): 
       if (++ticks % DAEMON_EVERY === 0) {
         void inspectDaemon(config.dataDir, config.port).then((d) => (daemon = d));
       }
+      if (ticks % 60 === 0) refreshPresence();
     },
     render: (height, width) => renderTui(state, ctx(height, width), themeStyles(color, depth, state.theme), version),
     key: (key) => {

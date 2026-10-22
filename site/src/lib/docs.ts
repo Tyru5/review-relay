@@ -154,6 +154,11 @@ export const COMMANDS: ReferenceRow[] = [
   ['stop', 'No flags', 'Stop the background daemon. Attempts graceful shutdown, then forces exit after 20 seconds.'],
   ['restart', 'No flags', 'Stop, then start in the background. Use after editing config.'],
   [
+    'instances',
+    '--json',
+    'Remote sessions, GitHub accounts, machine labels and heartbeats. Opt in with presence: { repo: "owner/private-repo", issue: 1, label: "laptop" } on every machine, using the same existing private issue. Labels and process states are self-reported. Heartbeats expire after three minutes; lookup failures are unknown (exit 2), never proof of absence. Warns without stopping remote daemons.',
+  ],
+  [
     'status',
     '--limit <n>, --page <n>',
     'Daemon, endpoint, forwarders, and recent jobs. 20 jobs per page; --page reaches older ones. Exits 3 when the daemon is not running.',
@@ -259,6 +264,7 @@ export const TUI_KEYS: ReferenceRow[] = [
   ['← →', 'Any', 'Pan a table or line wider than the screen. They only pan, and stop at the edges.'],
   ['l', 'Any', 'Follow the job’s lines from the daemon log as they arrive.'],
   ['L', 'Any', 'The whole daemon log.'],
+  ['i', 'Any', 'Remote instances and overlap warnings. Requires presence configuration; esc returns to jobs.'],
   ['/', 'Job list', 'Filter by repo, PR, commit, status, source, route, or error text.'],
   ['s', 'Job list', 'Cycle the status filter: queued, running, done, failed, skipped, superseded, cancelled, all.'],
   ['r', 'Any', 'Review the PR, or a local review’s branch, again in the background. Asks first.'],
