@@ -36,7 +36,14 @@ const EVENTS: { title: string; body: ReactNode }[] = [
   },
   {
     title: 'One scored comment lands',
-    body: 'Findings are merged across judges and linked to exact lines. Later reviews edit the same comment. Each commit is reviewed once, and drafts wait until they are ready.',
+    body: (
+      <>
+        Findings are merged across judges and linked to exact lines. Later reviews edit the same comment. Each commit is
+        reviewed once, and drafts wait until they are ready. Turn on more per repo: a <Code>review-relay</Code> commit
+        status branch protection can require, new findings on their lines with one-click suggestions, and a ping on your
+        desktop, ntfy, or Slack when a score comes in low.
+      </>
+    ),
   },
 ];
 
@@ -82,7 +89,8 @@ const LOCAL_FACTS: { title: string; body: ReactNode }[] = [
     title: 'Gate on it',
     body: (
       <>
-        <Code>--min-score 4</Code> exits 1 under a 4, for a pre-push hook or script. <Code>--json</Code> for tools.
+        <Code>--min-score 4</Code> exits 1 under a 4. <Code>hook install</Code> runs it on every <Code>git push</Code>.{' '}
+        <Code>--json</Code> for tools.
       </>
     ),
   },
@@ -290,8 +298,8 @@ function Home() {
           <div className="max-w-[44rem]">
             <p className="max-w-[62ch] leading-relaxed text-haze">
               Choose models and effort, route different pull requests to different panels, decide when the relay runs,
-              and connect your agents over MCP. Find the defaults, working config examples, and help when a review does
-              not arrive.
+              gate merges on the score, and connect your agents over MCP. Find the defaults, working config examples,
+              and help when a review does not arrive.
             </p>
             <nav aria-label="Documentation" className="mt-6 divide-y divide-rule border-y border-rule">
               {[
@@ -299,6 +307,7 @@ function Home() {
                 ['Configuration reference', 'configuration'],
                 ['Routing rules', 'routing'],
                 ['Review before a PR', 'local'],
+                ['Merge gate & alerts', 'gate'],
                 ['Agents & MCP', 'mcp'],
               ].map(([title, hash]) => (
                 <Link

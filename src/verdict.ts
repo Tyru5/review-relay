@@ -29,9 +29,13 @@ export interface Finding {
   dimension?: Dimension;
   file: string;
   line: number | null;
+  /** The last line the finding covers, past `line`. Unset covers `line` alone. */
+  endLine?: number;
   title: string;
   detail: string;
   suggestion: string;
+  /** The exact new text for `line` through `endLine`, for a suggestion GitHub can apply. Unset when not a local edit. */
+  replacement?: string;
 }
 
 export interface Verdict {
@@ -75,11 +79,13 @@ export const VERDICT_SCHEMA = {
           dimension: { type: 'string', enum: [...DIMENSIONS] },
           file: { type: 'string' },
           line: { type: ['integer', 'null'] },
+          endLine: { type: ['integer', 'null'] },
           title: { type: 'string' },
           detail: { type: 'string' },
           suggestion: { type: 'string' },
+          replacement: { type: ['string', 'null'] },
         },
-        required: ['severity', 'dimension', 'file', 'line', 'title', 'detail', 'suggestion'],
+        required: ['severity', 'dimension', 'file', 'line', 'endLine', 'title', 'detail', 'suggestion', 'replacement'],
         additionalProperties: false,
       },
     },
@@ -102,16 +108,22 @@ export function parseVerdict(raw: unknown): Verdict {
     if (!dim) throw new Error(`verdict.dimensions.${d} missing`);
     dimensions[d] = { score: clampScore(dim.score), note: String(dim.note ?? '') };
   }
-  const findings: Finding[] = (Array.isArray(v.findings) ? v.findings : []).map((f: Record<string, any>) => ({
-    severity: SEVERITIES.includes(f.severity) ? f.severity : 'minor',
-    // A model without the schema may leave it out or invent one; the finding still counts, untagged.
-    ...(DIMENSIONS.includes(f.dimension) ? { dimension: f.dimension as Dimension } : {}),
-    file: String(f.file ?? ''),
-    line: Number.isInteger(f.line) && f.line > 0 ? f.line : null,
-    title: String(f.title ?? ''),
-    detail: String(f.detail ?? ''),
-    suggestion: String(f.suggestion ?? ''),
-  }));
+  const findings: Finding[] = (Array.isArray(v.findings) ? v.findings : []).map((f: Record<string, any>) => {
+    const line: number | null = Number.isInteger(f.line) && f.line > 0 ? f.line : null;
+    return {
+      severity: SEVERITIES.includes(f.severity) ? f.severity : 'minor',
+      // A model without the schema may leave it out or invent one; the finding still counts, untagged.
+      ...(DIMENSIONS.includes(f.dimension) ? { dimension: f.dimension as Dimension } : {}),
+      file: String(f.file ?? ''),
+      line,
+      // A range and a replacement only mean something from a line on; a backwards range is dropped.
+      ...(line !== null && Number.isInteger(f.endLine) && f.endLine > line ? { endLine: f.endLine as number } : {}),
+      title: String(f.title ?? ''),
+      detail: String(f.detail ?? ''),
+      suggestion: String(f.suggestion ?? ''),
+      ...(line !== null && typeof f.replacement === 'string' ? { replacement: f.replacement } : {}),
+    };
+  });
   return {
     summary: v.summary,
     score: clampScore(v.score),
@@ -251,7 +263,16 @@ export function mergeFindings(byReviewer: { reviewer: string; findings: Finding[
       if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(match.severity)) match.severity = f.severity;
       if (!match.dimension && f.dimension) match.dimension = f.dimension;
       // A file-level remark merged with one at a line keeps the line, whichever came first.
-      if (match.line === null && f.line !== null) match.line = f.line;
+      if (match.line === null && f.line !== null) {
+        match.line = f.line;
+        if (f.endLine !== undefined) match.endLine = f.endLine;
+      }
+      // A replacement belongs to its lines, so only one for the same lines is taken; the first reviewer's stays.
+      if (match.replacement === undefined && f.replacement !== undefined && f.line === match.line) {
+        match.replacement = f.replacement;
+        if (f.endLine !== undefined) match.endLine = f.endLine;
+        else delete match.endLine;
+      }
     }
   }
   for (const m of merged) {

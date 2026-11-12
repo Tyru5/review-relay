@@ -6,6 +6,7 @@ export const DOC_SECTIONS = [
   ['routing', 'Routing rules'],
   ['triggers', 'Triggers & review flow'],
   ['local', 'Review before a PR'],
+  ['gate', 'Merge gate & alerts'],
   ['mcp', 'Agents & MCP'],
   ['commands', 'CLI commands'],
   ['reports', 'Scores & reports'],
@@ -55,6 +56,16 @@ export const REPO_OPTIONS: ReferenceRow[] = [
   ['trigger', 'auto', 'auto, greptile, coderabbit, or github. Mentions work in every mode.'],
   ['postToPr', 'true', 'Publish the report as a PR comment. Set false for local reports only; reviewers still run.'],
   [
+    'status',
+    'false',
+    'true or { minScore: 1-5 } sets a review-relay commit status on each reviewed commit: success at minScore (default 4) or above, so branch protection can require it.',
+  ],
+  [
+    'inlineComments',
+    'false',
+    'Also post each new finding on its changed line as one PR review, with a suggestion block when the fix is a small edit. Needs postToPr.',
+  ],
+  [
     'github.onPush',
     'false',
     'Also handle pull_request.synchronize when new commits are pushed. Applies to github and auto modes.',
@@ -68,6 +79,28 @@ export const REPO_OPTIONS: ReferenceRow[] = [
     'authors',
     '[]',
     'GitHub logins whose PRs get reviewed, case-insensitive; write apps as dependabot[bot]. Empty reviews every author. Mentions and run review any PR.',
+  ],
+];
+
+/** Fields of the optional `notify` object. test/docs.test.ts checks them against the parser. */
+export const NOTIFY_OPTIONS: ReferenceRow[] = [
+  [
+    'on',
+    '["low","failed"]',
+    'done: every finished review. low: confidence under minScore. failed: the review failed, or every reviewer did.',
+  ],
+  ['minScore', '4', 'The threshold for low, from 1 to 5.'],
+  [
+    'desktop',
+    'false',
+    'macOS osascript, Linux notify-send, or a Windows toast; on WSL without notify-send, the Windows toast.',
+  ],
+  ['ntfy', 'None', 'An ntfy topic URL. Gets the text, with Title, Tags, and Click headers.'],
+  ['slack', 'None', 'A Slack incoming webhook URL. Gets { text }.'],
+  [
+    'webhook',
+    'None',
+    'Any URL. Gets JSON: event, repo, pr, branch, local, headSha, score, findings by severity, reviewers, url, error, title, text.',
   ],
 ];
 
@@ -190,6 +223,11 @@ export const COMMANDS: ReferenceRow[] = [
     'Score the checked-out branch before opening a PR. Prints the report and exits 1 under --min-score, or with -d runs in the background and shows in tui. Posts nothing.',
   ],
   [
+    'hook',
+    'install [--min-score <n>] [--base <ref>] [--route <name> | --reviewers <ids>] | uninstall',
+    'Write a git pre-push hook that runs review on each pushed branch with new commits and blocks the push under --min-score (default 4). git push --no-verify skips it; a hook review-relay did not write is left alone.',
+  ],
+  [
     'cancel',
     '[--repo <owner/name> --pr <n>] [--head <branch>]',
     'Cancel the PR’s queued or running reviews, or with neither flag the local reviews running in this checkout. The reviewers stop, nothing is posted, and the job is recorded as cancelled.',
@@ -239,7 +277,7 @@ export const MCP_TOOLS: ReferenceRow[] = [
   [
     'review_pr',
     'repo, pr, route, waitSeconds',
-    'Start a review of an open PR in a configured repo, like run. Posts the comment when the repo has postToPr on.',
+    'Start a review of an open PR in a configured repo, like run. Posts the comment when the repo has postToPr on, inline comments with inlineComments, and the commit status with status.',
   ],
   [
     'get_review',

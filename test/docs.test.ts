@@ -6,6 +6,7 @@ import {
   LOCAL_OPTIONS,
   MCP_CONFIG,
   MCP_TOOLS,
+  NOTIFY_OPTIONS,
   QUICK_CONFIG,
   REPO_OPTIONS,
   REVIEWERS,
@@ -39,6 +40,17 @@ describe('published documentation', () => {
       if (value === 'Required') continue;
       const actual = fields[key as keyof typeof fields];
       expect(Array.isArray(actual) ? JSON.stringify(actual) : String(actual)).toBe(value);
+    }
+  });
+
+  test('documents every notify field and its defaults', () => {
+    const { notify } = parseConfig({
+      repos: [{ fullName: 'acme/widget', localPath: '/tmp/widget' }],
+      notify: { desktop: false, ntfy: 'https://n/t', slack: 'https://s/h', webhook: 'https://w/h' },
+    });
+    expect(NOTIFY_OPTIONS.map(([key]) => key).toSorted()).toEqual(Object.keys(notify!).toSorted());
+    for (const [key, value] of NOTIFY_OPTIONS) {
+      if (value !== 'None') expect(notify![key as keyof typeof notify]).toEqual(JSON.parse(value));
     }
   });
 

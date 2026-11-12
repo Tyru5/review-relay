@@ -10,6 +10,7 @@ import {
   LOCAL_OPTIONS,
   MCP_CONFIG,
   MCP_TOOLS,
+  NOTIFY_OPTIONS,
   MODEL_OPTIONS,
   QUICK_CONFIG,
   REPO_OPTIONS,
@@ -358,8 +359,13 @@ function Docs() {
               </li>
               <li>
                 <strong>Save and publish.</strong> Remove the temporary worktree, save reports, and create or update a
-                PR comment if enabled. The comment is posted only if the commit is still the PR&rsquo;s head, one post
-                per PR at a time, so a slow review of an older commit never replaces a newer one&rsquo;s comment.
+                PR comment if enabled, then the <a href="#gate">inline review</a> when it is on. The comment is posted
+                only if the commit is still the PR&rsquo;s head, one post per PR at a time, so a slow review of an older
+                commit never replaces a newer one&rsquo;s comment.
+              </li>
+              <li>
+                <strong>Report the result.</strong> Set the <a href="#gate">commit status</a> and send notifications,
+                when configured. The status went <code>pending</code> when the review started.
               </li>
             </ol>
             <p>
@@ -441,10 +447,10 @@ function Docs() {
             </p>
             <Note title="Gate a push on the score">
               <code>--min-score</code> exits 1 when the confidence is under the threshold, and a review where every
-              reviewer failed exits 1 too, so a pre-push hook or script can stop on it. It and <code>--json</code> need
-              the foreground. Ctrl-C stops the reviewers, removes the worktree, and records the job as failed;{' '}
-              <code>review-relay cancel</code> from the same checkout stops it the same way and records it as{' '}
-              <code>cancelled</code>.
+              reviewer failed exits 1 too, so a script can stop on it; <a href="#pre-push">hook install</a> wires it
+              into <code>git push</code>. It and <code>--json</code> need the foreground. Ctrl-C stops the reviewers,
+              removes the worktree, and records the job as failed; <code>review-relay cancel</code> from the same
+              checkout stops it the same way and records it as <code>cancelled</code>.
             </Note>
             <p>
               Both ways record the job, so <code>status</code> and <code>tui</code> list it with its branch in the PR
@@ -453,6 +459,85 @@ function Docs() {
               <code>r</code> reviews the branch&rsquo;s current head again in the background, in the checkout it ran in,
               and <code>c</code> cancels it while it runs. Each local review is its own process, so{' '}
               <code>maxConcurrent</code> does not limit them.
+            </p>
+          </Section>
+
+          <Section id="gate" title="Merge gate & alerts">
+            <p>
+              Three opt-in settings carry the score past the comment: a commit status a branch protection rule can
+              require, comments on the lines findings name, and notifications. Each is off until you set it.
+            </p>
+            <Snippet
+              label="Repo and top-level settings · example"
+              code={JSON.stringify(
+                {
+                  repos: [
+                    {
+                      fullName: 'acme/widget',
+                      localPath: '~/code/widget',
+                      status: { minScore: 4 },
+                      inlineComments: true,
+                    },
+                  ],
+                  notify: { on: ['low', 'failed'], desktop: true, ntfy: 'https://ntfy.sh/your-unguessable-topic' },
+                },
+                null,
+                2,
+              )}
+            />
+            <h3>Commit status</h3>
+            <p>
+              With <code>status</code> on, each reviewed commit gets a <code>review-relay</code> status:{' '}
+              <code>pending</code> while the panel works, then <code>success</code> when the confidence is at least{' '}
+              <code>minScore</code> (default 4, &ldquo;minor issues only&rdquo;) and <code>failure</code> under it. A
+              skip route passes; a failed or cancelled review is an <code>error</code>; a superseded commit is left
+              alone, since the PR&rsquo;s new head gets its own. The status links to the PR comment.
+            </p>
+            <p>
+              It is a commit status rather than a check run because GitHub only lets GitHub Apps create check runs, and{' '}
+              <code>gh</code> signs in as you. A status that fails to post is logged and never fails the review.
+            </p>
+            <Note title="Require it only where every PR is reviewed">
+              A required check waits on every PR. Drafts, authors outside <code>authors</code>, and PRs no trigger fires
+              on get no status, so they stay blocked until a collaborator comments <code>@review-relay</code>.
+            </Note>
+            <h3>Inline comments</h3>
+            <p>
+              With <code>inlineComments</code> on (it needs <code>postToPr</code>), each review also posts its new
+              findings as one <code>COMMENT</code> review, each on the line it names. Findings still open from an
+              earlier commit were commented on then. GitHub rejects a whole review when one comment names a line outside
+              the diff, so a finding on an untouched line stays in the summary comment alone.
+            </p>
+            <p>
+              Reviewers can give each finding the exact replacement for its lines. When every line of the range was
+              added by the PR, the comment carries a suggestion block GitHub applies in one click. A mention or{' '}
+              <code>run</code> that reviews the same commit again skips spots already commented on. A failed inline post
+              is logged; the summary comment stands.
+            </p>
+            <h3>Notifications</h3>
+            <p>
+              <code>notify</code> needs at least one channel. Notifications come from the daemon, <code>run</code>, and
+              background local reviews; a foreground <code>review</code> prints its result instead. Skipped, superseded,
+              and cancelled reviews send nothing, and a channel that fails is logged without failing the review.
+            </p>
+            <Reference rows={NOTIFY_OPTIONS} label="notify options" />
+            <h3 id="pre-push">Pre-push hook</h3>
+            <Snippet
+              label="Score every push"
+              code={'review-relay hook install\nreview-relay hook install --min-score 3\nreview-relay hook uninstall'}
+            />
+            <p>
+              <code>hook install</code> writes a <code>pre-push</code> hook in the checkout&rsquo;s hooks folder,
+              following <code>core.hooksPath</code>. Each pushed branch with commits no remote has yet gets a{' '}
+              <a href="#local">local review</a>, and the push stops when the confidence is under{' '}
+              <code>--min-score</code> (default 4) or the review fails. Tags, deletions, and branches already on a
+              remote pass. <code>git push --no-verify</code> skips it.
+            </p>
+            <p>
+              The hook calls review-relay by absolute path, since GUI git clients often run hooks without your shell
+              PATH. A <code>pre-push</code> hook review-relay did not write is left alone; <code>install</code> prints
+              the line to add to it. The push waits for the review, so a cheap route with{' '}
+              <code>{'"sources": ["local"]'}</code> keeps it short.
             </p>
           </Section>
 
@@ -630,8 +715,8 @@ function Docs() {
             <h3>One comment, local reports</h3>
             <p>
               Publishing edits the signed-in GitHub user’s latest comment carrying the relay marker, or creates one if
-              none exists. Switching GitHub accounts can create a separate comment. Scores are advisory; review-relay
-              does not install a merge gate.
+              none exists. Switching GitHub accounts can create a separate comment. Scores are advisory unless you turn
+              on the <a href="#gate">commit status</a> and require it in branch protection.
             </p>
             <Snippet
               label="Report directory"
@@ -737,6 +822,11 @@ function Docs() {
               untrusted.
             </p>
             <p>
+              Inline suggestions are model output, and PR content can steer the model, so read a suggestion before
+              applying it. Notifications send the repo, PR or branch, score, and finding counts to the URLs you set; a
+              public ntfy topic is readable by anyone who knows its name.
+            </p>
+            <p>
               Reports and daemon logs can contain source code and findings. Protect <code>dataDir</code> accordingly.
               GitHub removes each forwarder’s temporary repository webhook as soon as the forwarder’s connection closes.
               On macOS and Linux, stopping the daemon leaves none behind; on Windows, end any leftover{' '}
@@ -806,6 +896,19 @@ function Docs() {
                 within a second, and a forwarder standing by picks it up on its next try. A forwarder started while
                 another instance holds the repository logs that it is standing by and tries again every 30 seconds;{' '}
                 <code>status</code> shows it as <code>standby</code>.
+              </p>
+            </details>
+            <details>
+              <summary>The review-relay status is missing, stuck, or no notification came</summary>
+              <p>
+                <code>info</code> shows <code>status ≥N</code> and <code>inline on</code> on each repo and the{' '}
+                <code>notify</code> channels. A daemon started before the edit needs <code>restart</code>. A status or
+                notification that failed to send is logged with the reason: search <code>logs</code> for{' '}
+                <code>commit status not set</code> or <code>notification failed</code>.
+              </p>
+              <p>
+                A status left <code>pending</code> means the process stopped mid-review; a mention or <code>run</code>{' '}
+                reviews the commit again and replaces it. Drafts and skipped authors never get one.
               </p>
             </details>
             <details>

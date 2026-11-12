@@ -20,6 +20,33 @@ export interface RepoConfig {
   github: GithubTriggerConfig;
   /** PR author logins to review, normalized by `normalizeLogin`; empty reviews every author. */
   authors: string[];
+  /** Sets a `review-relay` commit status on each reviewed commit, `success` at `minScore` or above; false for none. */
+  status: StatusConfig | false;
+  /** Also posts each new finding on its line, in one PR review. Only when `postToPr` is on. */
+  inlineComments: boolean;
+}
+
+export interface StatusConfig {
+  minScore: number;
+}
+
+/** The confidence a commit status and `notify.minScore` need by default: 4 is "minor issues only". */
+export const DEFAULT_MIN_SCORE = 4;
+
+export const NOTIFY_EVENTS = ['done', 'low', 'failed'] as const;
+export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
+
+export interface NotifyConfig {
+  /** `done`: every finished review; `low`: confidence under `minScore`; `failed`: the review failed. */
+  on: NotifyEvent[];
+  minScore: number;
+  desktop: boolean;
+  /** An ntfy topic URL. */
+  ntfy?: string;
+  /** A Slack incoming webhook URL. */
+  slack?: string;
+  /** Any URL, which gets the event as JSON. */
+  webhook?: string;
 }
 
 /** Lowercases a login and writes `gh`'s `app/<slug>` bot form as GitHub's `<slug>[bot]`. */
@@ -58,6 +85,8 @@ export interface PresenceConfig {
 export interface Config {
   port: number;
   presence?: PresenceConfig;
+  /** Where to send word of finished reviews; unset sends nothing. */
+  notify?: NotifyConfig;
   /** TUI colors; terminal inherits the terminal's configured palette. Defaults to dark. */
   theme?: ThemeName;
   /** How long `auto` mode waits for Greptile or CodeRabbit after a GitHub PR event before running anyway. */
@@ -224,6 +253,65 @@ function parsePricing(raw: unknown): Record<string, Price> {
   return prices;
 }
 
+/** A merge confidence threshold, 1 to 5; `DEFAULT_MIN_SCORE` when unset. */
+function parseMinScore(raw: unknown, where: string): number {
+  if (raw === undefined) return DEFAULT_MIN_SCORE;
+  if (!Number.isInteger(raw) || (raw as number) < 1 || (raw as number) > 5) {
+    throw new Error(`${where} must be a whole number from 1 to 5`);
+  }
+  return raw as number;
+}
+
+/** `true` is `{ minScore: 4 }`; false or unset sets no status. */
+function parseStatus(raw: unknown, where: string): StatusConfig | false {
+  if (raw === undefined || raw === false) return false;
+  if (raw === true) return { minScore: DEFAULT_MIN_SCORE };
+  if (!isObject(raw)) throw new Error(`${where} must be true, false, or { "minScore": 1-5 }`);
+  for (const key of Object.keys(raw)) {
+    if (key !== 'minScore') throw new Error(`${where}.${key} is not a setting (expected minScore)`);
+  }
+  return { minScore: parseMinScore(raw.minScore, `${where}.minScore`) };
+}
+
+const NOTIFY_CHANNELS = ['ntfy', 'slack', 'webhook'] as const;
+
+/** Off when unset; otherwise at least one channel, each URL http(s). */
+function parseNotify(raw: unknown): NotifyConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObject(raw)) throw new Error('notify must be an object');
+  const known = ['on', 'minScore', 'desktop', ...NOTIFY_CHANNELS];
+  for (const key of Object.keys(raw)) {
+    if (!known.includes(key)) throw new Error(`notify.${key} is not a setting (expected ${known.join(', ')})`);
+  }
+  const on = raw.on ?? ['low', 'failed'];
+  if (
+    !Array.isArray(on) ||
+    on.length === 0 ||
+    on.some((event) => !(NOTIFY_EVENTS as readonly unknown[]).includes(event))
+  ) {
+    throw new Error(`notify.on must list one or more of ${NOTIFY_EVENTS.join(', ')}`);
+  }
+  const desktop = raw.desktop ?? false;
+  if (typeof desktop !== 'boolean') throw new Error('notify.desktop must be true or false');
+  const notify: NotifyConfig = {
+    on: [...new Set(on as NotifyEvent[])],
+    minScore: parseMinScore(raw.minScore, 'notify.minScore'),
+    desktop,
+  };
+  for (const channel of NOTIFY_CHANNELS) {
+    const url = raw[channel];
+    if (url === undefined) continue;
+    if (typeof url !== 'string' || !/^https?:\/\/\S+$/.test(url)) {
+      throw new Error(`notify.${channel} must be an http(s) URL`);
+    }
+    notify[channel] = url;
+  }
+  if (!desktop && !NOTIFY_CHANNELS.some((channel) => notify[channel])) {
+    throw new Error(`notify needs a channel: desktop: true, or a URL in ${NOTIFY_CHANNELS.join(', ')}`);
+  }
+  return notify;
+}
+
 /** Built-in prices with the config's on top. */
 export const pricesFor = (config: Pick<Config, 'pricing'>): Record<string, Price> => ({
   ...DEFAULT_PRICES,
@@ -262,13 +350,19 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     if (!Array.isArray(authors) || authors.some((a) => typeof a !== 'string' || !a.trim())) {
       throw new Error(`repos[${i}].authors must be a list of GitHub logins`);
     }
+    const postToPr = r.postToPr ?? true;
+    const inlineComments = r.inlineComments ?? false;
+    if (typeof inlineComments !== 'boolean') throw new Error(`repos[${i}].inlineComments must be true or false`);
+    if (inlineComments && !postToPr) warn(`repos[${i}].inlineComments needs postToPr; nothing is posted`);
     return {
       fullName: r.fullName,
       localPath: resolve(r.localPath.replace(/^~(?=\/|$)/, homedir())),
       trigger,
-      postToPr: r.postToPr ?? true,
+      postToPr,
       github: { onPush: r.github?.onPush ?? false, mention: r.github?.mention ?? '@review-relay' },
       authors: [...new Set(authors.map(normalizeLogin))],
+      status: parseStatus(r.status, `repos[${i}].status`),
+      inlineComments,
     };
   });
 
@@ -308,9 +402,12 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     presence = { repo: p.repo, issue: p.issue as number, label: p.label.trim() };
   }
 
+  const notify = parseNotify(c.notify);
+
   return {
     port: c.port ?? 9988,
     ...(presence ? { presence } : {}),
+    ...(notify ? { notify } : {}),
     theme,
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,

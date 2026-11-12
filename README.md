@@ -9,6 +9,8 @@ Runs local AI agent reviews (Claude Code, Codex, or any of 11 other agent CLIs) 
 
 Events reach your machine through `gh webhook forward`, so no public URL is needed.
 
+Optionally, per repo, the score also becomes a [commit status](#commit-status) branch protection can require, and new findings land as [inline comments](#inline-comments) on their lines, with one-click suggestions. [Notifications](#notifications) tell you when a review comes in low or fails, and a [pre-push hook](#pre-push-hook) scores each branch before it leaves your machine.
+
 ## Requirements
 
 - `git`
@@ -72,6 +74,9 @@ bun src/cli.ts start
 | `repos[].github.onPush` | `false` | Review new commits pushed to an open PR (`synchronize`) |
 | `repos[].github.mention` | `@review-relay` | Comment text that requests a review |
 | `repos[].authors` | `[]` | GitHub logins whose PRs get reviewed, ignoring case, such as `["tyru5", "dependabot[bot]"]`. Empty reviews every author. Mentions and `run` review any PR. |
+| `repos[].status` | `false` | `true` or `{"minScore": N}` sets a `review-relay` commit status that branch protection can require; see [Commit status](#commit-status). `true` means `minScore` 4. |
+| `repos[].inlineComments` | `false` | Also post each new finding on its changed line, in one PR review; see [Inline comments](#inline-comments). Needs `postToPr`. |
+| `notify` | none | Where to send word of finished reviews: `desktop`, `ntfy`, `slack`, `webhook`; see [Notifications](#notifications) |
 
 ### Custom reviewers
 
@@ -229,6 +234,7 @@ review-relay logs [N] [-f]                          # last N daemon log lines (d
 review-relay run --repo owner/name --pr 123         # review an open PR now
 review-relay run --repo owner/name --pr 123 --route risky   # ... with this route
 review-relay review [-d] [--base origin/main]       # score the current branch before opening a PR; see below
+review-relay hook install [--min-score N]           # pre-push hook that scores each pushed branch; hook uninstall removes it
 review-relay cancel --repo owner/name --pr 123      # cancel the PR's queued or running review; no flags: this checkout's local review
 review-relay route --repo owner/name --pr 123       # which route a PR matches and why, without reviewing
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
@@ -237,6 +243,66 @@ review-relay info                                   # resolved config with defau
 review-relay config                                 # resolved config as JSON (info --json)
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
+
+### Commit status
+
+With `status` on, a repo's reviewed commits get a `review-relay` commit status, so a branch protection rule can require a score before merging:
+
+```json
+"repos": [{ "fullName": "acme/widget", "localPath": "~/code/widget", "status": { "minScore": 4 } }]
+```
+
+| Review | Status |
+| - | - |
+| starts | `pending`, `Reviewing` |
+| done, confidence at or above `minScore` | `success`, `Confidence 4/5 (needs 4) · Claude 4, Codex 5` |
+| done, under `minScore` | `failure`, with the same description |
+| skipped by a route | `success`, `Skipped by route docs` |
+| failed, or every reviewer failed | `error`, `Review failed: ...` |
+| cancelled | `error`, `Review cancelled` |
+| superseded | left alone; the PR's new head gets its own |
+
+The status links to the PR comment when one was posted, else the PR. It's set by the process running the review (the daemon or `run`), whatever `postToPr` says, and a status that fails to post is logged without failing the review. GitHub check runs need a GitHub App, and `gh` signs in as you, so this is a commit status.
+
+A required `review-relay` check waits on every PR, so require it only where every PR gets reviewed. Drafts, PRs from authors outside `authors`, and PRs no trigger fires on get no status; comment `@review-relay` on one to review it and set it.
+
+### Inline comments
+
+With `inlineComments` on (and `postToPr`, which posts them), each review also posts its new findings as comments on the lines they name, in one `COMMENT` review on the reviewed commit, right after the summary comment:
+
+- Only findings that are new to the PR. One still open from an earlier commit was commented on then.
+- Only findings on a line the PR adds or changes. GitHub rejects a whole review when one comment names a line outside the diff, so a finding on an untouched line stays in the summary comment alone.
+- Reviewers can give each finding the exact replacement for its lines. When every line of the finding's range is an added line, the comment covers the range and carries a ```` ```suggestion ```` block that GitHub can apply in one click; otherwise it comments on the first line with the written suggested fix only.
+- A mention or `run` that re-reviews a commit skips spots review-relay already commented on for that commit (same file, lines within 3).
+- The review is posted only while the commit is still the PR's head, and a failed post is logged as a warning on the job; the summary comment stands either way.
+
+Comments aren't resolved when a finding is fixed; the summary comment's [finding history](#finding-history) lists what was fixed.
+
+### Notifications
+
+`notify` sends word of finished reviews. It's off when unset, and needs at least one channel:
+
+```json
+"notify": {
+  "on": ["low", "failed"],
+  "minScore": 4,
+  "desktop": true,
+  "ntfy": "https://ntfy.sh/my-reviews",
+  "slack": "https://hooks.slack.com/services/T000/B000/XXXX",
+  "webhook": "https://example.com/review-relay"
+}
+```
+
+| Field | Default | Meaning |
+| - | - | - |
+| `on` | `["low", "failed"]` | `done`: every finished review. `low`: confidence under `minScore`. `failed`: the review failed, or every reviewer did. |
+| `minScore` | `4` | 1 to 5, for `low` |
+| `desktop` | `false` | macOS `osascript`, Linux `notify-send`, Windows a PowerShell toast. On Linux without `notify-send` but with `powershell.exe`, as in WSL, the Windows toast. |
+| `ntfy` | none | An [ntfy](https://ntfy.sh) topic URL. Gets the text as the body, with `Title`, `Tags`, and `Click` headers. |
+| `slack` | none | A Slack incoming webhook URL. Gets `{"text": ...}`. |
+| `webhook` | none | Any URL. Gets JSON: `event` (`done` or `failed`), `repo`, `pr` (0 for local), `branch`, `local`, `headSha`, `score`, `findings` counts by severity, `reviewers` with each `name`, `label`, `ok`, and `score`, `url`, `error`, `title`, and `text`. |
+
+A notification reads like `review-relay: acme/widget #42` / `Confidence 2/5 · 1 critical, 2 major · Claude 2, Codex 4`, and links the PR comment (local reviews get no link). It's sent by the daemon, `run` (so the MCP server's `review_pr` too), and background local reviews (`review -d`, the TUI's `r`, `review_branch`); a foreground `review` prints its result instead. Skipped, superseded, and cancelled reviews send nothing. Channels are sent at once with a 10-second timeout each, and one that fails is logged without failing the review. The desktop channel on Windows and WSL was checked from WSL; macOS and `notify-send` were set up from their docs but not run.
 
 ### Cancelling a review
 
@@ -298,6 +364,22 @@ review-relay review --route risky                    # use a route's reviewers a
 - Routes pick the reviewers as for a PR, with source `local` and the base's branch name (`main` for `origin/main`). A skip route never applies, and `sources: ["local"]` can send local reviews to their own reviewers. `--reviewers` runs the listed ids instead of routing.
 - `--min-score N` exits 1 when the confidence is under N, for a pre-push hook or script; a review where every reviewer failed exits 1 too. `--json` prints the score, each reviewer's result, and the merged findings. Both need the foreground. Ctrl-C (or SIGTERM to a background review) stops the reviewers, removes the worktree, and records the job as failed. `review-relay cancel` from the same checkout, or `c` in the TUI, stops a foreground or background review the same way and records it as `cancelled`; a foreground review then exits 1.
 - Each local review is its own process, so `maxConcurrent` doesn't limit them: five `review -d` runs start five panels at once.
+
+### Pre-push hook
+
+`review-relay hook install` writes a git `pre-push` hook in the checkout you run it from, so each push is scored first:
+
+```sh
+review-relay hook install                     # block pushes under 4/5
+review-relay hook install --min-score 3 --route risky
+review-relay hook uninstall
+```
+
+- For each pushed branch with commits no remote has yet, the hook runs `review-relay review` on the pushed commit, the same [local review](#reviewing-before-a-pr), and blocks the push when the confidence is under `--min-score` (default 4) or the review fails. Tags, deletions, and branches whose commits are all on a remote already are let through. `git push --no-verify` skips it.
+- `--base`, `--route`, `--reviewers`, and `--config` are passed through to `review`.
+- It goes in `git rev-parse --git-path hooks`, which follows `core.hooksPath`, and linked worktrees share it. It calls review-relay by absolute path, since GUI git clients often run hooks without `~/.local/bin` on PATH; from a repo checkout that is your `bun` and `src/cli.ts`, so install again after moving either.
+- A `pre-push` hook review-relay didn't write is left alone: `install` prints the line to add to it instead. Installing again replaces review-relay's own hook, so its flags can change, and `uninstall` removes only that one.
+- The push waits for the review, which can take minutes. A cheap [route](#routing) with `sources: ["local"]` keeps it short.
 
 ### MCP server
 
@@ -410,7 +492,8 @@ Reports land in `~/.review-relay/reports/<owner>__<repo>/pr-<n>/<sha>/` (`local/
 5. Create a detached worktree at the PR head commit.
 6. Delete the config paths a PR could use to run code through the selected CLIs (see [Supported agents](#supported-agents)).
 7. Run the route's reviewers in parallel with the same rubric prompt, each locked down as listed above. `start` logs a warning for any reviewer, in `reviewers` or a route, whose CLI isn't on PATH.
-8. Write reports, remove the worktree, and post or update the PR comment if the commit is still the PR's head. Posts to one PR happen one at a time.
+8. Write reports, remove the worktree, and post or update the PR comment if the commit is still the PR's head, then the [inline review](#inline-comments) when it's on. Posts to one PR happen one at a time.
+9. Set the [commit status](#commit-status) and send [notifications](#notifications), when configured. The status went `pending` back at step 1.
 
 A [cancel](#cancelling-a-review) stops a review at any of these steps: a queued one never starts, and a running one kills its reviewers, removes the worktree, and posts nothing.
 
@@ -443,6 +526,8 @@ The PR comment headline is the lowest score among reviewers that succeeded. It a
 - The `maxConcurrent` limit and the one-post-per-PR lock hold within one process, so local reviews run outside the limit. A `run` started while the daemon reviews the same PR is checked against the PR head but can still post at the same moment as the daemon.
 - Most reviewers can read files outside the worktree, so a prompt-injected reviewer could quote one, such as a credentials file, into findings that get posted to the PR. Claude Code (`--restricted`) and Copilot keep reads inside the worktree; Codex's sandbox blocks writes and network but not reads.
 - Your own user-level hooks still run for Grok and Vibe, which have no flag to skip them.
+- An [inline comment](#inline-comments)'s suggestion is model output, and PR content can steer the model. Read a suggestion before applying it, as you would a stranger's.
+- [Notifications](#notifications) carry the repo, PR or branch name, score, and finding counts to the URLs you configure. A public ntfy topic is readable by anyone who knows its name, so pick an unguessable one or a private server.
 - Someone can game a size route by splitting a change into small PRs, so a cheap route on `maxLines` sees each piece alone. Skip routes pass over PRs that change agent files, but a cheap route still matches them: keep `**/*.md` out of routes that downgrade, and prefer `docs/**`.
 
 ## Security

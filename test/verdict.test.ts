@@ -144,6 +144,40 @@ test('parseVerdict keeps a known dimension and drops an invented one', () => {
   expect(b).not.toHaveProperty('dimension');
 });
 
+test('parseVerdict keeps a forward range and a replacement only for a finding with a line', () => {
+  const raw = verdict(4, [
+    { ...finding('minor', 'src/a.ts', 10), endLine: 12, replacement: 'x' },
+    // A backwards or one-line range is dropped; an empty replacement deletes lines, so it stays.
+    { ...finding('minor', 'src/a.ts', 10), endLine: 9, replacement: '' },
+    { ...finding('minor', 'src/a.ts', 10), endLine: 10, replacement: null as never },
+    // Without a line there is nothing to replace.
+    { ...finding('minor', 'src/a.ts', null), endLine: 4, replacement: 'y' },
+  ]);
+  const [a, b, c, d] = parseVerdict(JSON.stringify(raw)).findings;
+  expect([a!.endLine, a!.replacement]).toEqual([12, 'x']);
+  expect([b!.endLine, b!.replacement]).toEqual([undefined, '']);
+  expect(c).not.toHaveProperty('endLine');
+  expect(c).not.toHaveProperty('replacement');
+  expect(d).not.toHaveProperty('endLine');
+  expect(d).not.toHaveProperty('replacement');
+});
+
+test('mergeFindings keeps the first replacement and takes another only for the same line', () => {
+  const at = (line: number, replacement?: string, endLine?: number): Finding => ({
+    ...finding('minor', 'src/a.ts', line),
+    ...(replacement !== undefined ? { replacement } : {}),
+    ...(endLine !== undefined ? { endLine } : {}),
+  });
+  const merge = (...byReviewer: Finding[]) =>
+    mergeFindings(byReviewer.map((f, i) => ({ reviewer: `r${i}`, findings: [f] })))[0]!;
+  expect(merge(at(10, 'first'), at(10, 'second', 11))).toMatchObject({ replacement: 'first' });
+  expect(merge(at(10, 'first'), at(10, 'second', 11)).endLine).toBeUndefined();
+  // The first has none; the second names the same line, so its replacement and range come along.
+  expect(merge(at(10), at(10, 'second', 11))).toMatchObject({ replacement: 'second', endLine: 11 });
+  // A nearby line is the same finding but not the same lines, so its replacement would edit the wrong ones.
+  expect(merge(at(10), at(12, 'second'))).not.toHaveProperty('replacement');
+});
+
 test('titleSimilarity compares the words of two titles', () => {
   expect(titleSimilarity('Missing null check on user', 'Null check missing for user input')).toBeCloseTo(4 / 6);
   expect(titleSimilarity('Off by one', 'Race in cache eviction')).toBe(0);

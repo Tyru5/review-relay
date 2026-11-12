@@ -21,6 +21,8 @@ test('parseConfig applies defaults and validates trigger modes', () => {
     postToPr: true,
     github: { onPush: false, mention: '@review-relay' },
     authors: [],
+    status: false,
+    inlineComments: false,
   });
   expect(config.graceMs).toBe(120_000);
   expect(config.reviewers).toEqual(['codex', 'claude']);

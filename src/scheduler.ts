@@ -1,6 +1,8 @@
+import type { JobEvent } from './commit-status.ts';
 import { normalizeLogin, type RepoConfig } from './config.ts';
 import { BOT_NAMES, type BotStartJob, type Classified } from './match.ts';
 import type { ReviewOutcome } from './runner.ts';
+import type { FinishedStatus } from './commit-status.ts';
 import { CANCEL_POLL_MS, type StateStore } from './state.ts';
 import { jobKey, type Bot, type ResolvedJob, type ReviewJob, type TriggerMode } from './types.ts';
 
@@ -45,6 +47,11 @@ export interface SchedulerDeps {
   prHead: (job: ResolvedJob) => Promise<string>;
   /** The PR author's login, for a repo with `authors` when the event didn't name it. */
   prAuthor: (repo: string, pr: number) => Promise<string>;
+  /**
+   * Hears a review start, once its commit is confirmed as the head, and every end of a started review, for commit
+   * statuses and notifications. Awaited, but a failure is only logged.
+   */
+  onEvent?: (event: JobEvent, repo: RepoConfig) => Promise<void>;
   /** Reviews that run at once; later ones wait as `queued`, oldest first. Unlimited when unset. */
   maxConcurrent?: number;
   /** How often job state is read for cancel requests while a job is queued or running; CANCEL_POLL_MS when unset. */
@@ -303,23 +310,41 @@ export class Scheduler {
     this.cancelPoll = undefined;
   }
 
+  /** Tells `onEvent`; a failure there is logged and never changes the review's outcome. */
+  private async emit(repo: RepoConfig, event: JobEvent): Promise<void> {
+    if (!this.deps.onEvent) return;
+    try {
+      await this.deps.onEvent(event, repo);
+    } catch (err) {
+      this.log(
+        `[${repo.fullName}] PR #${event.job.pr}: ${event.phase} hook failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   private async review(repo: RepoConfig, job: ResolvedJob, key: string, controller: AbortController): Promise<void> {
     const tag = `[${repo.fullName}] PR #${job.pr}`;
+    // Only a review that started reports its end, so a commit never gets an end without a start.
+    let started = false;
+    const finished = (status: FinishedStatus, extra: { outcome?: ReviewOutcome; error?: string } = {}) =>
+      started ? this.emit(repo, { phase: 'finished', job, status, ...extra }) : Promise.resolve();
     const supersede = (head: string, what: string) => {
       this.deps.state.finish(key, { status: 'superseded', supersededBy: head });
       this.log(`${tag} @ ${job.headSha.slice(0, 8)}: ${what}, the PR is now at ${head.slice(0, 8)}`);
+      return finished('superseded');
     };
     const cancelled = () => controller.signal.reason === CANCEL;
     const cancel = (route?: string) => {
       this.deps.state.finish(key, { status: 'cancelled', route });
       this.log(`${tag} @ ${job.headSha.slice(0, 8)}: cancelled, nothing posted`);
+      return finished('cancelled');
     };
     this.deps.state.begin(key);
     try {
-      if (cancelled()) return cancel();
+      if (cancelled()) return await cancel();
       const head = await this.deps.prHead(job);
-      if (head !== job.headSha) return supersede(head, 'not reviewed');
-      if (cancelled()) return cancel();
+      if (head !== job.headSha) return await supersede(head, 'not reviewed');
+      if (cancelled()) return await cancel();
       // This commit is the PR's head, so a review still running on an older one is stale.
       for (const other of this.inflight.values()) {
         if (other.job.repo === job.repo && other.job.pr === job.pr && other.job.headSha !== head) {
@@ -329,29 +354,35 @@ export class Scheduler {
       this.inflight.set(key, { job, controller });
 
       this.log(`${tag} @ ${job.headSha.slice(0, 8)}: reviewing (${job.reason})`);
-      const { reportDir, route, skipped, supersededBy } = await this.deps.run(job, repo, controller.signal);
+      started = true;
+      await this.emit(repo, { phase: 'started', job });
+      const outcome = await this.deps.run(job, repo, controller.signal);
+      const { reportDir, route, skipped, supersededBy } = outcome;
+      for (const warning of outcome.warnings ?? []) this.log(`${tag} @ ${job.headSha.slice(0, 8)}: ${warning}`);
       const via = route ? `route ${route.name} (${route.reason}), ` : '';
       if (skipped) {
         this.deps.state.finish(key, { status: 'skipped', route: route?.name });
-        return this.log(`${tag}: ${via}skipped`);
+        this.log(`${tag}: ${via}skipped`);
+        return await finished('skipped', { outcome });
       }
       // The runner reports any abort as a newer head; one that posted before the cancel landed is done.
-      if (supersededBy && cancelled()) return cancel(route?.name);
+      if (supersededBy && cancelled()) return await cancel(route?.name);
       if (supersededBy) {
         this.deps.state.finish(key, { status: 'superseded', supersededBy, reportDir, route: route?.name });
-        return this.log(
-          `${tag} @ ${job.headSha.slice(0, 8)}: ${via}not posted, the PR is now at ${supersededBy.slice(0, 8)}`,
-        );
+        this.log(`${tag} @ ${job.headSha.slice(0, 8)}: ${via}not posted, the PR is now at ${supersededBy.slice(0, 8)}`);
+        return await finished('superseded', { outcome });
       }
       this.deps.state.finish(key, { status: 'done', reportDir, route: route?.name });
       this.log(`${tag}: ${via}done${reportDir ? ` -> ${reportDir}` : ''}`);
+      await finished('done', { outcome });
     } catch (err) {
       // An aborted review fails in whatever step it was in; the abort is the real outcome.
-      if (cancelled()) return cancel();
-      if (controller.signal.aborted) return supersede(String(controller.signal.reason), 'stopped');
+      if (cancelled()) return await cancel();
+      if (controller.signal.aborted) return await supersede(String(controller.signal.reason), 'stopped');
       const error = err instanceof Error ? err.message : String(err);
       this.deps.state.finish(key, { status: 'failed', error });
       this.log(`${tag}: failed: ${error}`);
+      await finished('failed', { error });
     } finally {
       this.inflight.delete(key);
     }

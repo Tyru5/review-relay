@@ -55,7 +55,7 @@ export interface CommentOptions {
 const short = (sha: string) => sha.slice(0, 8);
 
 /** `Major · consensus`: the severity, and how many reviewers agree when more than one ran and reported it. */
-const badge = (f: TrackedFinding) =>
+export const badge = (f: TrackedFinding) =>
   `**${SEVERITY_LABELS[f.severity]}${f.agreement && f.agreement !== 'single' ? ` · ${f.agreement}` : ''}**`;
 
 /** `2 new · 1 still open · 3 fixed`, under the findings heading when a prior review exists. */

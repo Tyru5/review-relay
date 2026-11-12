@@ -185,3 +185,48 @@ describe('repo authors', () => {
     expect(() => parseConfig(withAuthors([7]))).toThrow('repos[0].authors');
   });
 });
+
+describe('commit status, inline comments, and notify', () => {
+  const repo = (fields: Record<string, unknown>) => ({ repos: [{ ...REPOS[0], ...fields }] });
+
+  test('status is off by default; true means minScore 4; minScore takes 1 to 5', () => {
+    expect(parseConfig({ repos: REPOS }).repos[0]).toMatchObject({ status: false, inlineComments: false });
+    expect(parseConfig(repo({ status: true })).repos[0]!.status).toEqual({ minScore: 4 });
+    expect(parseConfig(repo({ status: { minScore: 3 } })).repos[0]!.status).toEqual({ minScore: 3 });
+    expect(parseConfig(repo({ status: {} })).repos[0]!.status).toEqual({ minScore: 4 });
+    for (const minScore of [0, 6, 3.5, '4']) {
+      expect(() => parseConfig(repo({ status: { minScore } }))).toThrow('repos[0].status.minScore');
+    }
+    expect(() => parseConfig(repo({ status: { min: 3 } }))).toThrow('repos[0].status.min is not a setting');
+    expect(() => parseConfig(repo({ status: 'yes' }))).toThrow('repos[0].status must be');
+  });
+
+  test('inlineComments without postToPr warns, since nothing is posted', () => {
+    const warnings: string[] = [];
+    const config = parseConfig(repo({ inlineComments: true, postToPr: false }), (m) => warnings.push(m));
+    expect(config.repos[0]!.inlineComments).toBe(true);
+    expect(warnings).toEqual(['repos[0].inlineComments needs postToPr; nothing is posted']);
+    expect(() => parseConfig(repo({ inlineComments: 'yes' }))).toThrow('repos[0].inlineComments');
+  });
+
+  test('notify is unset by default, fills defaults, and needs a channel with http(s) URLs', () => {
+    expect(parse({}).config).not.toHaveProperty('notify');
+    expect(parse({ notify: { desktop: true } }).config.notify).toEqual({
+      on: ['low', 'failed'],
+      minScore: 4,
+      desktop: true,
+    });
+    expect(parse({ notify: { on: ['done', 'done'], ntfy: 'https://ntfy.sh/t', minScore: 2 } }).config.notify).toEqual({
+      on: ['done'],
+      minScore: 2,
+      desktop: false,
+      ntfy: 'https://ntfy.sh/t',
+    });
+    fails({ notify: {} }).toThrow('notify needs a channel');
+    fails({ notify: { desktop: true, on: [] } }).toThrow('notify.on');
+    fails({ notify: { desktop: true, on: ['always'] } }).toThrow('notify.on');
+    fails({ notify: { slack: 'hooks.slack.com/x' } }).toThrow('notify.slack must be an http(s) URL');
+    fails({ notify: { desktop: true, email: 'me@x' } }).toThrow('notify.email is not a setting');
+    fails({ notify: { desktop: true, minScore: 9 } }).toThrow('notify.minScore');
+  });
+});

@@ -502,7 +502,7 @@ export const TOOLS: Tool[] = [
     name: 'review_pr',
     title: 'Review a pull request',
     description:
-      'Starts a review-relay review of an open pull request in a configured repo now, even when its head commit was already reviewed. When the repo has postToPr on (the default), the scored review is posted to the PR as a comment. Runs in the background and returns the job key at once; read the result with get_review.',
+      'Starts a review-relay review of an open pull request in a configured repo now, even when its head commit was already reviewed. When the repo has postToPr on (the default), the scored review is posted to the PR as a comment, plus inline comments when inlineComments is on; a repo with status on also gets a review-relay commit status. Runs in the background and returns the job key at once; read the result with get_review.',
     inputSchema: {
       type: 'object',
       properties: {

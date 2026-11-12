@@ -76,6 +76,8 @@ function setup(
     post: async (_repo, _pr, body) => {
       posts.push(body);
     },
+    addedLines: async () => new Map(),
+    postInline: async () => 0,
     prHead: async () => job.headSha,
   };
   const scratch = (call: ReviewerInput) => call.scratchDir.split('/').at(-1)!;
@@ -286,6 +288,53 @@ describe('stale commits', () => {
     expect((await newer).supersededBy).toBeUndefined();
     expect(comments).toHaveLength(1);
     expect(comments[0]).toContain(`Commit \`${NEWER.slice(0, 8)}\``);
+  });
+
+  test('inline comments go in one review after the summary, only while current, and never fail the review', async () => {
+    const t = setup({ reviewers: ['codex'] });
+    const inline: { sha: string; body: string; lines: number[] }[] = [];
+    t.repo.inlineComments = true;
+    t.deps.post = async (_repo, _pr, body) => {
+      t.posts.push(body);
+      return 'https://github.com/Tyru5/Agendex/pull/7#issuecomment-1';
+    };
+    t.deps.addedLines = async () => new Map([['src/a.ts', new Set([3])]]);
+    t.deps.postInline = async (_repo, _pr, sha, body, comments) => {
+      inline.push({ sha, body, lines: comments.map((c) => c.line) });
+      return comments.length;
+    };
+
+    const outcome = await runReview(job, t.repo, t.config, t.deps);
+    expect(outcome).toMatchObject({ commentUrl: 'https://github.com/Tyru5/Agendex/pull/7#issuecomment-1', inline: 1 });
+    expect(inline).toEqual([
+      {
+        sha: job.headSha,
+        body: expect.stringContaining('(https://github.com/Tyru5/Agendex/pull/7#issuecomment-1)'),
+        lines: [3],
+      },
+    ]);
+
+    // The PR moved on: neither the comment nor the inline review is posted.
+    t.deps.prHead = async () => NEWER;
+    expect((await runReview({ ...job, pr: 8 }, t.repo, t.config, t.deps)).supersededBy).toBe(NEWER);
+    expect(inline).toHaveLength(1);
+    t.deps.prHead = async () => job.headSha;
+
+    // A failed inline post leaves the summary comment and becomes a warning.
+    t.deps.postInline = async () => {
+      throw new Error('gh api exited 1: Unprocessable Entity');
+    };
+    const posts = t.posts.length;
+    const failed = await runReview({ ...job, pr: 9 }, t.repo, t.config, t.deps);
+    expect(t.posts).toHaveLength(posts + 1);
+    expect(failed.warnings).toEqual(['inline review not posted: gh api exited 1: Unprocessable Entity']);
+
+    // Off by default: no diff is read and nothing inline is posted.
+    t.repo.inlineComments = false;
+    t.deps.addedLines = async () => {
+      throw new Error('not called');
+    };
+    expect((await runReview({ ...job, pr: 10 }, t.repo, t.config, t.deps)).warnings).toBeUndefined();
   });
 
   test('an abort kills the reviewers and ends the review with no report and no post', async () => {

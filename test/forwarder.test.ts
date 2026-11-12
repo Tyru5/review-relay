@@ -13,6 +13,8 @@ const repo: RepoConfig = {
   postToPr: true,
   github: { onPush: false, mention: '@review-relay' },
   authors: [],
+  status: false,
+  inlineComments: false,
 };
 
 const dirs: string[] = [];

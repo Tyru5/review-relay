@@ -177,6 +177,19 @@ export function renderInfo(config: Config, opts: InfoOptions, st: Styles): strin
     row(st, 'timeout', fmtDuration(config.timeoutMs), 'per reviewer'),
     row(st, 'concurrent', String(config.maxConcurrent), 'reviews at once; later ones queue'),
     row(st, 'dataDir', tildify(config.dataDir)),
+    ...(config.notify
+      ? [
+          row(
+            st,
+            'notify',
+            [
+              ...(config.notify.desktop ? ['desktop'] : []),
+              ...(['ntfy', 'slack', 'webhook'] as const).filter((c) => config.notify![c]),
+            ].join(', '),
+            `on ${config.notify.on.join(', ')}${config.notify.on.includes('low') ? ` (under ${config.notify.minScore}/5)` : ''}`,
+          ),
+        ]
+      : []),
     ...section(st, 'Reviewers'),
   ];
 
@@ -218,6 +231,8 @@ export function renderInfo(config: Config, opts: InfoOptions, st: Styles): strin
     const flags = [
       `trigger ${repo.trigger}`,
       `post ${repo.postToPr ? 'on' : 'off'}`,
+      ...(repo.inlineComments ? ['inline on'] : []),
+      ...(repo.status ? [`status ≥${repo.status.minScore}`] : []),
       `onPush ${repo.github.onPush ? 'on' : 'off'}`,
       `mention ${repo.github.mention}`,
       ...(repo.authors.length > 0 ? [`authors ${repo.authors.join(',')}`] : []),

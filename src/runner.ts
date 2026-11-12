@@ -2,7 +2,8 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pricesFor, type Config, type RepoConfig, type ReviewerEntry } from './config.ts';
 import { diffStats, promptDiff, type DiffStats } from './diffstats.ts';
-import { prHead, upsertComment } from './github.ts';
+import { postInlineReview, prHead, upsertComment } from './github.ts';
+import { addedLines, planInline, type InlineComment } from './inline.ts';
 import { priorReview, trackFindings } from './lifecycle.ts';
 import { reviewPrompt } from './prompt.ts';
 import { commentBody, routeLine, writeReport } from './report.ts';
@@ -26,8 +27,12 @@ export interface RunnerDeps {
   /** Runs `fn` in a checkout of the fetched PR head, as `withCheckout` does. */
   checkout: <T>(repo: RepoConfig, job: ResolvedJob, dataDir: string, fn: (dir: string) => Promise<T>) => Promise<T>;
   promptDiff: (dir: string, baseRef: string) => Promise<string>;
-  /** Posts or updates the PR comment. */
-  post: (repo: string, pr: number, body: string) => Promise<void>;
+  /** Posts or updates the PR comment, and returns its URL. */
+  post: (repo: string, pr: number, body: string) => Promise<string | void>;
+  /** The added lines per file in the PR's diff, read in the clone, which inline comments may name. */
+  addedLines: (repo: RepoConfig, job: ResolvedJob) => Promise<Map<string, Set<number>>>;
+  /** Posts the comments as one review on the commit, skipping spots already commented on; returns how many it posted. */
+  postInline: (repo: string, pr: number, sha: string, body: string, comments: InlineComment[]) => Promise<number>;
   /** The PR's head commit on GitHub now, checked just before posting. */
   prHead: (repo: string, pr: number) => Promise<string>;
 }
@@ -40,6 +45,8 @@ export const RUNNER_DEPS: RunnerDeps = {
   checkout: withCheckout,
   promptDiff,
   post: upsertComment,
+  addedLines: (repo, job) => addedLines(repo.localPath, baseRemoteRef(job), job.headSha),
+  postInline: postInlineReview,
   prHead,
 };
 
@@ -117,6 +124,12 @@ export interface ReviewOutcome {
   results?: ReviewerResult[];
   /** The comment the review wrote, posted or not. */
   comment?: string;
+  /** The posted comment's URL. */
+  commentUrl?: string;
+  /** How many findings were posted as inline comments. */
+  inline?: number;
+  /** Steps that failed without failing the review, such as the inline review post. */
+  warnings?: string[];
 }
 
 /** The tail of each PR's chain of posts, so two reviews of one PR never post at once. */
@@ -134,18 +147,24 @@ function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Posts the comment unless the PR has moved past the reviewed commit, and returns the newer head when it has. The
- * check and the post share one turn per PR: a slower review of an older commit can't overwrite a newer one's
- * comment, and two first reviews can't both create a comment.
+ * Runs `publish` unless the PR has moved past the reviewed commit, and returns the newer head when it has. The check
+ * and the posts share one turn per PR: a slower review of an older commit can't overwrite a newer one's comment, and
+ * two first reviews can't both create a comment.
  */
-function postIfCurrent(job: ResolvedJob, body: string, deps: RunnerDeps): Promise<string | undefined> {
+function publishIfCurrent(
+  job: ResolvedJob,
+  deps: RunnerDeps,
+  publish: () => Promise<void>,
+): Promise<string | undefined> {
   return serialized(`${job.repo}#${job.pr}`, async () => {
     const head = await deps.prHead(job.repo, job.pr);
     if (head !== job.headSha) return head;
-    await deps.post(job.repo, job.pr, body);
+    await publish();
     return undefined;
   });
 }
+
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
  * Picks the PR's route from its diff, read in the clone, then runs that route's reviewers in parallel on a fresh
@@ -232,11 +251,36 @@ export async function runReview(
   if (results.every((r) => !r.ok)) {
     throw new Error(`all reviewers failed (${results.map((r) => `${r.name}: ${r.error}`).join('; ')})`);
   }
-  const outcome = { reportDir, route: pick.route, results, comment: body };
+  const outcome: ReviewOutcome = { reportDir, route: pick.route, results, comment: body };
   // A local review has no PR to post to.
-  if (repo.postToPr && !isLocal(job)) {
-    const supersededBy = await postIfCurrent(job, body, deps);
-    if (supersededBy) return { ...outcome, supersededBy };
+  if (!repo.postToPr || isLocal(job)) return outcome;
+  const labels = new Map(results.map((r) => [r.name, r.label]));
+  const warnings: string[] = [];
+  let comments: InlineComment[] = [];
+  if (repo.inlineComments) {
+    try {
+      comments = planInline(tracked.findings, await deps.addedLines(repo, job), labels);
+    } catch (err) {
+      warnings.push(`inline comments skipped: ${message(err)}`);
+    }
   }
-  return outcome;
+  const supersededBy = await publishIfCurrent(job, deps, async () => {
+    outcome.commentUrl = (await deps.post(job.repo, job.pr, body)) || undefined;
+    if (comments.length === 0) return;
+    // The summary comment stands whatever happens to the inline review.
+    try {
+      const summary = outcome.commentUrl ? `[review-relay](${outcome.commentUrl})` : 'review-relay';
+      outcome.inline = await deps.postInline(
+        job.repo,
+        job.pr,
+        job.headSha,
+        `${summary}: findings on the changed lines. The scored review is in the summary comment.`,
+        comments,
+      );
+    } catch (err) {
+      warnings.push(`inline review not posted: ${message(err)}`);
+    }
+  });
+  if (warnings.length > 0) outcome.warnings = warnings;
+  return supersededBy ? { ...outcome, supersededBy } : outcome;
 }

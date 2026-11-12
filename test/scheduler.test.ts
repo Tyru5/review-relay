@@ -14,6 +14,8 @@ const repoWith = (trigger: TriggerMode): RepoConfig => ({
   postToPr: false,
   github: { onPush: false, mention: '@review-relay' },
   authors: [],
+  status: false,
+  inlineComments: false,
 });
 
 const job = (source: ReviewJob['source'], sha = SHA): ReviewJob => ({
@@ -571,6 +573,46 @@ test('a failed run can be retried by the next trigger', async () => {
   await scheduler.idle();
   expect(calls).toBe(2);
   expect(state.list()[0]?.status).toBe('done');
+});
+
+test('onEvent hears a start and an end for each review that started, and its failure changes nothing', async () => {
+  const events: string[] = [];
+  const NEW = 'f'.repeat(40);
+  let head = SHA;
+  let outcome: () => Promise<{ skipped?: boolean; supersededBy?: string }> = async () => ({});
+  const state = new StateStore(null);
+  const { scheduler } = setup(0, {
+    state,
+    prHead: async () => head,
+    run: () => outcome(),
+    onEvent: async (event) => {
+      events.push(
+        event.phase === 'started' ? 'started' : `finished ${event.status}${event.error ? ` ${event.error}` : ''}`,
+      );
+      if (event.phase === 'started') throw new Error('hook down');
+    },
+  });
+  const repo = repoWith('auto');
+  const round = async (sha: string, expected: string[]) => {
+    events.length = 0;
+    scheduler.handle(repo, { ...mention, job: { ...mention.job, headSha: sha } });
+    await scheduler.idle();
+    expect(events).toEqual(expected);
+  };
+
+  await round(SHA, ['started', 'finished done']);
+  expect(state.get(`Tyru5/Agendex@${SHA}`)?.status).toBe('done');
+  outcome = async () => ({ skipped: true });
+  await round(SHA, ['started', 'finished skipped']);
+  outcome = async () => {
+    throw new Error('boom');
+  };
+  await round(SHA, ['started', 'finished failed boom']);
+  outcome = async () => ({ supersededBy: NEW });
+  await round(SHA, ['started', 'finished superseded']);
+  // A commit that is no longer the head never started, so it reports nothing.
+  head = NEW;
+  await round(SHA, []);
 });
 
 test('a skip route records the commit as skipped and handled, with its route', async () => {

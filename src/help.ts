@@ -188,6 +188,26 @@ export const HELP_GROUPS: Group[] = [
         ],
       },
       {
+        name: 'hook',
+        args: 'install [--min-score N] [--base <ref>] [--route <name> | --reviewers <ids>] | uninstall',
+        summary: 'Score each branch you push with a git pre-push hook',
+        detail: [
+          "install writes a pre-push hook in this checkout's hooks folder (core.hooksPath when set). For each pushed branch with commits no remote has yet, it runs review-relay review on the pushed commit and blocks the push when the confidence is under --min-score (default 4) or the review fails. git push --no-verify skips it.",
+          'The hook calls review-relay by absolute path. Running install again replaces it, so the flags can change. A pre-push hook review-relay did not write is left alone; install prints the line to add to it instead. uninstall removes only review-relay’s hook.',
+        ],
+        options: [
+          { flag: '--min-score <n>', description: 'Block the push when the confidence is under n (1-5, default 4)' },
+          { flag: '--base <ref>', description: 'Ref to diff against (default: origin/HEAD, else origin/main)' },
+          { flag: '--route <name>', description: 'Use this route instead of the one the branch matches' },
+          { flag: '--reviewers <ids>', description: 'Comma-separated reviewer ids to run instead of routing' },
+        ],
+        examples: [
+          'review-relay hook install',
+          'review-relay hook install --min-score 3',
+          'review-relay hook uninstall',
+        ],
+      },
+      {
         name: 'cancel',
         args: '[--repo <owner/name> --pr <N>] [--head <branch>]',
         summary: 'Cancel a queued or running review',

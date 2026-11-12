@@ -1,4 +1,5 @@
 import { execOrThrow } from './exec.ts';
+import { INLINE_MARKER, unposted, type InlineComment, type PostedComment } from './inline.ts';
 import { COMMENT_MARKER } from './report.ts';
 import type { CommitPr } from './scheduler.ts';
 import type { ResolvedJob, ReviewJob } from './types.ts';
@@ -72,9 +73,63 @@ export async function prAuthor(repo: string, pr: number): Promise<string> {
   return (await execOrThrow(['gh', 'api', `repos/${repo}/pulls/${pr}`, '--jq', '.user.login'])).trim();
 }
 
-/** Keeps one relay comment per PR: edits the signed-in user's marked comment, or creates it. */
-export async function upsertComment(repo: string, pr: number, body: string): Promise<void> {
-  const login = (await execOrThrow(['gh', 'api', 'user', '--jq', '.login'])).trim();
+const signedInLogin = async () => (await execOrThrow(['gh', 'api', 'user', '--jq', '.login'])).trim();
+
+export type CommitState = 'pending' | 'success' | 'failure' | 'error';
+
+/** Sets the `review-relay` commit status, with the description cut to GitHub's 140 characters. */
+export async function setCommitStatus(
+  repo: string,
+  sha: string,
+  status: { state: CommitState; description: string; targetUrl?: string },
+): Promise<void> {
+  const payload = JSON.stringify({
+    state: status.state,
+    context: 'review-relay',
+    description: status.description.length > 140 ? `${status.description.slice(0, 139)}…` : status.description,
+    ...(status.targetUrl ? { target_url: status.targetUrl } : {}),
+  });
+  await execOrThrow(['gh', 'api', '-X', 'POST', `repos/${repo}/statuses/${sha}`, '--input', '-'], {
+    stdin: payload,
+    timeoutMs: 30_000,
+  });
+}
+
+/**
+ * Posts the comments as one `COMMENT` review on `sha`, leaving out the spots the signed-in user's earlier inline
+ * comments already cover on that commit. Returns how many it posted; none posts no review.
+ */
+export async function postInlineReview(
+  repo: string,
+  pr: number,
+  sha: string,
+  body: string,
+  comments: InlineComment[],
+): Promise<number> {
+  const login = await signedInLogin();
+  const out = await execOrThrow([
+    'gh',
+    'api',
+    '--paginate',
+    `repos/${repo}/pulls/${pr}/comments`,
+    '--jq',
+    `.[] | select(.user.login == "${login}" and (.body | contains("${INLINE_MARKER}"))) | {path, original_line, original_commit_id}`,
+  ]);
+  const posted = out
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as PostedComment);
+  const fresh = unposted(comments, posted, sha);
+  if (fresh.length === 0) return 0;
+  await execOrThrow(['gh', 'api', '-X', 'POST', `repos/${repo}/pulls/${pr}/reviews`, '--input', '-'], {
+    stdin: JSON.stringify({ commit_id: sha, event: 'COMMENT', body, comments: fresh }),
+  });
+  return fresh.length;
+}
+
+/** Keeps one relay comment per PR: edits the signed-in user's marked comment, or creates it. Returns its URL. */
+export async function upsertComment(repo: string, pr: number, body: string): Promise<string> {
+  const login = await signedInLogin();
   const ids = await execOrThrow([
     'gh',
     'api',
@@ -89,13 +144,14 @@ export async function upsertComment(repo: string, pr: number, body: string): Pro
     .filter(Boolean)
     .at(-1);
   const payload = JSON.stringify({ body });
-  if (existing) {
-    await execOrThrow(['gh', 'api', '-X', 'PATCH', `repos/${repo}/issues/comments/${existing}`, '--input', '-'], {
-      stdin: payload,
-    });
-  } else {
-    await execOrThrow(['gh', 'api', '-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '--input', '-'], {
-      stdin: payload,
-    });
-  }
+  const url = existing
+    ? await execOrThrow(
+        ['gh', 'api', '-X', 'PATCH', `repos/${repo}/issues/comments/${existing}`, '--input', '-', '--jq', '.html_url'],
+        { stdin: payload },
+      )
+    : await execOrThrow(
+        ['gh', 'api', '-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '--input', '-', '--jq', '.html_url'],
+        { stdin: payload },
+      );
+  return url.trim();
 }

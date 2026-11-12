@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { version } from '../package.json';
 import {
   checkRoute,
+  DEFAULT_MIN_SCORE,
   defaultConfigPath,
   findRepo,
   loadConfig,
@@ -26,6 +27,7 @@ import {
   readDaemonInfo,
   reapForwarders,
   secretHash,
+  selfCommand,
   spawnDetached,
   stopDaemon,
   waitForStart,
@@ -35,7 +37,10 @@ import {
 } from './daemon.ts';
 import { describeStats, diffStats } from './diffstats.ts';
 import { Forwarder } from './forwarder.ts';
-import { openPrForCommit, prAuthor, prHead, resolveJob } from './github.ts';
+import { commitStatusFor } from './commit-status.ts';
+import { openPrForCommit, prAuthor, prHead, resolveJob, setCommitStatus } from './github.ts';
+import { installHook, uninstallHook } from './hook.ts';
+import { notify } from './notify.ts';
 import { renderCommandHelp, renderHelp } from './help.ts';
 import { busyLocal, localJobsIn, localTag, localTarget, reviewLocal } from './local.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -52,7 +57,7 @@ import {
 import { findBin, HARNESSES } from './reviewers/index.ts';
 import { COMMENT_MARKER, combinedScore } from './report.ts';
 import { explainRoutes, pickRoute, SOURCES } from './routes.ts';
-import { RUNNER_DEPS, runReview } from './runner.ts';
+import { RUNNER_DEPS, runReview, type ReviewOutcome } from './runner.ts';
 import { Scheduler, type SchedulerDeps } from './scheduler.ts';
 import { routeEvent, startServer } from './server.ts';
 import { setup } from './setup.ts';
@@ -107,6 +112,33 @@ const fail = (message: string): never => {
 const warn = (message: string) => console.log(marked(err.badge('warning', message)));
 const ok = (message: string) => console.log(st.badge('success', message));
 
+/** Sets the repo's commit status and sends notifications as a PR review starts and ends. */
+const jobEvents =
+  (config: Config): SchedulerDeps['onEvent'] =>
+  async (event, repo) => {
+    const tag = `[${repo.fullName}] PR #${event.job.pr} @ ${event.job.headSha.slice(0, 8)}`;
+    const status = repo.status ? commitStatusFor(event, repo.status) : null;
+    const work: Promise<void>[] = [];
+    if (status) {
+      work.push(
+        setCommitStatus(event.job.repo, event.job.headSha, status).catch((e) =>
+          log(`${tag}: commit status not set: ${e instanceof Error ? e.message : e}`),
+        ),
+      );
+    }
+    if (event.phase === 'finished' && (event.status === 'done' || event.status === 'failed')) {
+      const { outcome } = event;
+      work.push(
+        notify(
+          config.notify,
+          { job: event.job, results: outcome?.results, commentUrl: outcome?.commentUrl, error: event.error },
+          log,
+        ),
+      );
+    }
+    await Promise.all(work);
+  };
+
 function makeScheduler(config: Config, state: StateStore, overrides: Partial<SchedulerDeps> = {}) {
   return new Scheduler({
     state,
@@ -117,6 +149,7 @@ function makeScheduler(config: Config, state: StateStore, overrides: Partial<Sch
     prHead: (job) => prHead(job.repo, job.pr),
     prAuthor,
     run: (job, repo, signal) => runReview(job, repo, config, RUNNER_DEPS, signal),
+    onEvent: jobEvents(config),
     log,
     ...overrides,
   });
@@ -684,7 +717,10 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
   if (opts.worker) {
     // Spawned by -d or the TUI, with stdout in daemon.log.
     const { signal, release } = stopOnSignal(() => log(`${localTag({ ...job, branch: job.headRef })}: stopping`));
-    await reviewLocal(target, reviewConfig, { state, log, signal }).finally(release);
+    // Notified here only: a foreground review's result is already on screen.
+    const onFinish = (outcome?: ReviewOutcome, error?: string) =>
+      notify(config.notify, { job, results: outcome?.results, error }, log);
+    await reviewLocal(target, reviewConfig, { state, log, signal, onFinish }).finally(release);
     return;
   }
 
@@ -791,6 +827,37 @@ async function reviewBranch(config: Config, configPath: string, opts: Options) {
     note(err.badge('danger', `confidence ${confidence ?? '?'}/5 is under --min-score ${minScore}`));
     process.exitCode = 1;
   }
+}
+
+/**
+ * Installs or removes the pre-push hook in the checkout this runs in. Needs no config: the hook's reviews read it
+ * when they run, from --config when given here.
+ */
+async function hook(action: string | undefined, opts: Options) {
+  const cwd = process.cwd();
+  if (action === 'uninstall') {
+    const removed = await uninstallHook(cwd);
+    if (removed) ok(`removed ${tildify(removed)}`);
+    else warn('no review-relay pre-push hook here');
+    return;
+  }
+  if (action !== 'install') return fail('hook takes install or uninstall');
+  if (opts.route !== undefined && opts.reviewers !== undefined) fail('pass --route or --reviewers, not both');
+  const minScore = opts.minScore === undefined ? DEFAULT_MIN_SCORE : positiveInt('--min-score', opts.minScore, 1);
+  if (minScore > 5) fail(`--min-score takes 1 to 5, got ${minScore}`);
+  const { path, replaced } = await installHook(cwd, {
+    // Absolute, since GUI git clients often run hooks without ~/.local/bin on PATH.
+    command: selfCommand([]),
+    minScore,
+    base: opts.base,
+    route: opts.route,
+    reviewers: opts.reviewers,
+    config: opts.config === undefined ? undefined : resolve(opts.config),
+  });
+  ok(`${replaced ? 'updated' : 'installed'} ${tildify(path)}`);
+  console.log(
+    `  ${st.muted(`each push of a branch with new commits runs review-relay review and stops under ${minScore}/5; git push --no-verify skips it`)}`,
+  );
 }
 
 /** Fetches the PR and prints how every route judges it, without running a reviewer or touching job state. */
@@ -921,6 +988,7 @@ const COMMANDS = [
   'route',
   'replay',
   'mcp',
+  'hook',
   'setup',
   'info',
   'config',
@@ -956,6 +1024,7 @@ async function main() {
   const configPath = resolve(opts.config ?? defaultConfigPath());
   // setup writes the config, so it must not require a valid one first.
   if (command === 'setup') return setup(configPath);
+  if (command === 'hook') return hook(arg, opts);
   // Reads the config on each tool call instead, so a missing or edited config is reported to the agent, not fatal.
   if (command === 'mcp') return serveMcp({ ...MCP_DEPS, version, configPath, cwd: process.cwd() });
 

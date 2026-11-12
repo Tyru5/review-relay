@@ -91,6 +91,8 @@ export async function localTarget(config: Config, cwd: string, opts: LocalOption
     trigger: 'auto',
     github: { onPush: false, mention: '@review-relay' },
     authors: [],
+    status: false,
+    inlineComments: false,
     ...configured,
     fullName,
     // The checkout itself, which may be a linked worktree of the configured clone.
@@ -155,6 +157,8 @@ export interface LocalRun {
   deps?: RunnerDeps;
   /** How often job state is read for a cancel request; CANCEL_POLL_MS when unset. */
   cancelPollMs?: number;
+  /** Hears a review that finished or failed, for notifications; not one that was cancelled or stopped. */
+  onFinish?: (outcome?: ReviewOutcome, error?: string) => Promise<void>;
 }
 
 /** A local review's outcome; `cancelled` when a cancel request stopped it, so it wrote no report. */
@@ -221,6 +225,7 @@ export async function reviewLocal(target: LocalTarget, config: Config, run: Loca
     const via = outcome.route ? `route ${outcome.route.name} (${outcome.route.reason}), ` : '';
     run.state.finish(key, { status: 'done', reportDir: outcome.reportDir, route: outcome.route?.name });
     run.log(`${tag}: ${via}done -> ${outcome.reportDir}`);
+    await run.onFinish?.(outcome);
     return outcome;
   } catch (err) {
     // A step the cancel cut short fails in its own way; the cancel is the real outcome.
@@ -228,6 +233,7 @@ export async function reviewLocal(target: LocalTarget, config: Config, run: Loca
     const error = err instanceof Error ? err.message : String(err);
     run.state.finish(key, { status: 'failed', error });
     run.log(`${tag}: failed: ${error}`);
+    await run.onFinish?.(undefined, error);
     throw err;
   } finally {
     clearInterval(poll);
