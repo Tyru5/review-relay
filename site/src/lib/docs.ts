@@ -18,7 +18,7 @@ export type ReferenceRow = readonly [name: string, defaultValue: string, descrip
 
 export const GLOBAL_OPTIONS: ReferenceRow[] = [
   ['repos', 'Required', 'Non-empty list of GitHub repositories and their local clones.'],
-  ['port', '9988', 'Local webhook server port. Listens on 127.0.0.1 only.'],
+  ['port', '9988', 'Local webhook server port, 1 to 65535; 0 picks a free one. Listens on 127.0.0.1 only.'],
   [
     'graceMs',
     '120000',
@@ -248,7 +248,11 @@ export const COMMANDS: ReferenceRow[] = [
     'Process recorded deliveries. --dry-run logs would-run jobs; --grace overrides the auto-mode wait for this replay.',
   ],
   ['info', '--json', 'Resolved configuration and diagnostics. --json prints machine-readable output.'],
-  ['config', 'No flags', 'Print the resolved configuration as JSON.'],
+  [
+    'config',
+    '[edit]',
+    'Print the resolved configuration as JSON, colored on a terminal; -h lists every key as a jq path. edit opens the file in $VISUAL or $EDITOR and checks it after you save.',
+  ],
   ['help', '[command]', 'List commands, or show a command’s options and examples.'],
 ];
 

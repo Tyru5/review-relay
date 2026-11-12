@@ -67,6 +67,31 @@ describe('published documentation', () => {
     for (const command of HELP_GROUPS.flatMap((group) => group.commands)) expect(names).toContain(command.name);
   });
 
+  test('config help lists every jq path of a fully set resolved config', () => {
+    const keys = HELP_GROUPS.flatMap((group) => group.commands)
+      .find((command) => command.name === 'config')!
+      .keys!.map(({ flag }) => flag);
+    const config = parseConfig({
+      repos: [{ fullName: 'acme/widget', localPath: '/tmp/widget', status: true, inlineComments: true }],
+      models: { hermes: { provider: 'openrouter' } },
+      routes: [
+        { name: 'docs', when: { onlyPaths: ['docs/**'] }, skip: true },
+        { name: 'risky', when: { minLines: 500 }, reviewers: ['claude'], timeoutMs: 60_000 },
+      ],
+      pricing: { 'some-model': { input: 1, output: 2 } },
+      presence: { repo: 'acme/registry', issue: 1, label: 'laptop' },
+      notify: { desktop: true, ntfy: 'https://n/t', slack: 'https://s/h', webhook: 'https://w/h' },
+    });
+    // Stops at a listed path, so `.routes[].when` covers its conditions; map keys become <id> and <model>.
+    const paths = (value: unknown, path: string): string[] => {
+      if (keys.includes(path) || value === null || typeof value !== 'object') return [path];
+      if (Array.isArray(value)) return value.flatMap((item) => paths(item, `${path}[]`));
+      const name = (key: string) => ({ '.models': '<id>', '.pricing': '<model>' })[path] ?? key;
+      return Object.entries(value).flatMap(([key, item]) => paths(item, `${path}.${name(key)}`));
+    };
+    expect([...new Set(paths(config, ''))].toSorted()).toEqual(keys.toSorted());
+  });
+
   test('lists the review command flags its help page lists', () => {
     const review = HELP_GROUPS.flatMap((group) => group.commands).find((command) => command.name === 'review');
     expect(LOCAL_OPTIONS.map(([flag]) => flag)).toEqual(review!.options!.map(({ flag }) => flag));

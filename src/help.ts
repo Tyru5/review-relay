@@ -20,6 +20,8 @@ export interface CommandHelp {
   /** Extra sentences for the command's own page. */
   detail?: string[];
   options?: Flag[];
+  /** Paths into the command's JSON output, for jq. */
+  keys?: Flag[];
   examples?: string[];
 }
 
@@ -289,8 +291,65 @@ export const HELP_GROUPS: Group[] = [
       },
       {
         name: 'config',
-        summary: 'Print the resolved config as JSON',
-        examples: ['review-relay config | jq .repos'],
+        args: '[edit]',
+        summary: 'Print the resolved config as JSON, or edit the config file',
+        detail: [
+          'Prints the config with defaults applied: colored on a terminal, plain JSON when piped, so jq reads it. Every key is listed below as a jq path; <id> is a reviewer id and <model> a model name.',
+          'edit opens the config file in $VISUAL or $EDITOR (default vi), then checks it and reports the first problem. A running daemon keeps the config it started with; review-relay restart loads the edit.',
+        ],
+        keys: [
+          { flag: '.port', description: 'Webhook server port on 127.0.0.1; 0 picks a free one' },
+          { flag: '.theme', description: 'TUI colors: dark, light, or terminal' },
+          {
+            flag: '.graceMs',
+            description: 'How long auto mode waits for Greptile or CodeRabbit before reviewing anyway',
+          },
+          { flag: '.timeoutMs', description: 'Per-reviewer timeout' },
+          { flag: '.maxConcurrent', description: 'Reviews that run at once; later ones queue' },
+          { flag: '.dataDir', description: 'State, logs, and reports' },
+          { flag: '.reviewers', description: 'Reviewer ids that review a PR no route matches' },
+          { flag: '.models.<id>.harness', description: 'The CLI the reviewer runs' },
+          { flag: '.models.<id>.label', description: 'Its name in the PR comment' },
+          { flag: '.models.<id>.model', description: "Model; unset uses the CLI's default" },
+          { flag: '.models.<id>.effort', description: 'Reasoning effort, for CLIs that take one' },
+          { flag: '.models.<id>.provider', description: 'Model provider (hermes only)' },
+          { flag: '.routes[].name', description: 'Route name, for --route and mentions' },
+          {
+            flag: '.routes[].when',
+            description:
+              'Conditions: repos, baseBranches, sources, paths, onlyPaths, minLines, maxLines, minFiles, maxFiles, wideImpact',
+          },
+          { flag: '.routes[].reviewers', description: 'Who reviews a PR the route matches' },
+          { flag: '.routes[].skip', description: 'true skips review of a PR the route matches' },
+          { flag: '.routes[].timeoutMs', description: 'Per-reviewer timeout for the route' },
+          { flag: '.pricing.<model>', description: 'USD per million tokens: input, output, cachedInput, cacheWrite' },
+          { flag: '.repos[].fullName', description: 'owner/name' },
+          { flag: '.repos[].localPath', description: 'Local clone, absolute' },
+          { flag: '.repos[].trigger', description: 'auto, greptile, coderabbit, or github' },
+          { flag: '.repos[].postToPr', description: 'Posts the review comment on the PR' },
+          { flag: '.repos[].github.onPush', description: 'Also reviews new commits' },
+          { flag: '.repos[].github.mention', description: 'Comment text that requests a review' },
+          { flag: '.repos[].authors', description: 'PR authors to review; empty reviews every author' },
+          { flag: '.repos[].status', description: 'Commit status: false, or { minScore }' },
+          { flag: '.repos[].inlineComments', description: 'Also posts each finding on its line' },
+          { flag: '.presence.repo', description: 'Private repo of the shared instance registry (unset: off)' },
+          { flag: '.presence.issue', description: 'Issue in that repo that holds the heartbeats' },
+          { flag: '.presence.label', description: "This machine's name in the registry" },
+          { flag: '.notify.on', description: 'Events to send: done, low, failed (unset notify: off)' },
+          { flag: '.notify.minScore', description: 'Confidence under which a review counts as low' },
+          { flag: '.notify.desktop', description: 'Desktop notifications' },
+          { flag: '.notify.ntfy', description: 'ntfy topic URL' },
+          { flag: '.notify.slack', description: 'Slack incoming webhook URL' },
+          { flag: '.notify.webhook', description: 'URL that gets each event as JSON' },
+        ],
+        examples: [
+          'review-relay config',
+          'review-relay config | jq .repos',
+          "review-relay config | jq -r '.repos[].fullName'",
+          'review-relay config | jq .models.claude',
+          'review-relay config edit',
+          'EDITOR="code --wait" review-relay config edit',
+        ],
       },
     ],
   },
@@ -408,6 +467,11 @@ export function renderCommandHelp(
   lines.push('', st.section('Options'));
   const flagWidth = Math.max(...options.map((f) => f.flag.length));
   for (const f of options) lines.push(...entry(st, 2, f.flag, flagWidth, f.description, width));
+  if (cmd.keys?.length) {
+    lines.push('', st.section('Keys'));
+    const keyWidth = Math.max(...cmd.keys.map((k) => k.flag.length));
+    for (const k of cmd.keys) lines.push(...entry(st, 2, k.flag, keyWidth, k.description, width));
+  }
   if (cmd.examples?.length) {
     lines.push('', st.section('Examples'));
     for (const e of cmd.examples) lines.push(`  ${st.muted('$')} ${st.command(e)}`);

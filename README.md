@@ -53,7 +53,7 @@ bun src/cli.ts start
 
 | Field | Default | Meaning |
 | - | - | - |
-| `port` | `9988` | Local port for forwarded webhooks |
+| `port` | `9988` | Local port for forwarded webhooks, 1 to 65535; `0` picks a free one |
 | `graceMs` | `120000` | In `auto` mode, how long a GitHub PR event waits for Greptile or CodeRabbit before running anyway |
 | `timeoutMs` | `1800000` | Per-reviewer timeout |
 | `maxConcurrent` | `2` | Reviews that run at once, each with all of its reviewers. Later ones wait as `queued`, oldest first |
@@ -240,7 +240,8 @@ review-relay route --repo owner/name --pr 123       # which route a PR matches a
 review-relay replay events.jsonl --dry-run          # test trigger logic with recorded deliveries
 review-relay mcp                                    # MCP server on stdio, so agents can request and read reviews; see below
 review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
-review-relay config                                 # resolved config as JSON (info --json)
+review-relay config                                 # resolved config as JSON, colored on a terminal; config -h lists every jq key
+review-relay config edit                            # open the config in $VISUAL/$EDITOR, then check it
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
 

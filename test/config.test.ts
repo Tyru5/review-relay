@@ -19,6 +19,14 @@ test('theme defaults to dark and accepts only supported preferences', () => {
   for (const theme of ['', 'auto', 1, {}, []]) fails({ theme }).toThrow('theme must be one of dark, light, terminal');
 });
 
+test('port defaults to 9988 and takes a TCP port number, or 0 for a free one', () => {
+  expect(parse({}).config.port).toBe(9988);
+  for (const port of [0, 65535]) expect(parse({ port }).config.port).toBe(port);
+  for (const port of [-1, 65536, 9988.5, '9988']) {
+    fails({ port }).toThrow('port must be a whole number from 0 to 65535');
+  }
+});
+
 test('remote presence is opt-in and requires an explicit registry and machine label', () => {
   expect(parse({}).config.presence).toBeUndefined();
   const presence = { repo: 'team/coordination', issue: 17, label: 'build-server' };

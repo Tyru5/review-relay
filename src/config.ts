@@ -377,6 +377,11 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     throw new Error('maxConcurrent must be a whole number of reviews, 1 or more');
   }
 
+  const port = c.port ?? 9988;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error('port must be a whole number from 0 to 65535 (0 picks a free port)');
+  }
+
   const theme = c.theme ?? 'dark';
   if (!THEMES.includes(theme)) throw new Error(`theme must be one of ${THEMES.join(', ')}`);
 
@@ -405,7 +410,7 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
   const notify = parseNotify(c.notify);
 
   return {
-    port: c.port ?? 9988,
+    port,
     ...(presence ? { presence } : {}),
     ...(notify ? { notify } : {}),
     theme,

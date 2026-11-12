@@ -83,6 +83,20 @@ export function row(st: Styles, label: string, value: string, detail?: string, w
   return `  ${st.key(label.padEnd(width))}${value}${tail}`;
 }
 
+/** Indented JSON with keys, strings, numbers, and literals in their own colors; plain without color. */
+export function paintJson(st: Styles, value: unknown): string {
+  const text = JSON.stringify(value, null, 2);
+  if (!st.color) return text;
+  // Strings match first, so digits and words inside one stay part of it.
+  return text.replace(
+    /("(?:\\.|[^"\\])*")(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (m, str, colon) => {
+      if (str) return colon ? `${st.paint(ANSI.cyan, str)}${colon}` : st.paint(ANSI.green, str);
+      return st.paint(/^[tfn]/.test(m) ? ANSI.magenta : ANSI.yellow, m);
+    },
+  );
+}
+
 /** A yellow section heading preceded by a blank line. */
 export const section = (st: Styles, title: string): string[] => ['', st.section(title)];
 

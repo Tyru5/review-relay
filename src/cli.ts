@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
@@ -66,7 +66,7 @@ import { paginate, renderStatus } from './status.ts';
 import { tui } from './tui.ts';
 import { exec } from './exec.ts';
 import { isLocal, jobKey, type JobSource } from './types.ts';
-import { ANSI, row, sanitize, section, styles, tildify } from './ui.ts';
+import { ANSI, paintJson, row, sanitize, section, styles, tildify } from './ui.ts';
 import { mergeFindings } from './verdict.ts';
 import { baseRemoteRef, fetchPr } from './worktree.ts';
 
@@ -538,7 +538,7 @@ function positiveInt(flag: string, value: string | undefined, fallback: number):
 }
 
 async function info(config: Config, configPath: string, json: boolean) {
-  if (json) return console.log(JSON.stringify(config, null, 2));
+  if (json) return console.log(paintJson(st, config));
   const daemon = await inspectDaemon(config.dataDir, config.port);
   let configMtimeMs: number | null = null;
   try {
@@ -550,6 +550,28 @@ async function info(config: Config, configPath: string, json: boolean) {
   print(
     renderInfo(config, { version, configPath, logPath: logFilePath(config.dataDir), bins, configMtimeMs, daemon }, st),
   );
+}
+
+/** Opens the config file in the user's editor, then loads it so a mistake shows now instead of at the next start. */
+async function editConfig(configPath: string) {
+  if (!existsSync(configPath)) fail(`no config at ${tildify(configPath)}; review-relay setup creates one`);
+  const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
+  // Through sh, so an editor with arguments such as "code --wait" works.
+  const edited = Bun.spawnSync(['sh', '-c', `${editor} "$1"`, 'sh', configPath], {
+    stdio: ['inherit', 'inherit', 'inherit'],
+  });
+  if (edited.exitCode !== 0) fail(`${editor} exited with code ${edited.exitCode}`);
+  let config: Config;
+  try {
+    config = await loadConfig(configPath, (message) => console.error(err.badge('warning', message)));
+  } catch (e) {
+    return fail(
+      `${tildify(configPath)}: ${e instanceof Error ? e.message : e}; run review-relay config edit to fix it`,
+    );
+  }
+  const daemon = await inspectDaemon(config.dataDir, config.port);
+  console.log(st.badge('success', `${tildify(configPath)} is valid`));
+  if (daemon.running) console.log(st.muted('The daemon still runs the old config; review-relay restart loads it.'));
 }
 
 function lastLines(path: string, n: number): string[] {
@@ -1025,6 +1047,9 @@ async function main() {
   // setup writes the config, so it must not require a valid one first.
   if (command === 'setup') return setup(configPath);
   if (command === 'hook') return hook(arg, opts);
+  // Before the load below, so a config that no longer parses can still be opened and fixed.
+  if (command === 'config' && arg === 'edit') return editConfig(configPath);
+  if (command === 'config' && arg !== undefined) fail(`config takes edit or nothing, got "${arg}"`);
   // Reads the config on each tool call instead, so a missing or edited config is reported to the agent, not fatal.
   if (command === 'mcp') return serveMcp({ ...MCP_DEPS, version, configPath, cwd: process.cwd() });
 

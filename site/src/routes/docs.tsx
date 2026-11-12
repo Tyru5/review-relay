@@ -213,7 +213,9 @@ function Docs() {
             />
             <p>
               Use the same <code>--config</code> for status, stop, and other commands targeting that daemon.{' '}
-              <code>info --json</code> and <code>config</code> show resolved values, including defaults.
+              <code>info --json</code> and <code>config</code> show resolved values, including defaults;{' '}
+              <code>config -h</code> lists every key as a jq path. <code>config edit</code> opens the file in{' '}
+              <code>$EDITOR</code> and checks it after you save.
             </p>
             <details id="environment">
               <summary>Environment variables and installer overrides</summary>
