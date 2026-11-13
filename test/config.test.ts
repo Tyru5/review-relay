@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { parseConfig } from '../src/config.ts';
+import { ConfigError, parseConfig } from '../src/config.ts';
 
 const REPOS = [{ fullName: 'Tyru5/Agendex', localPath: '/tmp/x' }];
 
@@ -22,9 +22,14 @@ test('theme defaults to dark and accepts only supported preferences', () => {
 test('port defaults to 9988 and takes a TCP port number, or 0 for a free one', () => {
   expect(parse({}).config.port).toBe(9988);
   for (const port of [0, 65535]) expect(parse({ port }).config.port).toBe(port);
-  for (const port of [-1, 65536, 9988.5, '9988']) {
+  for (const port of [-1, 65536, 9988.5, '65536', '9988.5', ' 9988', '']) {
     fails({ port }).toThrow('port must be a whole number from 0 to 65535');
   }
+  // Older configs with a quoted port keep loading.
+  expect(parse({ port: '9989' })).toEqual({
+    config: expect.objectContaining({ port: 9989 }),
+    warnings: ['port is the string "9989"; write it as the number 9989'],
+  });
 });
 
 test('remote presence is opt-in and requires an explicit registry and machine label', () => {
@@ -237,4 +242,27 @@ describe('commit status, inline comments, and notify', () => {
     fails({ notify: { desktop: true, email: 'me@x' } }).toThrow('notify.email is not a setting');
     fails({ notify: { desktop: true, minScore: 9 } }).toThrow('notify.minScore');
   });
+});
+
+test('a config with several mistakes reports one problem per section and repo, skipping what depends on them', () => {
+  let error: unknown;
+  try {
+    parseConfig({
+      repos: [{ fullName: 'bad name', localPath: '/x' }, { fullName: 'o/r' }, { fullName: 'o/ok', localPath: '/y' }],
+      models: { custom: { harness: 'nope' } },
+      routes: 'not checked, since models failed',
+      port: 70000,
+      theme: 'neon',
+    });
+  } catch (e) {
+    error = e;
+  }
+  expect(error).toBeInstanceOf(ConfigError);
+  expect((error as ConfigError).problems).toEqual([
+    expect.stringContaining('models.custom.harness must be one of'),
+    'repos[0].fullName must look like "owner/name"',
+    'repos[1].localPath is required',
+    'port must be a whole number from 0 to 65535 (0 picks a free port)',
+    'theme must be one of dark, light, terminal',
+  ]);
 });

@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { version } from '../package.json';
 import {
+  checkConfig,
+  checkExitCode,
   checkRoute,
   DEFAULT_MIN_SCORE,
   defaultConfigPath,
@@ -176,6 +178,7 @@ interface Options {
   detach: boolean;
   follow: boolean;
   json: boolean;
+  strict: boolean;
 }
 
 /** The daemon itself: HTTP hook server plus one `gh webhook forward` per repo, until a signal arrives. */
@@ -555,6 +558,8 @@ async function info(config: Config, configPath: string, json: boolean) {
 /** Opens the config file in the user's editor, then loads it so a mistake shows now instead of at the next start. */
 async function editConfig(configPath: string) {
   if (!existsSync(configPath)) fail(`no config at ${tildify(configPath)}; review-relay setup creates one`);
+  // A running daemon was started from the config as it is now, so it is found through this one, not the edit.
+  const before = await loadConfig(configPath).catch(() => null);
   const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
   // Through sh, so an editor with arguments such as "code --wait" works.
   const edited = Bun.spawnSync(['sh', '-c', `${editor} "$1"`, 'sh', configPath], {
@@ -569,9 +574,43 @@ async function editConfig(configPath: string) {
       `${tildify(configPath)}: ${e instanceof Error ? e.message : e}; run review-relay config edit to fix it`,
     );
   }
-  const daemon = await inspectDaemon(config.dataDir, config.port);
+  const ran = before ?? config;
+  const daemon = await inspectDaemon(ran.dataDir, ran.port);
   console.log(st.badge('success', `${tildify(configPath)} is valid`));
-  if (daemon.running) console.log(st.muted('The daemon still runs the old config; review-relay restart loads it.'));
+  if (!daemon.running) return;
+  if (ran.dataDir === config.dataDir) {
+    console.log(st.muted('The daemon still runs the old config; review-relay restart loads it.'));
+  } else {
+    // restart and stop look for the daemon in the new dataDir, so they would miss it and start a second one.
+    console.log(
+      st.muted(
+        `The daemon (pid ${daemon.pid}) still runs the old config from ${tildify(ran.dataDir)}, where restart no longer looks: run kill ${daemon.pid}, then review-relay start -d.`,
+      ),
+    );
+  }
+}
+
+/** Prints every check on the config and exits with the code for its status, so scripts and CI can tell them apart. */
+async function checkConfigFile(configPath: string, json: boolean, strict: boolean) {
+  const report = await checkConfig(configPath);
+  if (json) {
+    console.log(paintJson(st, report));
+  } else {
+    const tone = { pass: 'success', warn: 'warning', fail: 'danger' } as const;
+    for (const check of report.checks) console.log(`  ${st.badge(tone[check.status], sanitize(check.message))}`);
+    const verdict = {
+      pass: ['success', 'passes'],
+      warn: strict
+        ? (['danger', 'fails: warnings with --strict'] as const)
+        : (['warning', 'passes with warnings'] as const),
+      fail: ['danger', 'fails'],
+      corrupted: ['danger', 'is corrupted'],
+      missing: ['danger', 'is missing; review-relay setup creates one'],
+    } as const;
+    const [verdictTone, label] = verdict[report.status];
+    console.log(`\n${st.badge(verdictTone, `${tildify(configPath)} ${label}`)}`);
+  }
+  process.exit(checkExitCode(report.status, strict));
 }
 
 function lastLines(path: string, n: number): string[] {
@@ -965,6 +1004,7 @@ export function parse(argv: string[]) {
       detach: { type: 'boolean', short: 'd', default: false },
       follow: { type: 'boolean', short: 'f', default: false },
       json: { type: 'boolean', default: false },
+      strict: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
       version: { type: 'boolean', short: 'v', default: false },
     },
@@ -990,6 +1030,7 @@ export function parse(argv: string[]) {
     detach: values.detach,
     follow: values.follow,
     json: values.json,
+    strict: values.strict,
   };
   return { opts, positionals, help: values.help, version: values.version };
 }
@@ -1049,7 +1090,8 @@ async function main() {
   if (command === 'hook') return hook(arg, opts);
   // Before the load below, so a config that no longer parses can still be opened and fixed.
   if (command === 'config' && arg === 'edit') return editConfig(configPath);
-  if (command === 'config' && arg !== undefined) fail(`config takes edit or nothing, got "${arg}"`);
+  if (command === 'config' && arg === 'check') return checkConfigFile(configPath, opts.json, opts.strict);
+  if (command === 'config' && arg !== undefined) fail(`config takes edit, check, or nothing, got "${arg}"`);
   // Reads the config on each tool call instead, so a missing or edited config is reported to the agent, not fatal.
   if (command === 'mcp') return serveMcp({ ...MCP_DEPS, version, configPath, cwd: process.cwd() });
 

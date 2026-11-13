@@ -215,7 +215,10 @@ function Docs() {
               Use the same <code>--config</code> for status, stop, and other commands targeting that daemon.{' '}
               <code>info --json</code> and <code>config</code> show resolved values, including defaults;{' '}
               <code>config -h</code> lists every key as a jq path. <code>config edit</code> opens the file in{' '}
-              <code>$EDITOR</code> and checks it after you save.
+              <code>$EDITOR</code> and checks it after you save. <code>config check</code> reports every problem,
+              including repos with no clone and reviewer CLIs missing from PATH, and exits 0 when it passes, 1 when it
+              fails, 2 when the file is not JSON, and 3 when there is none; <code>--strict</code> exits 4 on warnings,
+              and <code>--json</code> prints the report for scripts.
             </p>
             <details id="environment">
               <summary>Environment variables and installer overrides</summary>

@@ -1,6 +1,7 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
+import { findBin, HARNESS_NAMES, HARNESSES, isHarness } from './reviewers/index.ts';
 import { parseRoutes, type Route } from './routes.ts';
 import type { HarnessName, ReviewerId, TriggerMode } from './types.ts';
 import { DEFAULT_PRICES, PRICE_FIELDS, type Price } from './usage.ts';
@@ -330,60 +331,91 @@ export function checkLabels(ids: ReviewerId[], models: Record<ReviewerId, Review
   }
 }
 
-/** Validates and fills in defaults. Problems the file has always been allowed to have go to `warn` instead. */
+/** Every problem that stopped a config from loading, at most one per section, model map, or repo. */
+export class ConfigError extends Error {
+  constructor(readonly problems: string[]) {
+    super(problems.join('; '));
+  }
+}
+
+/**
+ * Validates and fills in defaults. Problems the file has always been allowed to have go to `warn` instead. Checks
+ * every section before it throws, so a `ConfigError` lists them all; a section that depends on one that failed is
+ * skipped.
+ */
 export function parseConfig(raw: unknown, warn: (message: string) => void = () => {}): Config {
-  if (!raw || typeof raw !== 'object') throw new Error('config must be a JSON object');
+  if (!raw || typeof raw !== 'object') throw new ConfigError(['config must be a JSON object']);
   const c = raw as Record<string, any>;
-  if (!Array.isArray(c.repos) || c.repos.length === 0) throw new Error('config.repos must list at least one repo');
+  if (!Array.isArray(c.repos) || c.repos.length === 0) {
+    throw new ConfigError(['config.repos must list at least one repo']);
+  }
 
-  const models = parseModels(c.models, warn);
-  const reviewers = parseReviewers(c.reviewers, models, c.models, warn);
-
-  const repos = c.repos.map((r: Record<string, any>, i: number): RepoConfig => {
-    if (typeof r.fullName !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r.fullName)) {
-      throw new Error(`repos[${i}].fullName must look like "owner/name"`);
+  const problems: string[] = [];
+  const attempt = <T>(parse: () => T): T | undefined => {
+    try {
+      return parse();
+    } catch (e) {
+      problems.push(e instanceof Error ? e.message : String(e));
+      return undefined;
     }
-    if (typeof r.localPath !== 'string') throw new Error(`repos[${i}].localPath is required`);
-    const trigger: TriggerMode = r.trigger ?? 'auto';
-    if (!TRIGGERS.includes(trigger)) throw new Error(`repos[${i}].trigger must be one of ${TRIGGERS.join(', ')}`);
-    const authors = r.authors ?? [];
-    if (!Array.isArray(authors) || authors.some((a) => typeof a !== 'string' || !a.trim())) {
-      throw new Error(`repos[${i}].authors must be a list of GitHub logins`);
-    }
-    const postToPr = r.postToPr ?? true;
-    const inlineComments = r.inlineComments ?? false;
-    if (typeof inlineComments !== 'boolean') throw new Error(`repos[${i}].inlineComments must be true or false`);
-    if (inlineComments && !postToPr) warn(`repos[${i}].inlineComments needs postToPr; nothing is posted`);
-    return {
-      fullName: r.fullName,
-      localPath: resolve(r.localPath.replace(/^~(?=\/|$)/, homedir())),
-      trigger,
-      postToPr,
-      github: { onPush: r.github?.onPush ?? false, mention: r.github?.mention ?? '@review-relay' },
-      authors: [...new Set(authors.map(normalizeLogin))],
-      status: parseStatus(r.status, `repos[${i}].status`),
-      inlineComments,
-    };
-  });
+  };
 
-  const routes = parseRoutes(c.routes, {
-    reviewers: Object.keys(models),
-    repos: repos.map((repo: RepoConfig) => repo.fullName),
-  });
-  checkLabels([...reviewers, ...routes.flatMap((route) => route.reviewers ?? [])], models);
+  const models = attempt(() => parseModels(c.models, warn));
+  const reviewers = models && attempt(() => parseReviewers(c.reviewers, models, c.models, warn));
+
+  const parsedRepos = c.repos.map((r: Record<string, any>, i: number) =>
+    attempt((): RepoConfig => {
+      if (typeof r.fullName !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r.fullName)) {
+        throw new Error(`repos[${i}].fullName must look like "owner/name"`);
+      }
+      if (typeof r.localPath !== 'string') throw new Error(`repos[${i}].localPath is required`);
+      const trigger: TriggerMode = r.trigger ?? 'auto';
+      if (!TRIGGERS.includes(trigger)) throw new Error(`repos[${i}].trigger must be one of ${TRIGGERS.join(', ')}`);
+      const authors = r.authors ?? [];
+      if (!Array.isArray(authors) || authors.some((a) => typeof a !== 'string' || !a.trim())) {
+        throw new Error(`repos[${i}].authors must be a list of GitHub logins`);
+      }
+      const postToPr = r.postToPr ?? true;
+      const inlineComments = r.inlineComments ?? false;
+      if (typeof inlineComments !== 'boolean') throw new Error(`repos[${i}].inlineComments must be true or false`);
+      if (inlineComments && !postToPr) warn(`repos[${i}].inlineComments needs postToPr; nothing is posted`);
+      return {
+        fullName: r.fullName,
+        localPath: resolve(r.localPath.replace(/^~(?=\/|$)/, homedir())),
+        trigger,
+        postToPr,
+        github: { onPush: r.github?.onPush ?? false, mention: r.github?.mention ?? '@review-relay' },
+        authors: [...new Set(authors.map(normalizeLogin))],
+        status: parseStatus(r.status, `repos[${i}].status`),
+        inlineComments,
+      };
+    }),
+  );
+
+  // Routes name repos, so they check against every name the file gives, even of a repo that failed.
+  const repoNames = c.repos.map((r: any) => r?.fullName).filter((name: unknown) => typeof name === 'string');
+  const routes = models && attempt(() => parseRoutes(c.routes, { reviewers: Object.keys(models), repos: repoNames }));
+  if (models && reviewers && routes) {
+    attempt(() => checkLabels([...reviewers, ...routes.flatMap((route) => route.reviewers ?? [])], models));
+  }
 
   const maxConcurrent = c.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
-    throw new Error('maxConcurrent must be a whole number of reviews, 1 or more');
+    problems.push('maxConcurrent must be a whole number of reviews, 1 or more');
   }
 
-  const port = c.port ?? 9988;
+  let port = c.port ?? 9988;
+  // A numeric string always worked, since Bun.serve takes one.
+  if (typeof port === 'string' && /^\d+$/.test(port)) {
+    warn(`port is the string "${port}"; write it as the number ${Number(port)}`);
+    port = Number(port);
+  }
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error('port must be a whole number from 0 to 65535 (0 picks a free port)');
+    problems.push('port must be a whole number from 0 to 65535 (0 picks a free port)');
   }
 
   const theme = c.theme ?? 'dark';
-  if (!THEMES.includes(theme)) throw new Error(`theme must be one of ${THEMES.join(', ')}`);
+  if (!THEMES.includes(theme)) problems.push(`theme must be one of ${THEMES.join(', ')}`);
 
   let presence: PresenceConfig | undefined;
   if (c.presence !== undefined) {
@@ -400,15 +432,18 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
       // eslint-disable-next-line no-control-regex -- reject terminal control characters in published labels
       /[\x00-\x1f\x7f-\x9f]/.test(p.label)
     ) {
-      throw new Error(
+      problems.push(
         'presence requires repo (owner/name), issue (positive integer), and label (1-80 printable characters)',
       );
+    } else {
+      presence = { repo: p.repo, issue: p.issue as number, label: p.label.trim() };
     }
-    presence = { repo: p.repo, issue: p.issue as number, label: p.label.trim() };
   }
 
-  const notify = parseNotify(c.notify);
+  const notify = attempt(() => parseNotify(c.notify));
+  const pricing = attempt(() => parsePricing(c.pricing));
 
+  if (problems.length > 0) throw new ConfigError(problems);
   return {
     port,
     ...(presence ? { presence } : {}),
@@ -417,12 +452,12 @@ export function parseConfig(raw: unknown, warn: (message: string) => void = () =
     graceMs: c.graceMs ?? 120_000,
     timeoutMs: c.timeoutMs ?? 30 * 60_000,
     maxConcurrent,
-    reviewers,
-    models,
-    routes,
-    pricing: parsePricing(c.pricing),
+    reviewers: reviewers!,
+    models: models!,
+    routes: routes!,
+    pricing: pricing!,
     dataDir: c.dataDir ? resolve(String(c.dataDir).replace(/^~(?=\/|$)/, homedir())) : DEFAULT_DATA_DIR,
-    repos,
+    repos: parsedRepos as RepoConfig[],
   };
 }
 
@@ -432,6 +467,69 @@ export async function loadConfig(path = defaultConfigPath(), warn?: (message: st
     throw new Error(`no config at ${path} (copy config.example.json there, or set REVIEW_RELAY_CONFIG)`);
   }
   return parseConfig(await file.json(), warn);
+}
+
+export type CheckStatus = 'pass' | 'warn' | 'fail';
+export type ConfigStatus = CheckStatus | 'corrupted' | 'missing';
+
+export interface ConfigReport {
+  path: string;
+  /** missing: no file; corrupted: not JSON; fail: a problem stops it loading or reviews from running. */
+  status: ConfigStatus;
+  checks: { status: CheckStatus; message: string }[];
+}
+
+/** `config check`'s exit code for each status; warnings pass unless `strict`, which gives them their own code. */
+export const checkExitCode = (status: ConfigStatus, strict: boolean): number =>
+  ({ pass: 0, warn: strict ? 4 : 0, fail: 1, corrupted: 2, missing: 3 })[status];
+
+/** Everything wrong with the config at `path`: the file, every section, and the clones and CLIs reviews need. */
+export async function checkConfig(path: string): Promise<ConfigReport> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) {
+    return { path, status: 'missing', checks: [{ status: 'fail', message: `no config at ${path}` }] };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await file.text());
+  } catch (e) {
+    const message = `not valid JSON: ${e instanceof Error ? e.message : e}`;
+    return { path, status: 'corrupted', checks: [{ status: 'fail', message }] };
+  }
+
+  const checks: ConfigReport['checks'] = [];
+  let config: Config | undefined;
+  try {
+    config = parseConfig(raw, (message) => checks.push({ status: 'warn', message }));
+  } catch (e) {
+    const problems = e instanceof ConfigError ? e.problems : [e instanceof Error ? e.message : String(e)];
+    checks.push(...problems.map((message) => ({ status: 'fail' as const, message })));
+  }
+  if (config) {
+    const repoCount = `${config.repos.length} repo${config.repos.length === 1 ? '' : 's'}`;
+    checks.unshift({ status: 'pass', message: `loads: ${repoCount}, reviewers ${config.reviewers.join(', ')}` });
+    for (const repo of config.repos) {
+      checks.push(
+        existsSync(join(repo.localPath, '.git'))
+          ? { status: 'pass', message: `${repo.fullName} clone at ${repo.localPath}` }
+          : { status: 'fail', message: `${repo.fullName}: no git clone at ${repo.localPath}` },
+      );
+    }
+    const used = new Set([...config.reviewers, ...config.routes.flatMap((route) => route.reviewers ?? [])]);
+    for (const [harness, ids] of Map.groupBy(used, (id) => config.models[id]!.harness)) {
+      const bin = findBin(harness);
+      checks.push(
+        bin
+          ? { status: 'pass', message: `${harness} at ${bin}` }
+          : {
+              status: 'fail',
+              message: `${HARNESSES[harness].bins.join(' or ')} not on PATH, so ${ids.join(' and ')} reviews fail`,
+            },
+      );
+    }
+  }
+  const has = (status: CheckStatus) => checks.some((check) => check.status === status);
+  return { path, status: has('fail') ? 'fail' : has('warn') ? 'warn' : 'pass', checks };
 }
 
 export const findRepo = (config: Config, fullName: string | undefined) =>

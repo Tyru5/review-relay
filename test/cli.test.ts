@@ -303,3 +303,59 @@ test('--spawn-id marks every line a process logs, and must be a hex id', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('config check reports pass, warn, fail, corrupted, and missing with their own exit codes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relay-cli-check-'));
+  try {
+    const bin = join(dir, 'bin');
+    const clone = join(dir, 'clone');
+    mkdirSync(bin);
+    mkdirSync(join(clone, '.git'), { recursive: true });
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+    const check = (name: string, contents: string | undefined, json = true, extra: string[] = []) => {
+      const config = join(dir, `${name}.json`);
+      if (contents !== undefined) writeFileSync(config, contents);
+      const args = ['config', 'check', ...(json ? ['--json'] : []), ...extra, '--config', config];
+      const result = Bun.spawnSync([process.execPath, join(import.meta.dir, '../src/cli.ts'), ...args], {
+        env: { ...process.env, PATH: bin, NO_COLOR: '1' },
+      });
+      const output = result.stdout.toString();
+      return { code: result.exitCode, output, report: json ? JSON.parse(output) : undefined };
+    };
+    const base = { dataDir: dir, reviewers: ['claude'], repos: [{ fullName: 'o/r', localPath: clone }] };
+
+    const pass = check('pass', JSON.stringify(base));
+    expect([pass.code, pass.report.status]).toEqual([0, 'pass']);
+    expect(pass.report.checks.map((c: { status: string }) => c.status)).toEqual(['pass', 'pass', 'pass']);
+
+    const warn = check('warn', JSON.stringify({ ...base, reviewers: ['claude', 'claude'] }));
+    expect([warn.code, warn.report.status]).toEqual([0, 'warn']);
+    // --strict gives warnings their own code, and leaves a clean config and a failing one as they were.
+    expect(check('warn', undefined, true, ['--strict']).code).toBe(4);
+    expect(check('pass', undefined, true, ['--strict']).code).toBe(0);
+
+    // Schema problems stop the load, so the clone and CLI checks need a config that loads.
+    const invalid = check('invalid', JSON.stringify({ ...base, port: 70000, theme: 'neon' }));
+    expect([invalid.code, invalid.report.status]).toEqual([1, 'fail']);
+    expect(invalid.report.checks.map((c: { message: string }) => c.message)).toEqual([
+      'port must be a whole number from 0 to 65535 (0 picks a free port)',
+      'theme must be one of dark, light, terminal',
+    ]);
+    const broken = { ...base, reviewers: ['codex'], repos: [{ fullName: 'o/r', localPath: join(dir, 'gone') }] };
+    const unusable = check('unusable', JSON.stringify(broken));
+    expect([unusable.code, unusable.report.status]).toEqual([1, 'fail']);
+    expect(unusable.report.checks.filter((c: { status: string }) => c.status === 'fail')).toHaveLength(2);
+    const text = check('unusable', undefined, false);
+    expect(text.code).toBe(1);
+    expect(text.output).toContain(`no git clone at ${join(dir, 'gone')}`);
+    expect(text.output).toContain('fails');
+    expect(check('unusable', undefined, true, ['--strict']).code).toBe(1);
+
+    const corrupted = check('corrupted', '{"repos": [');
+    expect([corrupted.code, corrupted.report.status]).toEqual([2, 'corrupted']);
+    const missing = check('missing', undefined);
+    expect([missing.code, missing.report.status]).toEqual([3, 'missing']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -242,6 +242,7 @@ review-relay mcp                                    # MCP server on stdio, so ag
 review-relay info                                   # resolved config with defaults; flags edits the daemon has not loaded
 review-relay config                                 # resolved config as JSON, colored on a terminal; config -h lists every jq key
 review-relay config edit                            # open the config in $VISUAL/$EDITOR, then check it
+review-relay config check [--json] [--strict]       # every problem, clones and CLIs too; exit 0 pass, 1 fail, 2 corrupted, 3 missing, 4 warned with --strict
 review-relay setup                                  # interactive config: pick repos, reviewers, and models, then save
 ```
 

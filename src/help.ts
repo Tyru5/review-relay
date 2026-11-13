@@ -291,11 +291,20 @@ export const HELP_GROUPS: Group[] = [
       },
       {
         name: 'config',
-        args: '[edit]',
-        summary: 'Print the resolved config as JSON, or edit the config file',
+        args: '[edit|check]',
+        summary: 'Print the resolved config as JSON, edit the config file, or check it',
         detail: [
           'Prints the config with defaults applied: colored on a terminal, plain JSON when piped, so jq reads it. Every key is listed below as a jq path; <id> is a reviewer id and <model> a model name.',
-          'edit opens the config file in $VISUAL or $EDITOR (default vi), then checks it and reports the first problem. A running daemon keeps the config it started with; review-relay restart loads the edit.',
+          'edit opens the config file in $VISUAL or $EDITOR (default vi), then checks it and reports what stops it loading. A running daemon keeps the config it started with; review-relay restart loads the edit.',
+          'check reports every problem: settings that stop the config loading, warnings, repos with no clone, and reviewer CLIs missing from PATH. It exits 0 when the config passes, with or without warnings, 1 when it fails, 2 when the file is not JSON, 3 when there is no file, and with --strict, 4 when it has warnings.',
+        ],
+        options: [
+          {
+            flag: '--json',
+            description:
+              'check: print { path, status, checks } as JSON; status is pass, warn, fail, corrupted, or missing',
+          },
+          { flag: '--strict', description: 'check: exit 4 on warnings instead of 0' },
         ],
         keys: [
           { flag: '.port', description: 'Webhook server port on 127.0.0.1; 0 picks a free one' },
@@ -349,6 +358,9 @@ export const HELP_GROUPS: Group[] = [
           'review-relay config | jq .models.claude',
           'review-relay config edit',
           'EDITOR="code --wait" review-relay config edit',
+          'review-relay config check',
+          'review-relay config check --strict',
+          'review-relay config check --json | jq -r \'.checks[] | select(.status != "pass") | .message\'',
         ],
       },
     ],

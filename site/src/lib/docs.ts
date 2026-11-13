@@ -250,8 +250,8 @@ export const COMMANDS: ReferenceRow[] = [
   ['info', '--json', 'Resolved configuration and diagnostics. --json prints machine-readable output.'],
   [
     'config',
-    '[edit]',
-    'Print the resolved configuration as JSON, colored on a terminal; -h lists every key as a jq path. edit opens the file in $VISUAL or $EDITOR and checks it after you save.',
+    '[edit|check] --json --strict',
+    'Print the resolved configuration as JSON, colored on a terminal; -h lists every key as a jq path. edit opens the file in $VISUAL or $EDITOR and checks it after you save. check reports every problem, including missing clones and reviewer CLIs, and exits 0 pass, 1 fail, 2 corrupted, 3 missing, or with --strict 4 on warnings; --json prints the report.',
   ],
   ['help', '[command]', 'List commands, or show a command’s options and examples.'],
 ];
